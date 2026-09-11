@@ -89,3 +89,7 @@ Thumbs.db
 # current each archive is. It belongs next to your installs, never in the repo.
 status.html
 **/status.html
+**/dashboard.html
+**/pge_bill_data.json
+**/pge_bill_data.csv
+
