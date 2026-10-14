@@ -891,6 +891,60 @@ class Diagnose(unittest.TestCase):
             self.assertIn("sign-in page", said.getvalue())
 
 
+class Docs(unittest.TestCase):
+    """What the docs say of this app agrees with the code and with the live
+    run, where Discover listed 26 transcripts and a Pilot and a Run All saved
+    all 26."""
+    REPO = HERE.parent.parent
+
+    def read(self, *parts):
+        return self.REPO.joinpath(*parts).read_text(encoding="utf-8")
+
+    def changelog_entry(self):
+        text = self.read("CHANGELOG.md")
+        unreleased, released = text.index("## [Unreleased]"), text.index("## [0.51.0]")
+        start = text.index("- **IRS Online Account")
+        self.assertTrue(unreleased < start < released)
+        return text[start:text.index("\n\n", start)]
+
+    def providers_rows(self):
+        return [line for line in self.read("PROVIDERS.md").splitlines() if line.startswith("| [`")]
+
+    def test_every_count_of_the_live_run_is_26(self):
+        import re
+        row = next(r for r in self.providers_rows() if r.startswith("| [`irs`]"))
+        for name, text in [("CHANGELOG.md", self.changelog_entry()), ("PROVIDERS.md", row),
+                           ("README.md", self.read("apps", "irs", "README.md")),
+                           ("irs_site.py", site.__doc__ + self.read("apps", "irs", "irs_site.py"))]:
+            counts = set(re.findall(r"\b([0-9]+) transcripts\b", " ".join(text.split())))
+            self.assertEqual(counts, {"26"}, name)
+
+    def test_no_semicolon_and_no_untested_title_where_it_ran_in_full(self):
+        entry = self.changelog_entry()
+        self.assertNotIn("untested", entry.split("**")[1].lower())
+        row = next(r for r in self.providers_rows() if r.startswith("| [`irs`]"))
+        for name, text in [("CHANGELOG.md", entry), ("PROVIDERS.md", row),
+                           ("README.md", self.read("apps", "irs", "README.md"))]:
+            self.assertNotIn(";", text, name)
+
+    def test_the_row_follows_ibkr_and_the_card_is_with_the_bills(self):
+        slugs = [r.split("`")[1] for r in self.providers_rows()]
+        self.assertEqual(slugs[slugs.index("ibkr") + 1], "irs")
+        cards = json.loads(self.read("gui", "providers.json"))
+        self.assertEqual(cards["providers"]["irs"]["group"], "bills")
+
+    def test_login_and_the_private_words_claim_say_what_the_code_does(self):
+        self.assertNotIn("notice PDF", self.read("apps", "irs", "login.bat"))
+        doc = " ".join(site.__doc__.split())
+        self.assertNotIn("address, and the reference numbers a notice carries", doc)
+        self.assertIn("an address or a notice's reference numbers included", doc)
+        # What it does say is registered, is.
+        page = Page()
+        site._guard_identity(page)
+        for word in (FAKE_NAME, FAKE_SSN, "9876"):
+            self.assertIn(word, site.private_words(), word)
+
+
 class NothingPressed(unittest.TestCase):
     def test_the_site_layer_never_clicks_fills_selects_or_presses(self):
         tree = ast.parse((HERE / "irs_site.py").read_text(encoding="utf-8"))

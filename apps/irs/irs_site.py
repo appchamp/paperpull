@@ -2,14 +2,15 @@
 
 When the IRS changes its Online Account, repair this file only.
 
-STATUS: built from a read-only survey of a signed-in account on 2026-10-13,
+STATUS. Built from a read-only survey of a signed-in account on 2026-10-13,
 with no control pressed, and corrected from a live run the same day (the
-content area is div#main[role=main], not <main>; the four transcript
-types and the tax period's shape). A full run on that account then saved
-22 transcripts, every one a valid PDF, by the plain fetch below. The
-transcript routes below were seen; what was not seen is marked SURVEY
-NEEDED and is checked before anything is read, so a page or answer that
-differs stops the list (ListStopped). Nothing is guessed past it.
+content area is div#main[role=main], not <main>, and the four transcript
+types and the tax period's shape). On that account Discover then listed
+26 transcripts, and a Pilot and a Run All saved all 26, every one a valid
+PDF, by the plain fetch below. The transcript routes below were seen. What
+was not seen is marked SURVEY NEEDED and is checked before anything is
+read, so a page or answer that differs stops the list (ListStopped).
+Nothing is guessed past it.
 `survey(page)` prints the real structure, masked, for the run that
 confirms the rest.
 
@@ -61,12 +62,14 @@ and request an IP PIN):
   fallback is a guarded press of that one EN link and taking the PDF the
   page made, which is NOT built here and would need its own review.
 
-PRIVATE WORDS: the taxpayer's name (shown in the page header), SSN or ITIN
-(whole or its last four), address, and the reference numbers a notice
-carries. Each is registered as a private word as soon as a page that shows
-it is read, and none is ever logged, written down, or put in a file name. A
-transcript's type, tax period, MFT and form, and a notice's IRS code, are
-not personal and are used.
+PRIVATE WORDS. The taxpayer's name, as the page shows it in the elements
+IDENTITY_SELECTORS names, and anything on the page shaped like an SSN or
+ITIN, masked or whole, with its last four digits, are registered as
+private words as soon as a page that shows them is read (_guard_identity).
+Nothing else is, an address or a notice's reference numbers included. No
+page text goes into a log, a record or a file name, and Diagnose writes
+any word that is not on PaperPull's fixed list as its shape. A
+transcript's type, tax period, MFT and form are not personal and are used.
 
 KNOWN CEILINGS (left as they are until a run shows otherwise)
   * A transcript is taken once per type, tax period and MFT. The IRS
@@ -127,9 +130,9 @@ TRANSCRIPT_LIST_URL = BASE + TRANSCRIPT_LIST_PATH
 #   T2. taxPeriod: CONFIRMED live, always six digits, YYYYMM. Any other
 #       shape stops the list.
 #   T3. mft: CONFIRMED live, digits ("30", "00", "29" seen).
-#   T4. CONFIRMED live (2026-10-13): a plain GET of each transcript's
+#   T4. CONFIRMED live (2026-10-13). A plain GET of each transcript's
 #       address with the session's cookies, no header added, answered the
-#       PDF for all 22 transcripts of a full run.
+#       PDF for all 26 transcripts, one by a Pilot and 25 by a Run All.
 #   T5. CONFIRMED live: the list JSON is a plain array holding every
 #       transcript (26 on the surveyed account). Anything but a list stops.
 #   N1. What a notice looks like on /ola/notices_and_letters. The page also

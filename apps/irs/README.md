@@ -12,24 +12,30 @@ Read-only, delete-safe, part of [PaperPull](../../README.md).
 ## Validation status
 
 **UNTESTED by anyone but its builder. Built from a read-only survey of one
-signed-in account on 2026-10-13, then run in full on it the same day: 22
-transcripts saved, every one a valid PDF, none for manual review.** That
-run confirmed the transcript list, its four transcript types (account,
-return, wage and income, record of account), that each tax period is a
-month, and that each transcript's own address answers its PDF. Not yet
-seen: any notice (the surveyed account had none). That is listed as
-"SURVEY NEEDED" in `irs_site.py`, and a notices page that lists one stops
-the run, rather than guess, with what it had saved kept.
+signed-in account on 2026-10-13, then run in full on it the same day.
+Discover listed 26 transcripts, a Pilot saved one and a Run All the other
+25, every one a valid PDF, none for manual review.** That run confirmed
+the transcript list, its four transcript types (account, return, wage and
+income, record of account), that each tax period is a month, and that
+each transcript's own address answers its PDF. No notice has been seen
+yet, since the surveyed account had none. That is listed as "SURVEY
+NEEDED" in `irs_site.py`, and a notices page that lists one stops the
+run, rather than guess, with what it had saved kept.
 
 Files are named `<date> IRS <Type> Transcript.pdf`, dated the end of the
 transcript's tax period and filed under `Tax Documents`, for example
 `2024-12-31 IRS Account Transcript.pdf`. When the IRS lists two
 transcripts of one type for one period (an account transcript for each
 of two account types), each name adds the form the list gives it, or its
-MFT number when the forms are the same: `2025-12-31 IRS Account
+MFT number when the forms are the same, as in `2025-12-31 IRS Account
 Transcript MFT 29.pdf`.
 
-Not yet read:
+The IRS keeps each kind of transcript online for a window of years that
+moves forward every year. A transcript the app listed but had not saved
+before the IRS stopped listing it goes to Manual Review, and the run goes
+on.
+
+It does not read these yet.
 
 - Notices and letters. A notices page that says there are none is read as
   none. One that lists a notice, or shows a date beside that sentence,
@@ -41,7 +47,7 @@ Not yet read:
   a notice, please send a Diagnose file.
 - W-2 or 1099 copies under information returns.
 - A fresher copy of a transcript already saved. The IRS updates an account
-  transcript as the account changes, and the app takes each one once; use
+  transcript as the account changes, and the app takes each one once. Use
   `--redownload` for a fresh copy.
 
 Never touched are payments, payment plans, bank accounts, IP PINs,
@@ -98,7 +104,8 @@ each with its type, tax period and form. Each transcript is then fetched
 by its own address, built from those fields, with the signed-in session,
 no redirect followed, and kept only when it is a PDF. Before each one the
 list is read again, and the transcript is fetched only when exactly one
-item still matches. The page's own "EN" link, which opens the PDF in a new
+item still matches. One the list no longer holds goes to Manual Review,
+and the run goes on. The page's own "EN" link, which opens the PDF in a new
 tab, is never pressed. The notices page is opened and read as described
 above, and only when `"Other Document"` is in `document_types`. A list
 the app cannot read whole stops rather than being called complete. If the

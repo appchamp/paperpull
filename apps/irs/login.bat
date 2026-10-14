@@ -14,7 +14,7 @@ echo   2. Open Records and Status, then your transcripts.
 echo   3. LEAVE THAT BROWSER WINDOW OPEN - do not close it.
 echo   4. Then run:  paperpull irs diagnose   (a survey for the maintainer)
 echo.
-echo READ-ONLY: this tool only downloads your IRS transcript and notice PDFs. It NEVER
+echo READ-ONLY. This tool only downloads your IRS transcript PDFs. It NEVER
 echo makes a payment, sets up a payment plan, requests anything, or changes any setting.
 echo.
 rem This app's own Python when setup.bat made one. Otherwise, in a
