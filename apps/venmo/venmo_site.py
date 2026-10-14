@@ -51,7 +51,8 @@ THE SHAPE THIS APP TAKES
   the picker shows it, the heading is drawn, nothing is loading, and
   either its rows (with at most the list's own "Show more" pager after
   them) or its no-transactions words are drawn, holding still across two
-  reads. A month with no transactions is not listed. Before printing, the
+  reads, or for the no-transactions words across EMPTY_HOLD_MS. A month
+  with no transactions is not listed. Before printing, the
   one press this app ever makes, the list's own "Show more", is pressed
   until every row is drawn (show_all, each press required to draw more,
   at most SHOW_MORE_PRESSES). Only then is the page printed and filed as
@@ -64,15 +65,18 @@ UNCONFIRMED (the app stops at each until a run shows it)
   * The account type's value. Only "personal" is accepted (a business
     profile is not listed).
   * How far back the months go. A month before the account opened shows
-    the same no-transactions words as an empty month, so it is skipped;
-    the walk goes back at most MAX_MONTHS months, or to the run's start
-    date. A month the page will not show as asked stops the list.
+    the same no-transactions words as an empty month, so it is skipped.
+    The walk goes back to the run's start date, and with none set it reads
+    MAX_MONTHS months and stops the list (CapReached) when the oldest of
+    them has transactions, since older months may have them too. A month
+    the page will not show as asked stops the list.
   * That pressing "Show more" until it is gone draws every transaction,
     and that the printed page holds them all. A Show more press that draws
     nothing more, a pager still shown after SHOW_MORE_PRESSES presses, any
     other load-more control, or a TransactionsHistory answer that, when
-    heard and readable, says more is to come (more_to_come), stops that
-    month. The number of rows printed is kept in the month's record.
+    heard and readable, says more is to come (more_to_come) and is the
+    newest one read when the month is printed, stops that month. The
+    number of rows printed is kept in the month's record.
   * What a signed-out visit or a signed-out GraphQL answer looks like. A
     sign-in address, a password field, or a 401 or 403 from the page's
     own GraphQL answer raises SessionExpired.
@@ -170,9 +174,13 @@ QUERY_KEYS = {"accountType", "month", "year", "profileId"}
 # ===========================================================================
 # The only account type listed. The survey masked its value.
 ACCOUNT_TYPE = "personal"
-# How many finished months the walk goes back at most, when the run sets
-# no start date. How far Venmo goes back is not known.
+# How many finished months the walk goes back when the run sets no start
+# date. How far Venmo goes back is not known, so when the oldest of them
+# has transactions the list is not called whole (CapReached). With a start
+# date the walk goes back to it.
 MAX_MONTHS = 24
+# The first month a statement address can name, since its year is 20xx.
+FIRST_MONTH = "2000-01"
 # Venmo's sign-in, matched in the lowered address.
 LOGIN_URL_MARKERS = ["id.venmo.com", "/signin", "/sign-in", "/login", "/account/logout"]
 # The completed transaction list and its rows, as drawn on 2026-10-13: one
@@ -200,6 +208,9 @@ PROFILE_SELECTORS = ("a[href^='/u/'], a[href*='venmo.com/u/'], [data-testid*='pr
 # How long a month's page is given to show its month and its answer.
 SETTLE_MS = 20000
 POLL_MS = 250
+# How long a month's "No transactions yet" must hold before the month is
+# skipped, since a page can say it for a moment before its rows draw.
+EMPTY_HOLD_MS = 2000
 # ===========================================================================
 # End of UNCONFIRMED.
 # ===========================================================================
@@ -351,19 +362,24 @@ def month_end(month_id) -> str:
     return f"{year:04d}-{month:02d}-{_last_day(year, month):02d}"
 
 
-def months_to_walk(today: _date, floor: str = "", limit: int = MAX_MONTHS) -> List[str]:
+def months_to_walk(today: _date, floor: str = "", limit: Optional[int] = None) -> List[str]:
     """The finished months, newest first, from the one before `today`'s
-    back to `floor` (YYYY-MM-DD, the run's start date) or `limit` months,
-    whichever comes first. The month under way is never one: its statement
-    is not final, and a saved statement is never fetched again."""
+    back to `floor` (YYYY-MM-DD, the run's start date) when one is set, and
+    otherwise MAX_MONTHS of them. A `limit` given ends the walk sooner when
+    it comes first. No walk goes back past FIRST_MONTH, the first month a
+    statement address can name (statement_query). The month under way is
+    never one, since its statement is not final, and a saved statement is
+    never fetched again."""
+    if limit is None:
+        limit = -1 if floor else MAX_MONTHS
     y, m = today.year, today.month
     out: List[str] = []
-    while len(out) < max(0, limit):
+    while limit < 0 or len(out) < limit:
         m -= 1
         if m == 0:
             y, m = y - 1, 12
         month = f"{y:04d}-{m:02d}"
-        if floor and month_end(month) < floor:
+        if month < FIRST_MONTH or (floor and month_end(month) < floor):
             break
         out.append(month)
     return out
@@ -536,6 +552,12 @@ class ListStopped(Exception):
         self.docs = list(docs or [])
 
 
+class CapReached(ListStopped):
+    """A walk with no start date read its MAX_MONTHS months and the oldest
+    of them has transactions, so older months may have them too and the
+    list is not whole. A start date takes the walk back to it."""
+
+
 class Heard:
     """The page's own GraphQL answers to one navigation, heard on the
     request and response events.
@@ -550,7 +572,10 @@ class Heard:
     Of each answer the operation's name and the status are kept. Of the
     TransactionsHistory answer the body is also walked, when it can still
     be read, in memory and never kept or logged, only to see whether it
-    says more transactions are to come (partial). Hearing it is an extra
+    says more transactions are to come (partial). The flag is the newest
+    readable answer's, and an answer whose body cannot be read leaves it as
+    it was, so an earlier answer that said more is to come is only cleared
+    by a later one that says the list is whole. Hearing it is an extra
     check, never a requirement: Venmo does not ask for every month (its
     client cache answers some), and over CDP the body is often gone before
     it can be read, which is logged and otherwise ignored."""
@@ -620,7 +645,10 @@ class Heard:
                 log.info("a statement answer's body was not read (%s)", type(e).__name__)
                 continue
             if isinstance(body, (dict, list)):
-                self.partial = self.partial or more_to_come(body)
+                # The newest answer read says whether more is to come, so
+                # the answer to the press that drew the last rows replaces
+                # what the first answer said.
+                self.partial = more_to_come(body)
 
     def listen(self, page) -> None:
         page.on("request", self.on_request)
@@ -890,7 +918,9 @@ def _still_here(page, where: Where, month: str, heard: "Heard") -> None:
 def _open_month(page, where: Where, month: str, heard: Optional["Heard"] = None) -> int:
     """Open one month's statement by its own address and wait until the
     page shows it whole (settled), twice in a row with the same rows, and
-    return how many transaction rows it drew (0 for a month with none).
+    return how many transaction rows it drew (0 for a month with none). A
+    month that says it has none must say so for EMPTY_HOLD_MS before it is
+    taken as empty, since a page can say it a moment before its rows draw.
 
     The month is bound by the page's own state, never by hearing its data:
     Venmo does not ask for every month (its client cache answers some).
@@ -913,14 +943,16 @@ def _open_month(page, where: Where, month: str, heard: Optional["Heard"] = None)
         heard.listen(page)
     try:
         _goto(page, url)
-        why, last = "the statement did not finish drawing", None
+        why, last, held = "the statement did not finish drawing", None, 0
         state = {}
         for _ in range(max(2, SETTLE_MS // POLL_MS)):
             _still_here(page, where, month, heard)
             state = _state(page)
             why = settled(state, month)
             seen = (state.get("rows"), state.get("empty"))
-            if not why and seen == last:
+            # How many waits the same settled page has held across.
+            held = held + 1 if not why and seen == last else 0
+            if held and (state.get("rows") or held * POLL_MS >= EMPTY_HOLD_MS):
                 break
             last = seen if not why else None
             page.wait_for_timeout(POLL_MS)
@@ -976,11 +1008,12 @@ def show_all(page, where: Where, month: str, heard: "Heard") -> int:
     """Draw every transaction of the open month, pressing the list's own
     "Show more" pager through pressing.click under is_show_more, and return
     how many rows are drawn. Each press must draw more rows, and the pager
-    must be gone within SHOW_MORE_PRESSES presses; otherwise ListStopped,
-    and nothing is printed. A turned off or covered pager stops the run
-    (pressing). Nothing else is ever pressed. After every press the
-    address must still be this month's on this profile and no GraphQL
-    answer heard may be a 401 or 403 (SessionExpired)."""
+    must be gone within SHOW_MORE_PRESSES presses, or else ListStopped,
+    and nothing is printed. A pager the page has turned off is not pressed
+    and leaves this month for review (ListStopped), while a covered one
+    stops the run (pressing). Nothing else is ever pressed. After every
+    press the address must still be this month's on this profile and no
+    GraphQL answer heard may be a 401 or 403 (SessionExpired)."""
     _still_here(page, where, month, heard)
     state = _state(page)
     if settled(state, month):
@@ -999,9 +1032,15 @@ def show_all(page, where: Where, month: str, heard: "Heard") -> int:
             label = ""
         if not is_show_more(label):
             raise ListStopped("the list's last control is not Show more")
-        pressing.click(page, control, css=SHOW_MORE_CSS,
-                       what="the Show more control of the month's transactions",
-                       words=_words(), step="show more of the month")
+        try:
+            pressing.click(page, control, css=SHOW_MORE_CSS,
+                           what="the Show more control of the month's transactions",
+                           words=_words(), step="show more of the month")
+        except pressing.TurnedOff:
+            # The page has turned the pager off, so nothing was pressed and
+            # the month is not drawn whole. Only this month is left, for
+            # review and the next run, and the run goes on to the next one.
+            raise ListStopped("the month's Show more is turned off on the page")
         _still_here(page, where, month, heard)
         state = _wait_drawn(page, where, month, before, heard)
     if state.get("pager"):
@@ -1012,9 +1051,12 @@ def show_all(page, where: Where, month: str, heard: "Heard") -> int:
 def ready_to_print(page, where: Where, month: str, heard: "Heard") -> None:
     """The last check before a month is printed: the exact statement address
     for this month, profile and account type, nothing heard or shown saying
-    signed out, the month settled with no pager left, and no load-more
-    control of any kind on the page. Raises SessionExpired or ListStopped."""
+    signed out, the newest statement answer read not saying more is to
+    come, the month settled with no pager left, and no load-more control of
+    any kind on the page. Raises SessionExpired or ListStopped."""
     _still_here(page, where, month, heard)
+    if heard.partial:
+        raise ListStopped("the statement's own answer says more transactions are to come")
     state = _state(page)
     why = settled(state, month)
     if why:
@@ -1073,21 +1115,26 @@ def expand_all(page) -> None:
 
 
 def collect_download_docs(page, today: Optional[_date] = None, floor: str = "",
-                          limit: int = MAX_MONTHS) -> List[RawDoc]:
+                          limit: Optional[int] = None) -> List[RawDoc]:
     """Every finished month's statement, newest first, back to `floor` (the
-    run's start date) or `limit` months. Each month is opened by its own
-    address and listed only when the page shows it (_open_month) with at
-    least one transaction; a month with none is skipped, counted only in
-    the log, and the walk goes on. Discovery presses nothing. The first
-    month the page will not show as asked stops the list, holding the
-    months read before it: what a month before the account opened looks
-    like has not been seen, so it is not taken for the start of the
-    history. A signed-out page raises SessionExpired. Nothing is pressed."""
+    run's start date) when one is set, and otherwise MAX_MONTHS months
+    (months_to_walk). Each month is opened by its own address and listed
+    only when the page shows it (_open_month) with at least one
+    transaction. A month with none is skipped, counted only in the log, and
+    the walk goes on. The first month the page will not show as asked stops
+    the list, holding the months read before it, since what a month before
+    the account opened looks like has not been seen, so it is not taken
+    for the start of the history. With no start date, a walk whose oldest
+    month has transactions stops the list too (CapReached), since older
+    months may have them as well. A `limit`, as Diagnose gives, reads that
+    many months only and is never the whole list. A signed-out page raises
+    SessionExpired. Nothing is pressed."""
     where = _where(page)
     _guard_profile(page, where)
     docs: List[RawDoc] = []
     empty = 0
-    for month in months_to_walk(today or _date.today(), floor, limit):
+    walk = months_to_walk(today or _date.today(), floor, limit)
+    for month in walk:
         try:
             rows = _open_month(page, where, month)
         except ListStopped as stop:
@@ -1100,6 +1147,9 @@ def collect_download_docs(page, today: Optional[_date] = None, floor: str = "",
         docs.append(_rawdoc(month, len(docs), where))
     if empty:
         log.info("%d month(s) with no transactions were not listed", empty)
+    if not floor and limit is None and walk and docs and docs[-1].document_id == walk[-1]:
+        raise CapReached("the oldest of the %d months read has transactions, so older "
+                         "months may have them too" % len(walk), docs)
     return docs
 
 

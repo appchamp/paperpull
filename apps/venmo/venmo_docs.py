@@ -3,8 +3,10 @@
 Venmo shows an account statement for each month on its web account pages,
 account.venmo.com, under Statements, as a web page with a CSV download and
 no PDF. This saves each finished month's statement page as a PDF, printed
-from the page itself, back to the run's start date or two years. The
-orchestrator below is the same one every other statement app runs on.
+from the page itself, back to the run's start date. With no start date it
+reads two years, and when the oldest of them has transactions the list
+stops rather than be called whole. The orchestrator below is the same one
+every other statement app runs on.
 Everything about the site itself is in venmo_site.py, built from a
 read-only survey and run on one account: it stops rather than guesses when the
 page is not what it expects.
@@ -191,10 +193,11 @@ def migrate_legacy_keys(records: dict) -> int:
 def told_apart_by(record: dict) -> str:
     """What a statement's file adds to its name when another file already
     has that name, the same on every run: its month, never " (2)"
-    (core/tests/test_every_app_renames_each_file_for_its_own_record). One
-    month offered twice stops the list (venmo_site.months_of), so this is
-    reached only when a file of that name is already in the folder. The
-    download and Rename both ask this, so they agree."""
+    (core/tests/test_every_app_renames_each_file_for_its_own_record). The
+    walk names each month once (venmo_site.months_to_walk), and a month is
+    keyed by its profile and month, so this is reached only when a file of
+    that name is already in the folder. The download and Rename both ask
+    this, so they agree."""
     return str((record or {}).get("document_id") or "").strip()
 
 
@@ -500,9 +503,13 @@ class App:
         # so a sign-out anywhere on the way reaches the boundary below and
         # stops the run, rather than a prompt to sign in again.
         self.check_session(page)
+        # The walk goes back to the start date, or for a run of one year to
+        # that year's first day, whichever is later.
+        floor = self.args.start_date or self.config.get("default_start_date") or ""
+        if self.args.year:
+            floor = max(floor, "%04d-01-01" % int(self.args.year))
         try:
-            docs = site.collect_download_docs(
-                page, floor=self.args.start_date or self.config.get("default_start_date") or "")
+            docs = site.collect_download_docs(page, floor=floor)
         except site.SessionExpired:
             self.session_ended()
         except site.ListStopped as stop:
@@ -513,6 +520,14 @@ class App:
             self.discovery.save()
             print(f"\n!! The Venmo statement list stopped partway, since {stop}.")
             print(f"   The {len(stop.docs)} statement(s) listed before it stopped are kept,")
+            if isinstance(stop, site.CapReached):
+                # Nothing on the page went wrong, so no failure file is
+                # written. A start date is what lets the walk go further.
+                print("   and this run stops rather than call the list read. To read further")
+                print("   back, choose Between two dates under Which dates and set a From")
+                print("   date, or set default_start_date in config.json, and the walk goes")
+                print("   back to that date.")
+                raise SystemExit(1)
             print("   and this run stops rather than call the list read. Run it again.")
             self.write_failure("read the documents list", "the list stopped partway")
             raise SystemExit(1)

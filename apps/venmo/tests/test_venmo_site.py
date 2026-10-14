@@ -103,7 +103,7 @@ class Page:
         # Page states to show in turn before the settled one, as a page
         # still drawing does.
         self.states = list(states or [])
-        self.listeners, self.requests, self.evaluated = [], [], []
+        self.listeners, self.requests, self.evaluated, self.waited = [], [], [], []
         page = self
 
         class Ctx:
@@ -153,7 +153,7 @@ class Page:
             self._fire("response", r)
 
     def wait_for_timeout(self, ms):
-        pass
+        self.waited.append(ms)
 
     def _pager(self):
         return 1 if (self.total is not None and self.rows < self.total and not self.empty) else 0
@@ -326,6 +326,14 @@ class Months(unittest.TestCase):
         self.assertEqual(site.months_to_walk(TODAY, floor="2026-08-01"), ["2026-09", "2026-08"])
         self.assertEqual(site.months_to_walk(TODAY, floor="2026-10-01"), [])
 
+    def test_a_start_date_past_two_years_is_walked_back_to(self):
+        walk = site.months_to_walk(TODAY, floor="2023-10-01")
+        self.assertEqual((len(walk), walk[0], walk[-1]), (36, "2026-09", "2023-10"))
+        # Never past the first month a statement address can name.
+        self.assertEqual(site.months_to_walk(TODAY, floor="1990-01-01")[-1], "2000-01")
+        # A limit given still ends the walk when it comes first.
+        self.assertEqual(site.months_to_walk(TODAY, floor="2020-01-01", limit=2), ["2026-09", "2026-08"])
+
     def test_month_of_and_month_end(self):
         self.assertEqual(site.month_of(" October   2026 "), "2026-10")
         for bad in ("october 2026", "Oct 2026", "October 26", "October 2026 PDF", "", None, "October 1999"):
@@ -387,6 +395,42 @@ class Listing(unittest.TestCase):
         got = site.collect_download_docs(page, today=TODAY, limit=3)
         self.assertEqual([d.document_id for d in got], ["2026-08"])
 
+    def test_two_years_whose_oldest_month_has_rows_are_not_the_whole_list(self):
+        with self.assertRaises(site.ListStopped) as stop:
+            site.collect_download_docs(Page(), today=TODAY)
+        self.assertIsInstance(stop.exception, site.CapReached)
+        got = [d.document_id for d in stop.exception.docs]
+        self.assertEqual((len(got), got[0], got[-1]), (site.MAX_MONTHS, "2026-09", "2024-10"))
+
+    def test_two_years_whose_oldest_month_is_empty_end_the_list(self):
+        page = Page()
+        real = page._month_shown
+
+        def shown():
+            # Only October 2024, the oldest of the two years, has none.
+            page.empty = "month=10&" in page.url and "year=2024" in page.url
+            return real()
+        page._month_shown = shown
+        got = site.collect_download_docs(page, today=TODAY)
+        self.assertEqual((len(got), got[-1].document_id), (site.MAX_MONTHS - 1, "2024-11"))
+
+    def test_a_start_date_past_two_years_is_listed_back_to(self):
+        got = site.collect_download_docs(Page(), today=TODAY, floor="2023-10-01")
+        self.assertEqual((len(got), got[-1].document_id), (36, "2023-10"))
+
+    def test_a_month_that_says_it_is_empty_for_a_moment_is_waited_for(self):
+        # "No transactions yet" for most of two seconds, then the rows.
+        empty = {"months": ["September 2026"], "heading": True, "labels": [], "lists": 0, "rows": 0,
+                 "kids": 0, "empty": True, "loading": 0}
+        page = Page(states=[dict(empty) for _ in range(8)])
+        self.assertEqual([d.document_id for d in site.collect_download_docs(page, today=TODAY, limit=1)],
+                         ["2026-09"])
+
+    def test_a_month_is_skipped_as_empty_only_once_that_has_held_two_seconds(self):
+        page = Page(empty=True)
+        self.assertEqual(site.collect_download_docs(page, today=TODAY, limit=1), [])
+        self.assertGreaterEqual(sum(page.waited), 2000)
+
     def test_a_paged_month_is_listed_without_a_press(self):
         page = Page(rows=10, total=23)
         self.assertEqual(len(site.collect_download_docs(page, today=TODAY, limit=2)), 2)
@@ -441,6 +485,22 @@ class Listing(unittest.TestCase):
                 site.collect_download_docs(Page(body=body), today=TODAY, limit=1)
         for body in (WHOLE, {"data": {"t": {"items": [], "nextId": None}}}, {"data": {}}):
             self.assertEqual(len(site.collect_download_docs(Page(body=body), today=TODAY, limit=1)), 1)
+
+    def test_the_newest_answer_read_says_whether_more_is_to_come(self):
+        more = {"data": {"t": {"pageInfo": {"hasNextPage": True, "endCursor": "x"}}}}
+
+        def heard_after(*bodies):
+            heard = site.Heard()
+            heard.on_request(Request(statement_url(9), navigation=True))
+            for body in bodies:
+                r = Response(GRAPHQL, 200, "TransactionsHistory", body=body)
+                heard.on_request(r.request)
+                heard.on_response(r)
+            heard.statement()
+            return heard.partial
+        self.assertFalse(heard_after(more, WHOLE), "the answer with the last rows clears the first")
+        self.assertTrue(heard_after(WHOLE, more))
+        self.assertTrue(heard_after(more, ValueError("gone")), "an answer not read clears nothing")
 
     def test_more_to_come(self):
         self.assertFalse(site.more_to_come({"pageInfo": {"hasNextPage": False, "endCursor": "abc"}}))
@@ -567,6 +627,40 @@ class Download(WithPrinter):
             self.assertFalse(out.exists())
             self.assertLessEqual(page.pressed, site.SHOW_MORE_PRESSES)
         self.assertEqual(self.printer.printed, [])
+
+    def test_a_turned_off_show_more_leaves_the_month_and_the_run_goes_on(self):
+        def turned_off(page, locator, **kw):
+            raise site.pressing.TurnedOff(kw["step"], "the control is turned off",
+                                          ["The Show more control is turned off on the page."])
+        site.pressing.click = turned_off
+        page = Page(rows=10, total=23)
+        ok, out = self.save(page)
+        self.assertFalse(ok)
+        self.assertFalse(out.exists())
+        self.assertEqual(self.printer.printed, [])
+        self.assertEqual(page.listeners + page.requests, [], "the listener is taken off")
+
+    def test_nothing_is_printed_while_the_newest_answer_says_more_is_to_come(self):
+        more = {"data": {"t": {"pageInfo": {"hasNextPage": True, "endCursor": "x"}}}}
+
+        def answer(p, body):
+            r = Response(GRAPHQL, 200, "TransactionsHistory", body=body)
+            p._fire("request", r.request)
+            p._fire("response", r)
+        # Every press's answer says more is to come, while the page draws
+        # every row and no Show more.
+        page = Page(rows=10, total=23, body=more)
+        page.after_press = lambda p: answer(p, more)
+        ok, out = self.save(page)
+        self.assertFalse(ok)
+        self.assertFalse(out.exists())
+        self.assertEqual(self.printer.printed, [])
+        # The answer to the press that drew the last rows says the list is whole.
+        page = Page(rows=10, total=23, body=more)
+        page.after_press = lambda p: answer(p, more if p.rows < p.total else WHOLE)
+        ok, out = self.save(page)
+        self.assertTrue(ok)
+        self.assertEqual(len(self.printer.printed), 1)
 
     def test_the_only_label_pressed_is_show_more(self):
         for label in ("Show more", "show  more", " Show More "):
@@ -740,7 +834,7 @@ class Orchestrator(WithPrinter):
             self.assertNotIn(word, files, word)
         self.assertIn("RuntimeError", json.dumps(app.progress.data))
 
-    def test_discovery_honours_the_start_date(self):
+    def test_discovery_honors_the_start_date(self):
         app = make_app(self.tmp, "--discover", "--start-date", "2026-06-01")
         page = Page(start=statement_url())
         app.page = lambda: page
@@ -750,6 +844,43 @@ class Orchestrator(WithPrinter):
         months = sorted(r["document_id"] for r in app.discovery.data.values())
         self.assertEqual(months[0], "2026-06")
         self.assertNotIn(docs.datetime.now().strftime("%Y-%m"), months, "the month under way is never listed")
+
+    def test_discovery_with_no_start_date_does_not_call_two_years_the_whole_list(self):
+        from paperpull_core import listing
+        app = make_app(self.tmp, "--discover")
+        page = Page(start=statement_url())
+        app.page = lambda: page
+        app.check_session = lambda p: None
+        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit):
+            app.cmd_discover()
+        self.assertEqual(len(app.discovery.data), site.MAX_MONTHS, "what was read is kept")
+        self.assertEqual(listing.last(app), listing.STOPPED)
+        self.assertIn("default_start_date", said.getvalue())
+        self.assertEqual(list(app.paths.diagnostics.glob("failure-*.json")), [], "nothing went wrong")
+
+    def test_discovery_of_one_year_goes_back_to_its_first_month(self):
+        year = date.today().year - 1
+        app = make_app(self.tmp, "--discover", "--year", str(year))
+        page = Page(start=statement_url())
+        app.page = lambda: page
+        app.check_session = lambda p: None
+        with redirect_stdout(io.StringIO()):
+            app.cmd_discover()
+        months = sorted(r["document_id"] for r in app.discovery.data.values())
+        self.assertEqual(months[0], "%d-01" % year)
+        self.assertIn("%d-12" % year, months)
+
+    def test_discovery_goes_back_to_a_start_date_past_two_years(self):
+        today = date.today()
+        start = date(today.year - 3, today.month, 1).isoformat()
+        app = make_app(self.tmp, "--discover", "--start-date", start)
+        page = Page(start=statement_url())
+        app.page = lambda: page
+        app.check_session = lambda p: None
+        with redirect_stdout(io.StringIO()):
+            app.cmd_discover()
+        months = sorted(r["document_id"] for r in app.discovery.data.values())
+        self.assertEqual((len(months), months[0]), (36, start[:7]))
 
     def test_the_statements_tab_is_preferred_and_a_dead_tab_passed_over(self):
         class Tab:

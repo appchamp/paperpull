@@ -95,10 +95,6 @@ STOPS = {
     ("vanguard", "show_more", "click", "show more of the list"): (1,
         "a control of the whole list, read as turned on before it is pressed, and a "
         "list shown in full leaves only the statement not shown"),
-    ("venmo", "show_all", "click", "show more of the month"): (1,
-        "the month's own Show more pager, pressed only to draw the rest of the month's "
-        "transactions before it is printed; a turned off pager would leave the month "
-        "partly drawn, and nothing is printed for it"),
 }
 
 # The presses that catch TurnedOff and leave their document, by app, before
@@ -111,7 +107,7 @@ LEAVES = {
     ("etrade", "_catch_pdf"), ("golden1", "_catch_pdf"), ("nelnet", "_catch_pdf"),
     ("newrez", "_catch_pdf"), ("pge", "_press_once"), ("sba", "_catch_pdf"),
     ("smud", "_catch_pdf"), ("statefarm", "_catch_pdf"), ("vanguard", "download_document"),
-    ("verizonmobile", "_catch_pdf"), ("wellsfargo", "_catch_pdf")}
+    ("venmo", "show_all"), ("verizonmobile", "_catch_pdf"), ("wellsfargo", "_catch_pdf")}
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +556,35 @@ def _pge_link(off: bool) -> str:
             'View Bill PDF</a>' % (' aria-disabled="true"' if off else ""))
 
 
+VENMO_PROFILE = "1234567890123456"
+
+
+def _venmo(site, page, out, staging, trace):
+    """Venmo's month, its first rows drawn and its own Show more under
+    them, drawn whole through show_all before the month is printed. The
+    page is at the month's own statement address, without a load. A turned
+    off Show more leaves the month for review (ListStopped), which its
+    download records and goes on from."""
+    page.evaluate("(to) => history.replaceState(null, '', to)",
+                  "/statement?accountType=personal&month=6&profileId=%s&year=2026" % VENMO_PROFILE)
+    try:
+        return site.show_all(page, site.Where("personal", VENMO_PROFILE), "2026-06",
+                             site._month_heard("2026-06"))
+    except site.ListStopped:
+        return False
+
+
+# The month picker and the statement's heading, beside the list.
+VENMO_MONTH = '<input type="text" value="June 2026"><h2>Account Statement</h2>'
+
+
+def _venmo_list(off: bool) -> str:
+    return ('<div class="completedTransactionList_q1"><a class="transactionItem_q2" href="#">'
+            '<span data-testid="money">-$1.00</span></a><div><button id="get" type="button" '
+            'class="ctl"%s onclick="window.presses++">Show more</button></div></div>'
+            % (" disabled" if off else ""))
+
+
 def _how(app: str, function: str, monkeypatch):
     """The app's own press path, the page that shows its control, and the
     row it sits in, for each press that leaves its document."""
@@ -579,6 +604,8 @@ def _how(app: str, function: str, monkeypatch):
         return "pge_site", _pge, _pge_link, "June 30, 2026"
     if (app, function) == ("shelbycounty", "_press_for_blob"):
         return "shelbycounty_site", _shelbycounty, _shelbycounty_link, "06/30/2026"
+    if (app, function) == ("venmo", "show_all"):
+        return "venmo_site", _venmo, _venmo_list, VENMO_MONTH
     return None
 
 
