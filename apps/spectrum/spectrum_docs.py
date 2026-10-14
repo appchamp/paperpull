@@ -504,9 +504,14 @@ class App:
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
-        page = self.page()
         n_new = 0
-        # Statements is opened and read in one go by the site layer, so a
+        # The tab is taken the way each statement takes it. With no tab of
+        # the person's on Spectrum, Statements is opened in a tab of this
+        # run's own before anything asks about the session, since that tab
+        # starts blank and off the site, and the session check stops on a
+        # tab off the site. A tab of another site is never used.
+        page = self._on_its_site()
+        # Statements is then read again in one go by the site layer, so a
         # sign-out or a passcode prompt anywhere on the way reaches the
         # boundary below and stops the run, rather than a prompt to sign in
         # again.
@@ -596,8 +601,8 @@ class App:
     # -- processing --------------------------------------------------------
 
     def _on_its_site(self):
-        """The tab the next statement is taken in, on www.spectrum.net and
-        never a tab of another site. Spectrum keeps its session in the
+        """The tab Discover and the next statement are taken in, on
+        www.spectrum.net and never a tab of another site. Spectrum keeps its session in the
         browser profile a new tab shares, so with no tab of the person's on
         the site Statements is opened in a tab of this run's own
         (tabs.on_its_site)."""

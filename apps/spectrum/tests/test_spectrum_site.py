@@ -415,6 +415,9 @@ class Page:
     def title(self):
         return "Spectrum"
 
+    def is_closed(self):
+        return False
+
 
 class Row:
     def __init__(self, page, index):
@@ -1468,6 +1471,25 @@ class Orchestrator(WithFakeClick):
             app.cmd_discover()
         self.assertEqual(page.clicks, [])
         self.assertEqual(len(app.discovery.data), 5)
+
+    def test_discovery_opens_statements_before_it_asks_about_the_session(self):
+        """With no Spectrum tab of the person's open, page() hands over a new
+        blank tab of the run's own. Discover opens Statements in it first,
+        rather than stop on the blank tab as one that left Spectrum."""
+        from paperpull_core import tabs
+        app = make_app(self.tmp, "--discover")
+        app._staged = True
+        app._dl_dir.mkdir(parents=True)
+        page = Page()
+        page.url = "about:blank"
+        tab = tabs.new_tab(SimpleNamespace(new_page=lambda: page))
+        app.page = lambda: tab
+        with redirect_stdout(io.StringIO()) as said:
+            app.cmd_discover()
+        self.assertNotIn("left Spectrum", said.getvalue())
+        self.assertEqual(len(app.discovery.data), 5)
+        self.assertEqual(page.gotos[0], site.STATEMENTS_URL)
+        self.assertEqual(page.clicks, [], "Billing lists no Mobile account here")
 
     def run_process(self, app, raises):
         self.listed(app)
