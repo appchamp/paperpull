@@ -2456,6 +2456,23 @@ class Source(unittest.TestCase):
             if path != Path(__file__):
                 self.assertIsNone(re.search(r"Account Number:? ?\d", text), path.name)
 
+    def test_the_docs_keep_the_house_style(self):
+        """No semicolon in the README, the CHANGELOG bullets or the PROVIDERS
+        row, and canceled spelled the American way."""
+        repo = HERE.parent.parent
+        changelog = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+        unreleased = changelog.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+        bullets = [b for b in re.split(r"\n- ", unreleased) if b.startswith("**Spectrum")]
+        self.assertEqual(len(bullets), 2)
+        row = [line for line in (repo / "PROVIDERS.md").read_text(encoding="utf-8").splitlines()
+               if line.startswith("| [`spectrum`]")]
+        self.assertEqual(len(row), 1)
+        for name, text in [("README", (HERE / "README.md").read_text(encoding="utf-8")),
+                           ("CHANGELOG", "\n".join(bullets)), ("PROVIDERS", row[0])]:
+            self.assertNotIn(";", text, name)
+        for path in (HERE / "spectrum_site.py", HERE / "spectrum_docs.py", HERE / "README.md"):
+            self.assertNotIn("cancelled", path.read_text(encoding="utf-8"), path.name)
+
     def test_config(self):
         config = json.loads((HERE / "config.example.json").read_text())
         self.assertEqual(config["cdp_url"], "http://127.0.0.1:9291")
