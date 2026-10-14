@@ -36,7 +36,7 @@ checking it against the rows the page draws. A statement is saved by
 pressing its row's "Opens menu to save document" and then "Save as PDF",
 and the browser's download is kept only when it is one PDF from Chase.
 
-Only six kinds of control are ever pressed: an account in the menu, the
+Only six kinds of control are ever pressed, an account in the menu, the
 Statements section, the year picker, a year in it, a statement's save
 menu and its Save as PDF. Payments, transfers, wires, Zelle, ACH,
 collections, deposits, approvals, users, paperless, offers, settings and
@@ -71,9 +71,9 @@ for review, and the run goes on to the next one.
 ## Validation status
 
 Built from the account owner's survey of a signed-in business profile on
-2026-10-12 and run live on it on 2026-10-13: Discover found 10 statements,
-Pilot and Run All saved them all, and every PDF opened. Not yet seen or
-known:
+2026-10-12 and run live on it on 2026-10-13, when Discover found 10
+statements, Pilot and Run All saved them all, and every PDF opened. Not
+yet seen or known:
 
 - An empty year read before any year with statements, every account's
   current year in January say, is held until a year with statements in
@@ -86,7 +86,7 @@ known:
   passed over only when it shows no Statements.
 - Two statements of one account on one date stop the list on every run,
   since nothing on a row tells them apart. None has been seen.
-- The business card's statements: the card showed no statements in the
+- The business card's statements. The card showed no statements in the
   document center when it was surveyed, and whether they appear there is
   still an open question.
 - Tax documents, notices, ATM receipts and check images are not collected.

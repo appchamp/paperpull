@@ -24,9 +24,8 @@ All notable changes to PaperPull are recorded here. Versioning follows
   and statements new ids at each sign-in, so a statement is known by its
   account's class and a short digest of its last four, which tells two
   accounts apart but is no secret, since a last four is easy to guess
-  from it. Verified on one profile, where it
-  saved 10 checking statements on a full run. A business card's statements
-  are untested.
+  from it. Verified on one profile, where it saved 10 checking statements
+  on a full run. A business card's statements are untested.
 
 ## [0.51.0] - 2026-10-14
 
