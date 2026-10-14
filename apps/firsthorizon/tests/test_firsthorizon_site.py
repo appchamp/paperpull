@@ -1206,6 +1206,31 @@ def test_two_accounts_of_one_date_save_two_files(tmp_path):
             assert w not in n
 
 
+def test_a_product_the_bank_renames_leaves_no_statement_behind(tmp_path):
+    """A product the bank renames between a listing and the run keeps every
+    record's key, and the next listing gives the records the new product,
+    which is what the run looks for, so no statement is sent to review."""
+    from paperpull_core.models import State
+    app = make_app(tmp_path, "--all")
+    bank = Bank([acct1()])
+    wire(app, bank, tmp_path)
+    with redirect_stdout(io.StringIO()):
+        app.cmd_discover()
+    keys = set(app.discovery.data)
+    bank.accounts[0]["title"] = f"{NICK1} (Everyday Checking) (*8642) $1,234.56"
+    with redirect_stdout(io.StringIO()):
+        app.cmd_discover()
+    assert set(app.discovery.data) == keys, "the key scheme is unchanged"
+    assert {r["account"] for r in app.discovery.data.values()} == {"Everyday Checking"}
+    app.check_session = lambda page: None
+    app.write_failure = lambda *a, **k: None
+    with redirect_stdout(io.StringIO()):
+        app.process(app._select())
+    assert app.stats["manual_review"] + app.stats["failed"] == 0
+    assert len([p for p in bank.presses if p[0] == "download"]) == 2
+    assert {r["state"] for r in app.progress.data.values()} == {State.COMPLETED.value}
+
+
 def test_an_expired_session_stops_the_run_and_records_nothing(tmp_path):
     app = make_app(tmp_path, "--all")
     bank = Bank([acct1()])

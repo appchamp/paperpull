@@ -466,9 +466,16 @@ class App:
             self.discovery.update(doc.key, rec, save=False)
             return 1
         # refresh which page the doc's download link lives on, and its own path
-        self.discovery.update(doc.key, {"source_url": persistable(source_url),
-                                        "href": persistable(getattr(r, "href", "") or ""),
-                                        "account_id": doc.account_id}, save=False)
+        refresh = {"source_url": persistable(source_url),
+                   "href": persistable(getattr(r, "href", "") or ""),
+                   "account_id": doc.account_id}
+        # The product as the bank calls it now. The key does not carry it,
+        # so a product the bank renames is the same record, and the
+        # statement is sought under the panel's new product, never left
+        # behind under the old one.
+        if doc.account:
+            refresh["account"] = doc.account
+        self.discovery.update(doc.key, refresh, save=False)
         return 0
 
     def cmd_discover(self, quiet: bool = False) -> int:
