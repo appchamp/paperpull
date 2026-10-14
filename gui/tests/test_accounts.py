@@ -463,30 +463,42 @@ def test_a_run_that_ended_by_itself_before_its_page_closed_keeps_its_code(base, 
     """The page can go while the panel is still finishing a run that has
     already ended, during the Paperless copy on the server say. That run
     finished, and its row must not say it stopped partway. Here the panel
-    is held just after the app ended, and the page goes then."""
+    is held once its wait for the app has returned, and the page goes only
+    then, never after a guessed time, since a busy machine can keep the
+    app going well past one."""
     import anyio
     bank = root / "Bank Statements"
     _plan(bank, saved=["Statements/2026-09-30 Bank Statement.pdf"])
     real = app_module.to_thread
+    ended = threading.Event()
+    held = []
 
     class Held:
         @staticmethod
         async def run_sync(fn, *args, **kwargs):
             out = await real.run_sync(fn, *args, **kwargs)
             if getattr(fn, "__name__", "") == "wait":
-                await anyio.sleep(3)
+                ended.set()
+                # Held until the page going ends it. The limit only keeps a
+                # panel that never hears of it from hanging the test.
+                try:
+                    await anyio.sleep(20)
+                except anyio.get_cancelled_exc_class():
+                    held.append("ended by the page")
+                    raise
+                held.append("ran out")
             return out
     monkeypatch.setattr(app_module, "to_thread", Held)
     conn = http.client.HTTPConnection("127.0.0.1", base, timeout=30)
     conn.request("POST", "/api/run", body=json.dumps({"app": "Bank Statements", "action": "all"}),
                  headers={"Content-Type": "application/json"})
-    resp = conn.getresponse()
-    while b"Checking the connection" not in resp.fp.readline():
-        pass
-    time.sleep(0.5)
+    conn.getresponse()
+    assert ended.wait(30), "the app did not end"
     conn.sock.close()
     conn.close()
     assert _settled(30)
+    # The page went while the panel was still finishing, not after.
+    assert held == ["ended by the page"]
     log = app_module._read_run_log(bank)
     assert len(log) == 1
     assert log[0]["exit_code"] == 0 and log[0]["closed"] is False
