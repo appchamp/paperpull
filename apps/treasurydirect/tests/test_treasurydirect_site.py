@@ -33,6 +33,8 @@ FAKE_ACCOUNT = "Q-987-654-321"
 FAKE_PROCESS = "7777123456"
 FAKE_CONFIRM = "QXZ4455667"
 FAKE_TIN = "XXX-XX-6789"
+# What the account is known by, a digest of its number.
+MINE = site.account_digest(FAKE_ACCOUNT)
 
 
 def href(handler, extra=""):
@@ -330,7 +332,7 @@ class Download(Pressing):
                 (f"security-history-{TODAY}", ["the History tab", "the Security History link"], "Security History"),
                 (f"payment-history-{TODAY}", ["the History tab", "the Payment History link"], "Payment History")):
             page = Page()
-            self.assertTrue(site.download_document(page, doc_id, TODAY, self.out / "a.pdf"), doc_id)
+            self.assertTrue(site.download_document(page, doc_id, TODAY, self.out / "a.pdf", account=MINE), doc_id)
             self.assertEqual(page.pressed, pressed)
             self.assertIn(h1, self.rendered[-1])
 
@@ -364,14 +366,15 @@ class Download(Pressing):
     def test_a_sign_out_or_passcode_while_saving_propagates(self):
         with self.assertRaises(site.SessionExpired):
             site.download_document(Page(pages={"ch.DisplayCurrentHoldings": UNAVAILABLE}),
-                                   f"holdings-{TODAY}", TODAY, self.out / "x.pdf")
+                                   f"holdings-{TODAY}", TODAY, self.out / "x.pdf", account=MINE)
         with self.assertRaises(site.OtpRequired):
             site.download_document(Page(pages={"hist.DisplayHistory": OTP}),
-                                   f"security-history-{TODAY}", TODAY, self.out / "x.pdf")
+                                   f"security-history-{TODAY}", TODAY, self.out / "x.pdf", account=MINE)
 
     def test_the_tab_already_on_its_page_is_not_pressed_again(self):
         page = Page(at="ch.DisplayCurrentHoldings")
-        self.assertTrue(site.download_document(page, f"holdings-{TODAY}", TODAY, self.out / "c.pdf"))
+        self.assertTrue(site.download_document(page, f"holdings-{TODAY}", TODAY, self.out / "c.pdf",
+                                               account=MINE))
         self.assertEqual(page.pressed, [])
 
     def test_a_link_off_the_signed_in_pages_is_never_pressed(self):
@@ -509,12 +512,13 @@ class Orchestrator(Pressing):
         text = app.paths.discovery_json.read_text()
         self.assertNotIn("?", text)
         self.assertNotIn(FAKE_PROCESS, text)
-        rec = app.discovery.get("id:2025-1099")
+        rec = app.discovery.get(f"id:{MINE}:2025-1099")
         self.assertEqual((rec["category"], rec["summary"], rec["date"], rec["period"], rec["account"]),
-                         ("Tax Document", "1099 Tax Form", "2025-12-31", "Tax Year 2025", ""))
-        hold = app.discovery.get("id:holdings-2026-10-13")
+                         ("Tax Document", "1099 Tax Form", "2025-12-31", "Tax Year 2025", MINE))
+        hold = app.discovery.get(f"id:{MINE}:holdings-2026-10-13")
         self.assertEqual((hold["category"], hold["summary"], hold["period"]), ("Statement", "Current Holdings", ""))
-        self.assertEqual(docs.told_apart_by(rec), "2025-1099")
+        self.assertEqual(docs.told_apart_by(rec), MINE[:6])
+        self.assertEqual(docs.told_apart_by({"document_id": "2025-1099"}), "2025-1099")
         self.assertEqual(docs.told_apart_by({}), "")
         for r, name in ((rec, "2025-12-31 TreasuryDirect 1099 Tax Form.pdf"),
                         (hold, "2026-10-13 TreasuryDirect Current Holdings.pdf")):
@@ -649,7 +653,7 @@ class Orchestrator(Pressing):
 
     def _saved(self, pdf_text):
         app = make_app(tempfile.mkdtemp(), "--all")
-        app._record_rawdoc(site._snapshot(site.HOLDINGS, TODAY), GATEWAY)
+        app._record_rawdoc(site._snapshot(site.HOLDINGS, TODAY, MINE), GATEWAY)
         app._delay = lambda *a, **k: None
         app._on_its_site = lambda: Page()
         app.write_failure = lambda *a, **k: None
@@ -660,7 +664,7 @@ class Orchestrator(Pressing):
                 app.process(app._select())
         finally:
             receipt_pdf.print_html_inert_to_pdf = original
-        return app.progress.get(f"id:holdings-{TODAY}")["state"]
+        return app.progress.get(f"id:{MINE}:holdings-{TODAY}")["state"]
 
     def test_a_pdf_whose_text_names_its_page_is_saved(self):
         self.assertEqual(self._saved("History Current Holdings"), "Completed")
@@ -688,6 +692,135 @@ class Orchestrator(Pressing):
         self.assertTrue(docs.pilot_failed({"a": {"state": State.FAILED.value}}, [D("a")]))
         self.assertTrue(docs.pilot_failed({}, [D("a")]))
         self.assertTrue(docs.pilot_failed(done, []))
+
+
+# A second made-up account, as the same sign-in might hold.
+OTHER_NAME = "Qwertyu"
+OTHER_ACCOUNT = "Z-111-222-333"
+NUMBER_LINE = f"<p><strong>{FAKE_NAME}'s account:</strong> {FAKE_ACCOUNT}</p>"
+LISTING_LINK = f'<a href="{href("misc.MultiAccountSelection")}">Return To Account Listing</a>'
+
+
+def pages_of(name, account):
+    """The made-up site as another account of the sign-in draws it."""
+    def swap(make):
+        return lambda: make().replace(FAKE_NAME, name).replace(FAKE_ACCOUNT, account)
+    return {h: swap(make) for h, make in PAGES.items()}
+
+
+def pages_without_number(listing=True):
+    """The made-up site with no account number drawn, and with or without
+    the link back to a list of the sign-in's accounts."""
+    def cut(make):
+        def page():
+            html = make().replace(NUMBER_LINE, "")
+            return html if listing else html.replace(LISTING_LINK, "")
+        return page
+    return {h: cut(make) for h, make in PAGES.items()}
+
+
+class Accounts(Pressing):
+    """One sign-in can hold several accounts (Return To Account Listing), so
+    each record is bound to the account it was listed on, by a digest of
+    its number, and saved only while the tab is on that account."""
+
+    def setUp(self):
+        super().setUp()
+        self.original_render = receipt_pdf.print_html_inert_to_pdf
+        receipt_pdf.print_html_inert_to_pdf = h1_pdf
+
+    def tearDown(self):
+        receipt_pdf.print_html_inert_to_pdf = self.original_render
+        super().tearDown()
+
+    @staticmethod
+    def _run(app, tab, discover=True):
+        app.page = lambda: tab
+        app._on_its_site = lambda: tab
+        app._delay = lambda *a, **k: None
+        app.write_failure = lambda *a, **k: None
+        with redirect_stdout(io.StringIO()) as out:
+            if discover:
+                app.cmd_discover(quiet=True)
+            app.process(app._select())
+        return out.getvalue()
+
+    def test_a_second_account_on_the_same_day_is_saved_under_its_own_key(self):
+        tmp = tempfile.mkdtemp()
+        self._run(make_app(tmp, "--all"), Page(pages=pages_of(OTHER_NAME, OTHER_ACCOUNT)))
+        app = make_app(tmp, "--all")
+        out = self._run(app, Page())
+        self.assertEqual(out.count("Saved:"), 3, "the second account's are taken, not skipped")
+        saved = [r for r in app.progress.data.values() if r.get("state") == "Completed"]
+        self.assertEqual(len(saved), 6)
+        self.assertEqual(len({r["account"] for r in saved}), 2)
+        names = sorted(p.name for p in app.paths.root.rglob("*.pdf"))
+        self.assertEqual(len(names), 6)
+        written = names + list(app.progress.data) + [app.paths.progress_json.read_text(),
+                                                     app.paths.discovery_json.read_text()]
+        for text in written:
+            for word in (FAKE_ACCOUNT, OTHER_ACCOUNT, "987654321", "111222333", "987-654", "111-222"):
+                self.assertNotIn(word, text)
+
+    def test_a_tab_on_another_account_sends_the_document_to_review_unsaved(self):
+        app = make_app(tempfile.mkdtemp(), "--all")
+        app.page = lambda: Page()
+        with redirect_stdout(io.StringIO()):
+            app.cmd_discover(quiet=True)
+        other = Page(pages=pages_of(OTHER_NAME, OTHER_ACCOUNT))
+        out = self._run(app, other, discover=False)
+        self.assertEqual({r["state"] for r in app.progress.data.values()}, {"Needs Manual Review"})
+        self.assertEqual(list(app.paths.root.rglob("*.pdf")), [])
+        self.assertEqual(other.pressed, [])
+        self.assertIn("another TreasuryDirect account", out)
+
+    def test_the_page_reached_must_be_the_recorded_account(self):
+        mine = site.account_digest(FAKE_ACCOUNT)
+        out = Path(tempfile.mkdtemp()) / "x.pdf"
+        rendered = []
+        original = site.render
+        site.render = lambda page, html, path: rendered.append(html)
+        try:
+            other = Page(pages=pages_of(OTHER_NAME, OTHER_ACCOUNT))
+            with self.assertRaises(site.OtherAccount):
+                site.download_document(other, f"holdings-{TODAY}", TODAY, out, account=mine)
+            self.assertEqual(other.pressed, [])
+            moved = Page(pages={"ch.DisplayCurrentHoldings":
+                                pages_of(OTHER_NAME, OTHER_ACCOUNT)["ch.DisplayCurrentHoldings"]})
+            with self.assertRaises(site.OtherAccount):
+                site.download_document(moved, f"holdings-{TODAY}", TODAY, out, account=mine)
+        finally:
+            site.render = original
+        self.assertEqual(rendered, [])
+
+    def test_several_accounts_and_no_number_stop_the_list(self):
+        page = Page(pages=pages_without_number(listing=True))
+        with self.assertRaises(site.ListStopped) as stop:
+            site.collect_download_docs(page)
+        self.assertEqual(stop.exception.docs, [])
+        self.assertEqual(page.pressed, [])
+
+    def test_one_account_and_no_number_is_listed_as_before(self):
+        page = Page(pages=pages_without_number(listing=False))
+        got = site.collect_download_docs(page, today="2026-10-13")
+        self.assertEqual([(d.document_id, d.account) for d in got],
+                         [("holdings-2026-10-13", ""), ("security-history-2026-10-13", ""),
+                          ("payment-history-2026-10-13", "")])
+
+    def test_the_account_number_is_private_and_only_its_digest_is_kept(self):
+        site.set_private_words([])
+        got = site.collect_download_docs(Page(), today="2026-10-13")
+        digest = site.account_digest(FAKE_ACCOUNT)
+        self.assertTrue(re.fullmatch(r"[0-9a-f]{12}", digest), digest)
+        self.assertEqual({d.account for d in got}, {digest})
+        self.assertEqual(site.account_digest("q987654321"), digest)
+        self.assertNotEqual(site.account_digest(OTHER_ACCOUNT), digest)
+        self.assertEqual(site.account_digest(""), "")
+        for word in (FAKE_ACCOUNT, "Q987654321"):
+            self.assertIn(word, site.private_words())
+        keys ={docs.Document(**{"title": d.title, "account": d.account, "document_id": d.document_id}).key
+                for d in got}
+        self.assertEqual(keys, {f"id:{digest}:{d.document_id}" for d in got})
 
 
 class OwnBrowser(unittest.TestCase):
@@ -796,7 +929,7 @@ class Privacy(Pressing):
         self.assertEqual(names, sorted([f"{TODAY} TreasuryDirect Current Holdings.pdf",
                                         f"{TODAY} TreasuryDirect Payment History.pdf",
                                         f"{TODAY} TreasuryDirect Security History.pdf"]))
-        rec = app.progress.get("id:2025-1099")
+        rec = app.progress.get(f"id:{MINE}:2025-1099")
         self.assertEqual(rec["state"], "Needs Manual Review", "a taxable year is shown, never pressed")
         self.assertFalse(any("Year" in p or "1099" in p for p in tab.pressed))
         for refused in ("Logoff", "BuyDirect", "Gift Box", "here", "Redeem", "Bank", "Linked", "InBox", "Account Info"):

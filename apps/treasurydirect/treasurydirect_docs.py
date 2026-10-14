@@ -121,7 +121,9 @@ class Document:
                  href="", row_index=-1, confidence="", account="",
                  date_text="", document_id="", **kw):
         self.title = title
-        # Always empty: the account a document belongs to is never written down.
+        # The digest of the account the document was listed on
+        # (site.account_digest), never its number. Empty for a sign-in of
+        # one account whose pages name none.
         self.account = account
         self.category = category
         self.summary = summary
@@ -148,13 +150,13 @@ class Document:
 
     @property
     def key(self) -> str:
-        """Stable identity. The document's kind and day, or tax year, which no
-        other document of the account carries. A record without one falls back to
-        category, date and title."""
-        if self.document_id:
-            return f"id:{self.account}:{self.document_id}" if self.account \
-                else f"id:{self.document_id}"
+        """Stable identity. The account's digest with the document's kind and
+        day, or tax year, which no other document of that account carries,
+        so one sign-in's accounts are kept apart. A record without one falls
+        back to category, date and title."""
         acct = _account_component(sanitize_component(self.account or ""))
+        if self.document_id:
+            return f"id:{acct}:{self.document_id}" if acct else f"id:{self.document_id}"
         return f"{self.category}:{self.date}:{sanitize_component(self.title)[:60]}:{acct}"
 
     def to_dict(self) -> dict:
@@ -177,12 +179,17 @@ def migrate_legacy_keys(records: dict) -> int:
 
 def told_apart_by(record: dict) -> str:
     """What a document's file adds to its name when another file already
-    has that name, the same on every run: its id, never " (2)"
-    (core/tests/test_every_app_renames_each_file_for_its_own_record). Every
-    document already has a name of its own, by kind and date, so this is
-    reached only when a file of that name is already in the folder. The
-    download and Rename both ask this, so they agree."""
-    return str((record or {}).get("document_id") or "").strip()
+    has that name, the same on every run and never " (2)"
+    (core/tests/test_every_app_renames_each_file_for_its_own_record). The
+    first six letters of its account's digest, never the number, or its id
+    when the record names no account. Every document of one account
+    already has a name of its own, by kind and date, so this is reached
+    when another account of the sign-in has a file of that name, or a
+    file of that name is already in the folder. The download and Rename
+    both ask this, so they agree."""
+    record = record or {}
+    return (str(record.get("account") or "").strip()[:6]
+            or str(record.get("document_id") or "").strip())
 
 
 class App:
@@ -443,7 +450,7 @@ class App:
                        period=f"Tax Year {date[:4]}" if category == doc_types.TAX else "",
                        source_url=persistable(source_url),
                        href=persistable(getattr(r, "href", "") or ""),
-                       account="",
+                       account=(getattr(r, "account", "") or "").strip(),
                        document_id=(getattr(r, "document_id", "") or "").strip())
         if self.discovery.get(doc.key) is None:
             rec = doc.to_dict()
@@ -668,7 +675,20 @@ class App:
             self.stats["duplicate_filenames"] += 1
 
         trace: list = []
-        saved = site.download_document(page, doc.document_id, doc.date, out_path, trace=trace)
+        try:
+            saved = site.download_document(page, doc.document_id, doc.date, out_path,
+                                           trace=trace, account=doc.account)
+        except site.OtherAccount:
+            # One sign-in can hold several accounts. A page of another one
+            # is never saved under this document's name, so nothing is
+            # rendered and the document is left for review.
+            self._record(doc, State.NEEDS_MANUAL_REVIEW,
+                         notes="the tab is on another TreasuryDirect account")
+            self._write_row(doc, "Not taken", "Needs Manual Review")
+            self.stats["manual_review"] += 1
+            print("  The tab is on another TreasuryDirect account than this document was")
+            print("  listed on, so nothing was saved. Open that account in the tab, then Resume.")
+            return
         # A render that failed must not leave a convincing empty file behind.
         if out_path.exists() and (
                 out_path.stat().st_size == 0 or out_path.read_bytes()[:5] != b"%PDF-"):

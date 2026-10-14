@@ -65,14 +65,20 @@ SAFETY (an account that can buy, redeem, transfer and approve transfers):
   Cancel and Delete are refused by name.
 
 KNOWN CEILINGS
-  * One account per sign-in: the account the tab is on. Linked accounts are
-    never opened.
+  * One account at a time, the one the tab is on. One sign-in can hold
+    several (Return To Account Listing), so each document is bound to the
+    account it was listed on, by a digest of the number its pages show
+    (account_of), and saved only while the tab shows that account. A
+    sign-in of several accounts whose pages name none stops the list.
+    Linked accounts are never opened.
   * The Investor InBox is not read.
   * Security History and Payment History are saved as they first show; a
     date range or a type chosen in their forms is never submitted.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import logging
 import re
 import sys
@@ -187,6 +193,13 @@ OTP_MARKERS = ["one-time passcode", "one time passcode", "security question",
 # and digits together).
 ACCOUNT_OWNER_RE = re.compile(r"([A-Z][\w.-]{1,40}(?:[ \t]+[A-Z][\w.-]{1,40}){0,3})'s[ \t]+account\b")
 ACCOUNT_NUMBER_RE = re.compile(r"\b[A-Z]-?[0-9]{3}-?[0-9]{3}-?[0-9]{3}\b")
+# The account the page is on, the number after "<Name>'s account" in the
+# line every signed-in page draws. Only a number there names it.
+ACCOUNT_LINE_RE = re.compile(r"['’]s[ \t]+account\s*:?\s*(%s)" % ACCOUNT_NUMBER_RE.pattern)
+# One sign-in can hold several accounts. Its pages then link back to the
+# list of them, "Return To Account Listing" (as the survey's pages drew it).
+ACCOUNT_LISTING_RE = re.compile(r"^return\s+to\s+account\s+listing$", re.I)
+ACCOUNT_LISTING_HANDLER_RE = re.compile(r"multiaccount", re.I)
 MIXED_ID_RE = re.compile(r"\b(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{6,}\b")
 TAX_ID_RE = re.compile(r"(?<![0-9])(?:[0-9Xx*]{3}-[0-9Xx*]{2}-[0-9]{4}|[0-9]{9})(?![0-9])")
 PRIVATE_QUERY_KEYS = ("processID", "upd_ts", "count")
@@ -265,6 +278,11 @@ class ListStopped(Exception):
     def __init__(self, why: str, docs=None):
         super().__init__(why)
         self.docs = list(docs or [])
+
+
+class OtherAccount(Exception):
+    """The tab is on an account other than the one the document was listed
+    on. Nothing is saved, and the run sends the document to review."""
 
 
 # ---------------------------------------------------------------------------
@@ -627,6 +645,64 @@ def guard_private(html: str, url: str = "") -> int:
 
 
 # ---------------------------------------------------------------------------
+# The account a page is on, known by a digest of its number and never by
+# the number itself.
+# ---------------------------------------------------------------------------
+
+_DIGEST_SALT = b"paperpull treasurydirect account"
+
+
+@functools.lru_cache(maxsize=16)
+def account_digest(number: str) -> str:
+    """Twelve hex letters naming the account numbered `number`, or "" for
+    anything that is not an account number. One letter and nine digits are
+    few enough to try every one against a plain digest, so this is a slow
+    one (PBKDF2 over SHA-256, 200,000 rounds). The number itself is in no
+    record, key or file name."""
+    norm = re.sub(r"[\s-]", "", str(number or "")).upper()
+    if not re.fullmatch(r"[A-Z][0-9]{9}", norm):
+        return ""
+    return hashlib.pbkdf2_hmac("sha256", norm.encode("ascii"), _DIGEST_SALT, 200_000).hex()[:12]
+
+
+def account_numbers_of(page_read: _Page) -> List[str]:
+    """The account numbers the page's account line names, each as one
+    letter and nine digits. Each is registered as a private word, as the
+    page shows it and as it is written here, before anything is logged."""
+    found = []
+    for m in ACCOUNT_LINE_RE.finditer(_squash(" ".join(page_read.words))):
+        norm = m.group(1).replace("-", "").upper()
+        new = [w for w in dict.fromkeys((m.group(1), norm)) if w not in private_words()]
+        if new:
+            set_private_words(private_words() + new)
+        if norm not in found:
+            found.append(norm)
+    return found
+
+
+def lists_several_accounts(page_read: _Page) -> bool:
+    """Whether the page links back to the list of the accounts its sign-in
+    holds, Return To Account Listing."""
+    return any(ACCOUNT_LISTING_RE.match(lk.text) or ACCOUNT_LISTING_HANDLER_RE.search(lk.handler)
+               for lk in page_read.links)
+
+
+def account_of(page_read: _Page) -> str:
+    """The digest of the account the page is on (account_digest), or ""
+    when the page names no account and links to no list of several. A page
+    naming two accounts, or naming none while its sign-in holds several,
+    stops the list, since which account it shows cannot be told."""
+    numbers = account_numbers_of(page_read)
+    if len(numbers) > 1:
+        raise ListStopped("the page names more than one account")
+    if numbers:
+        return account_digest(numbers[0])
+    if lists_several_accounts(page_read):
+        raise ListStopped("the sign-in holds several accounts and the page names none of them")
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Pressing. Only a page's own link, in the tab, through the core guard.
 # ---------------------------------------------------------------------------
 
@@ -742,6 +818,8 @@ DOC_ID_RE = re.compile(r"(?:(holdings|security-history|payment-history)-([0-9]{4
 @dataclass
 class RawDoc:
     title: str
+    # The digest of the account it was listed on (account_digest), or ""
+    # for a sign-in of one account whose pages name none.
     account: str = ""
     date_text: str = ""
     href: str = ""
@@ -752,16 +830,16 @@ class RawDoc:
     document_id: str = ""
 
 
-def _snapshot(kind: str, day: str) -> RawDoc:
+def _snapshot(kind: str, day: str, account: str = "") -> RawDoc:
     title = "TreasuryDirect %s %s" % (SNAPSHOTS[kind], day)
-    return RawDoc(title=title, date_text=day, href=GATEWAY_PATH, text=title, kind=kind,
-                  document_id="%s-%s" % (kind, day))
+    return RawDoc(title=title, account=account, date_text=day, href=GATEWAY_PATH, text=title,
+                  kind=kind, document_id="%s-%s" % (kind, day))
 
 
-def _tax(year: str) -> RawDoc:
+def _tax(year: str, account: str = "") -> RawDoc:
     title = "TreasuryDirect Form 1099 %s" % year
-    return RawDoc(title=title, date_text="%s-12-31" % year, href=GATEWAY_PATH, text=title,
-                  kind=FORM_1099, document_id="%s-1099" % year)
+    return RawDoc(title=title, account=account, date_text="%s-12-31" % year, href=GATEWAY_PATH,
+                  text=title, kind=FORM_1099, document_id="%s-1099" % year)
 
 
 def tax_years_of(page_read: _Page) -> List[str]:
@@ -800,16 +878,20 @@ def is_stale(doc_id: str, today: Optional[str] = None) -> bool:
 def collect_download_docs(page, today: Optional[str] = None) -> List[RawDoc]:
     """Every document of the account the tab is on: today's snapshots of
     Current Holdings, Security History and Payment History, and a 1099 for
-    each taxable year Manage My Taxes lists. ManageDirect is opened by
-    pressing its tab. A list that cannot be read whole raises ListStopped
-    holding what was read; SessionExpired, OtpRequired and NotLive
-    propagate."""
+    each taxable year Manage My Taxes lists, each bound to the account the
+    tab is on (account_of). ManageDirect is opened by pressing its tab, and
+    must be of the same account. A list that cannot be read whole raises
+    ListStopped holding what was read, and nothing at all when which
+    account the tab is on cannot be told. SessionExpired, OtpRequired and
+    NotLive propagate."""
     day = today or _date.today().isoformat()
-    _read(page)
-    docs = [_snapshot(k, day) for k in (HOLDINGS, SECURITY_HISTORY, PAYMENT_HISTORY)]
+    account = account_of(_read(page))
+    docs = [_snapshot(k, day, account) for k in (HOLDINGS, SECURITY_HISTORY, PAYMENT_HISTORY)]
     try:
         md = _open_tab(page, "ManageDirect®")
-        docs += [_tax(y) for y in tax_years_of(md)]
+        if account_of(md) != account:
+            raise ListStopped("ManageDirect is of another account than the page the list began on")
+        docs += [_tax(y, account) for y in tax_years_of(md)]
     except ListStopped as stop:
         raise ListStopped(str(stop), docs)
     for i, d in enumerate(docs):
@@ -901,12 +983,15 @@ def is_1099_page(html: str, year: str) -> bool:
 
 
 def download_document(page, doc_id: str, iso_date: str, out_path,
-                      trace: Optional[list] = None) -> bool:
-    """Save the document discovery recorded as `doc_id`, dated `iso_date`.
+                      trace: Optional[list] = None, account: str = "") -> bool:
+    """Save the document discovery recorded as `doc_id`, dated `iso_date`,
+    of the account recorded as `account` (account_digest, "" for none).
     The tab is moved to it by pressing the page's own links, and its HTML
-    rendered. SessionExpired, OtpRequired, NotLive and a press the core
-    refuses (pressing.Stop) propagate to the run; a page that no longer
-    reads as expected is False, for manual review."""
+    rendered. The tab must be on that account before anything is pressed,
+    and the page rendered must show it, else OtherAccount is raised and
+    nothing is saved. SessionExpired, OtpRequired, NotLive and a press the
+    core refuses (pressing.Stop) propagate to the run. A page that no
+    longer reads as expected is False, for manual review."""
     out_path = Path(out_path)
     m = DOC_ID_RE.fullmatch(doc_id or "")
     if not m or (m.group(1) and m.group(2) != iso_date) or (m.group(3) and iso_date != "%s-12-31" % m.group(3)):
@@ -917,22 +1002,25 @@ def download_document(page, doc_id: str, iso_date: str, out_path,
         if trace is not None:
             trace.append({"note": "a page recorded on another day"})
         return False
+    if not m.group(1):
+        # A tax year link is never pressed until its page has been
+        # surveyed (TAX_PAGES_SURVEYED), so a 1099 goes to review.
+        if trace is not None:
+            trace.append({"note": "the tax form page is not surveyed"})
+        return False
+    account = account or ""
     try:
+        if account_of(_read(page)) != account:
+            raise OtherAccount("the tab is on another account")
         if m.group(1) == HOLDINGS:
             _open_tab(page, "Current Holdings")
-            html = _content(page)
         elif m.group(1) == SECURITY_HISTORY:
             _open_history(page, "Security History")
-            html = _content(page)
-        elif m.group(1) == PAYMENT_HISTORY:
-            _open_history(page, "Payment History")
-            html = _content(page)
         else:
-            # A tax year link is never pressed until its page has been
-            # surveyed (TAX_PAGES_SURVEYED), so a 1099 goes to review.
-            if trace is not None:
-                trace.append({"note": "the tax form page is not surveyed"})
-            return False
+            _open_history(page, "Payment History")
+        html = _content(page)
+        if account_of(read_page(html)) != account:
+            raise OtherAccount("the page reached is of another account")
     except ListStopped as stop:
         log.info("the document could not be reached: %s", stop)
         if trace is not None:
