@@ -1004,3 +1004,40 @@ def test_a_plan_named_elsewhere_on_the_page_is_not_the_plan_it_shows():
     page.aside = "Your other plans ABC 457(B) PLAN (%s)" % P457
     assert not site._shows_plan(page, plans[P457])
     assert site._shows_plan(page, plans[P403])
+
+
+# -- from the 0.52.0 safety review -------------------------------------------------
+
+def test_a_select_account_page_with_one_plan_is_a_login_with_one_plan(monkeypatch):
+    """With no Choose a Plan page and one plan on the Select Account page,
+    the login goes on as one with one plan, keeping v0.51.0's keys, rather
+    than taking the several-plans path for a list of one."""
+    import sys
+    monkeypatch.setattr(sys.modules[__name__], "NAMES", {P457: NAMES[P457]})
+    page = Page(links=None, remembered=None)
+    assert site.read_plan_choices(page) == site.ONE_PLAN
+
+
+def test_two_plans_of_one_name_never_count_a_one_plan_record_for_either(monkeypatch, tmp_path):
+    """A login with one plan saves two quarters, then gains a second plan of
+    the very same name. A record saved before names the plan only by that
+    name, which fits both, so neither plan counts it done, and the second
+    plan's own statement is made rather than skipped."""
+    monkeypatch.setattr(receipt_pdf, "print_html_to_pdf", render_text)
+    app, one, _calls = one_plan_listed(monkeypatch, tmp_path, chooser_links(P457),
+                                       header="ABC 457(B) PLAN", have=(Q2, Q1))
+    app.cmd_discover(quiet=True)
+    app.process(app._select())
+    site._plan_in_use["plan"] = None
+    two = Page(links=[(NAMES[P457], LINK % P457), (NAMES[P457], LINK % PXR)], remembered=P457)
+    two.names[PXR] = NAMES[P457]
+    monkeypatch.setitem(STATEMENT_NAMES, PXR, [NAMES[P457]])
+    calls = []
+    monkeypatch.setattr(site, "make_statement", statements_by_plan(two, calls))
+    again = app_on(tmp_path, two)
+    again.cmd_discover(quiet=True)
+    again.process(again._select())
+    made = [(c[0], c[1]) for c in calls if c[2]]
+    assert (PXR, Q2) in made
+    assert not [r for r in again.progress.data.values()
+                if "saved before this login had several plans" in (r.get("notes") or "")]

@@ -511,7 +511,11 @@ class App:
         kind, date and title, was downloaded and its account, the name its
         statement gave the plan, is this plan's name from the list. The
         file stays that record's own, and this record names it in its
-        notes."""
+        notes. A plan that shares its name with another on the login counts
+        none, since a record that names the plan only by that name fits
+        both, and its statements are made again under its own key."""
+        if plan.get("shared_name"):
+            return 0
         label = _folded(plan["label"])
         before = self._saved_with_one_plan(label) if label else []
         counted = 0

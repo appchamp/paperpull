@@ -719,8 +719,8 @@ def _plan_numbers(entries: List[dict]) -> set:
 
 
 def read_plan_choices(page):
-    """The plans of a login with several, ONE_PLAN for a login the Choose a
-    Plan page shows one plan for, or None when neither list page shows.
+    """The plans of a login with several, ONE_PLAN for a login either list
+    page shows one plan for, or None when neither list page shows.
 
     The Choose a Plan page comes first. It lists every plan whatever plan
     the site is remembering, so a login it shows two or more plans for, by
@@ -731,7 +731,8 @@ def read_plan_choices(page):
     plan cannot be told either way, and that is PlanListUnclear. With no
     such address at all, the Statements address is opened afresh and its
     Select Account page, shown only when the site remembers no plan, is
-    read instead. Every link and option is read, nothing is pressed. The
+    read instead, and one plan there is a login with one plan too. Every
+    link and option is read, nothing is pressed. The
     tab ends on the Statements address. Neither page is read unless the
     tab is on a signed-in page of the statements site to begin with."""
     if not on_documents_page(page):
@@ -754,6 +755,10 @@ def read_plan_choices(page):
         plans, where = _plans_from(select), "Select Account"
         if not plans:
             raise PlanListUnavailable("the Select Account page listed no plan")
+        if len(plans) == 1:
+            # One plan there is a login with one plan, which goes on
+            # exactly as it always did, keys and file names alike.
+            return ONE_PLAN
     log.info("NetBenefits lists %d plan(s) on its %s page, %d left for the owner",
              len(plans), where, sum(1 for p in plans if not p["path"]))
     return plans
