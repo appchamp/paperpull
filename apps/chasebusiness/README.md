@@ -46,10 +46,12 @@ Statements are filed by date with the account's class, Business Checking,
 Business Card or Business Debit, read from the product word in the menu.
 An account's name and number are kept out of every file name, log and
 diagnostic file. A menu entry with no such word is passed over only when
-it reads as a cardholder, an initial and a surname such as "J. SMITH
-(...1234)", and the menu also lists a Business Card. Any other entry
-without one, a card whose name has no product word say, stops the list,
-and the Diagnose file counts such entries.
+it reads as a cardholder, an initial and a surname such as "J. SURNAME
+(...1234)", the menu also lists a Business Card, and choosing it shows no
+Statements. One of that shape that shows Statements, a second card or an
+account nicknamed like a person say, stops the list. So does any other
+entry without a product word, a card whose name has none say, and the
+Diagnose file counts such entries.
 
 Chase gives each account a new id every time you sign in, so a statement
 is known by its account's class and last four instead. Two accounts of one
@@ -76,10 +78,11 @@ known:
   current year in January say, is held until a year with statements in
   the same run shows what Chase answers on success. A run in which every
   year is empty stops rather than calling the list read.
-- Seen live: Chase gives every account a new id at each sign-in, and the
-  cardholder's entry shows a last four of its own. Records are keyed by
-  class and last four for the first, and the cardholder is known by its
-  name's shape for the second.
+- Seen live, Chase gives every account a new id at each sign-in, and the
+  cardholder's entry shows a last four of its own and only notices.
+  Records are keyed by class and last four for the first. For the second,
+  an entry of the cardholder's shape is chosen once each Discover and
+  passed over only when it shows no Statements.
 - Two statements of one account on one date stop the list on every run,
   since nothing on a row tells them apart. None has been seen.
 - The business card's statements: the card showed no statements in the

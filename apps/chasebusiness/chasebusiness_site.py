@@ -63,8 +63,8 @@ an answer, or an address with its query, is ever logged or said. A
 statement's account is written down only as its class, "Business Checking",
 "Business Card" or "Business Debit", read from the product noun in its
 label. An entry with no such noun is passed over only when it reads as a
-cardholder, "J. SURNAME (...1234)", beside a Business Card. Any other stops
-the list (accounts_of).
+cardholder, "J. SURNAME (...1234)", beside a Business Card, and choosing it
+shows no Statements. Any other stops the list (_menu_of, _pass_over).
 
 SIGNED OUT: the session-timeout dialog drawn open, a sign-in address, a
 password field, or a 401, 403 or redirect answering the list call, checked
@@ -839,18 +839,26 @@ def _guard_ids(ids) -> None:
 def accounts_of(state: dict) -> List[Account]:
     """The menu entries this app lists, in menu order, each with a
     well-formed element id, one last four, and a class every label it
-    carries agrees on.
+    carries agrees on (_menu_of)."""
+    return _menu_of(state)[0]
 
-    An entry with no class is a cardholder's, and passed over, only when
-    its label reads as a person, one initial with a period and then a
-    surname, "J. SURNAME (...1234)" (CARDHOLDER_RE), and the menu also
-    lists a Business Card. Live, the cardholder shows a last four of its
-    own, not the card's, and only notices. Any other entry without a class
-    stops the list, since it may be an account whose name carries no
-    product word (a card named "INK BUSINESS CASH", say) and skipping it
-    would call the list whole without it. One element id twice stops the
-    list too, and so do two accounts of one class with one last four,
-    which nothing would tell apart."""
+
+def _menu_of(state: dict) -> Tuple[List[Account], List[Account]]:
+    """The accounts this app lists and the cardholders' entries, each with
+    a well-formed element id and one last four.
+
+    An entry with no class may be a cardholder's only when its label reads
+    as a person, one initial with a period and then a surname,
+    "J. SURNAME (...1234)" (CARDHOLDER_RE), and the menu also lists a
+    Business Card. Live, the cardholder shows a last four of its own, not
+    the card's, and only notices. Such an entry is passed over only once
+    choosing it shows no Statements (_pass_over), since a second card or
+    an account nicknamed like a person reads the same way. Any other entry
+    without a class stops the list, since it may be an account whose name
+    carries no product word (a card named "INK BUSINESS CASH", say) and
+    skipping it would call the list whole without it. One element id twice
+    stops the list too, and so do two accounts of one class with one last
+    four, which nothing would tell apart."""
     seen, read = set(), []
     for e in state.get("menu") or []:
         ref = str(e.get("id") or "")
@@ -867,8 +875,9 @@ def accounts_of(state: dict) -> List[Account]:
             raise ListStopped("an account menu entry has no label")
         klass = account_class(labels[0])
         # An entry that is listed is pressed, so its every label must be one
-        # the press would take. A cardholder's is never pressed, and a name
-        # can hold letters the guard's shape does not.
+        # the press would take. A cardholder's is pressed too, to show it
+        # has no Statements, and is held to the same below once its shape
+        # is known, since an entry with neither stops the list anyway.
         if klass and not all(is_account_entry(t) for t in labels):
             raise ListStopped("an account menu entry reads in a way this cannot read")
         if any(account_class(t) != klass for t in labels):
@@ -878,17 +887,19 @@ def accounts_of(state: dict) -> List[Account]:
             raise ListStopped("an account menu entry shows no single last four")
         read.append((ref, m.group(1), klass, tails.pop(), labels))
     has_card = any(klass == "Business Card" for _r, _i, klass, _t, _l in read)
-    out = []
+    out, holders = [], []
     for ref, account_id, klass, tail, labels in read:
         if klass:
             out.append(Account(ref=ref, account_id=account_id, klass=klass, tail=tail))
         elif has_card and all(CARDHOLDER_RE.fullmatch(_tidy(t)) for t in labels):
-            log.info("a cardholder's menu entry is passed over")
+            if not all(is_account_entry(t) for t in labels):
+                raise ListStopped("a cardholder's menu entry reads in a way the press would not take")
+            holders.append(Account(ref=ref, account_id=account_id, klass="", tail=tail))
         else:
             raise ListStopped("an account menu entry names no class of business account this reads")
     if len({a.digest for a in out}) != len(out):
         raise ListStopped("two accounts of one class show one last four")
-    return out
+    return out, holders
 
 
 def _menu_reading(state: dict) -> list:
@@ -1489,19 +1500,40 @@ def _account_docs(page, run: Run, acct: Account, accounts: List[Account]) -> Lis
     return docs
 
 
+def _pass_over(page, run: Run, holder: Account, accounts: List[Account],
+               holders: List[Account]) -> None:
+    """Choose a cardholder's menu entry with the account press and pass it
+    over only when it shows no Statements accordion (_arrive gives None).
+    Live, the cardholder shows only notices. An entry of that shape that
+    shows Statements may be a second card or an account nicknamed like a
+    person, so it stops the list rather than be left out of a list called
+    whole."""
+    opened = _open(page)
+    if _menu_of(opened.state) != (accounts, holders):
+        raise ListStopped("the account menu changed during the listing")
+    if _arrive(page, run, opened, holder) is not None:
+        raise ListStopped("a menu entry that reads as a cardholder shows Statements")
+    log.info("a cardholder's menu entry shows no Statements and is passed over")
+
+
 def collect_download_docs(page, run: Optional[Run] = None) -> List[RawDoc]:
     """Every statement of every business account in the menu. Raises
     ListStopped holding what was read when any part cannot be read, and
     SessionExpired for a signed-out session."""
     run = run or Run()
     opened = _open(page)
-    accounts = accounts_of(opened.state)
+    accounts, holders = _menu_of(opened.state)
     if not accounts:
         raise ListStopped("the account menu names no business account this app reads")
     docs: List[RawDoc] = []
     for acct in accounts:
         try:
             docs.extend(_account_docs(page, run, acct, accounts))
+        except ListStopped as stop:
+            raise ListStopped(str(stop), docs + stop.docs)
+    for holder in holders:
+        try:
+            _pass_over(page, run, holder, accounts, holders)
         except ListStopped as stop:
             raise ListStopped(str(stop), docs + stop.docs)
     if run.unproven():

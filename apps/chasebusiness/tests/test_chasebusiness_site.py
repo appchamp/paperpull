@@ -740,11 +740,54 @@ def test_discovery_lists_every_business_account_and_year():
     assert all(d.document_id == "" for d in docs_)
     assert {d.title for d in docs_} == {"Business Checking Statement", "Business Card Statement"}
     assert all(d.href == "" for d in docs_)
-    # The current year is never chosen again, the cardholder's entry never
-    # pressed, and nothing but the six controls ever pressed.
-    assert "#" + HOLDER["id"] not in page.presses
+    # The current year is never chosen again, the cardholder's entry is
+    # chosen once to show it has no Statements, and nothing but the six
+    # controls is ever pressed.
+    assert page.presses.count("#" + HOLDER["id"]) == 1
+    assert page.presses[-1] == "#" + HOLDER["id"], "nothing is pressed past it"
     assert not any(p == "#container-0-filterstyledselect-0" for p in page.presses)
     assert {p.split("-")[0] for p in page.presses} <= {"#bottom", "#header", "#container"}
+
+
+def test_a_cardholder_the_center_opens_on_is_passed_over_unpressed():
+    """The owner's live case, with the document center opening on the
+    cardholder's entry, which shows only notices. Nothing is pressed to
+    choose it, and the list is whole without it."""
+    page = center(selected=3)
+    assert page.accounts[3]["id"] == HOLDER["id"]
+    docs_ = site.collect_download_docs(page, run())
+    assert len(docs_) == 4
+    assert "#" + HOLDER["id"] not in page.presses
+
+
+@pytest.mark.parametrize("label", ["Q. ZEPHYRWOOD (...1357)", "R. O'QUILLAN-VARGO TRUST (...1357)"])
+@pytest.mark.parametrize("years", [{2026: [item("DOCQXH0926", "2026-09-29")]}, {}],
+                         ids=["a statement", "none yet"])
+def test_an_entry_that_reads_as_a_cardholder_and_shows_statements_stops_the_list(label, years):
+    """A second card, or an account nicknamed like a person, reads as a
+    cardholder. Chosen with the account press, it shows Statements, so
+    the list stops rather than be called whole without it, and what was
+    listed before is kept."""
+    page = center()
+    page.accounts.append({"id": "bottom-7700123123", "label": label, "years": years})
+    with pytest.raises(site.ListStopped) as stop:
+        site.collect_download_docs(page, run())
+    assert "Statements" in str(stop.value)
+    assert page.presses.count("#bottom-7700123123") == 1
+    assert len(stop.value.docs) == 4
+
+
+def test_a_cardholder_entry_the_account_press_would_refuse_stops_the_list():
+    """A cardholder's entry is chosen to show it has no Statements, so one
+    whose label the account press refuses stops the list, with nothing
+    pressed."""
+    page = center()
+    page.accounts.append({"id": "bottom-7700123123", "label": "K. CLOSE (...1357)", "years": None})
+    assert site.CARDHOLDER_RE.fullmatch("K. CLOSE (...1357)")
+    assert not site.is_account_entry("K. CLOSE (...1357)")
+    with pytest.raises(site.ListStopped):
+        site.collect_download_docs(page, run())
+    assert page.presses == []
 
 
 def test_a_closed_accordion_is_opened_and_its_answer_taken():
