@@ -436,9 +436,9 @@ class Download(unittest.TestCase):
             self.assertFalse(out.exists())
 
 
-def make_app(tmp, *args):
+def make_app(tmp, *args, **settings):
     config = json.loads((HERE / "config.example.json").read_text())
-    config.update({"owner": "Tester Example", "output_dir": str(Path(tmp) / "out")})
+    config.update({"owner": "Tester Example", "output_dir": str(Path(tmp) / "out")}, **settings)
     cfg = Path(tmp) / "config.json"
     cfg.write_text(json.dumps(config))
     return docs.App(docs.build_parser().parse_args([*args, "--config", str(cfg)]))
@@ -676,6 +676,70 @@ class Orchestrator(unittest.TestCase):
         self.assertTrue(docs.pilot_failed({"a": {"state": State.FAILED.value}}, [D("a")]))
         self.assertTrue(docs.pilot_failed({}, [D("a")]))
         self.assertTrue(docs.pilot_failed(done, []))
+
+
+A_NOTICE = {"text": "Notices and letters CP14 Balance due", "docs": 1}
+
+
+class NoticesInScope(unittest.TestCase):
+    """A notice the app has not seen stops the listing, so the notices page
+    is read only when notices are in scope, and with them in scope Run All
+    then Resume saves every transcript."""
+
+    def run_app(self, app, command):
+        from types import SimpleNamespace
+        from unittest import mock
+        valid = SimpleNamespace(ok=True, reason="", size_bytes=3009, page_count=1)
+        pdf = b"%PDF-1.4 " + b"x" * 3000
+        app.check_session = lambda p: None
+        app._delay = lambda *a, **k: None
+        app.write_failure = lambda *a, **k: None
+        app._on_its_site = lambda: Page(notices=A_NOTICE, answers=[Resp(body=pdf)])
+        with mock.patch.object(docs.receipt_pdf, "validate_pdf", lambda *a, **k: valid):
+            with redirect_stdout(io.StringIO()) as said:
+                try:
+                    command()
+                    code = None
+                except SystemExit as e:
+                    code = e.code
+        return code, said.getvalue()
+
+    def test_with_notices_out_of_scope_a_notice_never_stops_run_all(self):
+        from paperpull_core import listing
+        app = make_app(tempfile.mkdtemp(), "--all", "--yes", document_types=["Tax Document"])
+        page = Page(notices=A_NOTICE)
+        app.page = lambda: page
+        code, said = self.run_app(app, lambda: app.cmd_run("all"))
+        self.assertIsNone(code, said)
+        self.assertNotIn(site.NOTICES_URL, page.gotos)
+        self.assertEqual(listing.last(app), listing.COMPLETE)
+        self.assertEqual(app.stats["tax_documents"], 4)
+
+    def test_with_notices_out_of_scope_login_reads_the_transcript_list_alone(self):
+        app = make_app(tempfile.mkdtemp(), "--login", document_types=["Tax Document"])
+        page = Page(notices=A_NOTICE)
+        app.page = lambda: page
+        with redirect_stdout(io.StringIO()) as said:
+            app.cmd_login()
+        self.assertIn("Success. Connected, and the transcript list can be read.", said.getvalue())
+        self.assertEqual(page.gotos, [site.DOCUMENTS_URL])
+
+    def test_with_notices_in_scope_a_notice_means_run_all_then_resume(self):
+        from paperpull_core import listing
+        app = make_app(tempfile.mkdtemp(), "--all", "--yes")
+        self.assertTrue(app._reads_notices())
+        page = Page(notices=A_NOTICE)
+        app.page = lambda: page
+        code, said = self.run_app(app, lambda: app.cmd_run("all"))
+        self.assertEqual(code, 1, said)
+        self.assertIn(site.NOTICES_URL, page.gotos)
+        self.assertEqual((len(app.discovery.data), app.stats["tax_documents"]), (4, 0))
+        self.assertNotIn("CP14", said)
+        self.assertEqual(listing.last(app), listing.STOPPED)
+        app.args = docs.build_parser().parse_args(["--resume", "--config", app.args.config])
+        code, said = self.run_app(app, app.cmd_resume)
+        self.assertEqual(app.stats["tax_documents"], 4, said)
+        self.assertEqual(code, 0, said)
 
 
 class Privacy(unittest.TestCase):

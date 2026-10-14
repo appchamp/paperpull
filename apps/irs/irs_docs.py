@@ -3,8 +3,10 @@
 The IRS keeps a taxpayer's transcripts (account, return, and wage and
 income, by tax year) and digital copies of select notices and letters in
 the Individual Online Account, sa.www4.irs.gov. This downloads the
-transcript PDFs, and reads the notices page, which stops the run when it
-lists a notice until one has been seen. The orchestrator below is the same
+transcript PDFs. When notices are in scope ("Other Document" in
+document_types) it also reads the notices page, which stops the listing
+when it lists a notice until one has been seen, and Resume then saves the
+transcripts listed before it. The orchestrator below is the same
 one every other statement app runs on. Everything about the site itself is
 in irs_site.py, built from a read-only survey; what that survey did not see
 is marked SURVEY NEEDED there, and anything that differs stops the run.
@@ -392,11 +394,21 @@ class App:
         print(f"Profile: {profile}")
         print("Sign in, keep the window OPEN, then run the pilot.")
 
+    def _reads_notices(self) -> bool:
+        """Whether a run opens the notices page at all, only when notices
+        are in scope ("Other Document" in document_types). A notice there
+        stops the list until one has been seen, so a person who keeps
+        notices out of scope is never stopped by one."""
+        return doc_types.wanted(doc_types.OTHER, self.config)
+
     def cmd_login(self):
         print("Checking the connection to your signed-in IRS Online Account browser...\n")
         page = self.page()
-        # What only a signed-in page shows, the transcript and notice lists.
-        listed = site.bill_list_opens(page)
+        # What only a signed-in page shows, the transcript list, and the
+        # notice list when notices are in scope.
+        notices = self._reads_notices()
+        lists = "transcript and notice lists" if notices else "transcript list"
+        listed = site.bill_list_opens(page, notices=notices)
         challenge = site.detect_security_challenge(page)
         if challenge:
             print(f"!! {challenge}\nResolve it in the browser, then re-run --login.")
@@ -404,10 +416,10 @@ class App:
             print("Connected, but the IRS Online Account shows its sign-in page.")
             print("Sign in in the open browser window (keep it OPEN), then re-run --login.")
         elif listed:
-            print("Success. Connected, and the transcript and notice lists can be read.")
+            print(f"Success. Connected, and the {lists} can be read.")
             print("Keep that browser window OPEN, then run the diagnostics or pilot.")
         else:
-            print("Connected, but the transcript and notice lists could not be read, so this")
+            print(f"Connected, but the {lists} could not be read, so this")
             print("cannot say whether you are signed in, or the pages differ from what this")
             print("app has seen (a notice it has not seen yet stops it). Answer anything the")
             print("IRS or ID.me asks in the browser window yourself, then run --diagnose and")
@@ -483,12 +495,13 @@ class App:
         listing.started(self)
         page = self.page()
         n_new = 0
-        # Both lists are opened and read in one go by the site layer, so a
-        # sign-out anywhere on the way reaches the boundary below and stops
-        # the run, rather than a prompt to sign in again.
+        # The transcript list, and the notice list when notices are in scope,
+        # are opened and read in one go by the site layer, so a sign-out
+        # anywhere on the way reaches the boundary below and stops the run,
+        # rather than a prompt to sign in again.
         self.check_session(page)
         try:
-            docs = site.collect_download_docs(page)
+            docs = site.collect_download_docs(page, notices=self._reads_notices())
         except site.SessionExpired:
             self.session_ended()
         except site.ListStopped as stop:

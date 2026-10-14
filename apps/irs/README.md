@@ -32,8 +32,13 @@ Transcript MFT 29.pdf`.
 Not yet read:
 
 - Notices and letters. A notices page that says there are none is read as
-  none. One that lists a notice stops the run until a notice has been seen
-  and the app taught to read it. If yours does, please send a Diagnose file.
+  none. One that lists a notice, or shows a date beside that sentence,
+  stops Run All once your transcripts are listed, before any is saved, until
+  a notice has been seen and the app taught to read it. So a notice means
+  Run All, then Resume, which saves the transcripts Run All listed. To keep
+  the notices page out of every run, take `"Other Document"` out of
+  `document_types` in `config.json`, and it is never opened. If yours lists
+  a notice, please send a Diagnose file.
 - W-2 or 1099 copies under information returns.
 - A fresher copy of a transcript already saved. The IRS updates an account
   transcript as the account changes, and the app takes each one once; use
@@ -95,9 +100,10 @@ no redirect followed, and kept only when it is a PDF. Before each one the
 list is read again, and the transcript is fetched only when exactly one
 item still matches. The page's own "EN" link, which opens the PDF in a new
 tab, is never pressed. The notices page is opened and read as described
-above. A list the app cannot read whole stops rather than being called
-complete. If the account answers as signed out, or the tab is on ID.me,
-the run stops and keeps what it saved. Sign in again and run Resume.
+above, and only when `"Other Document"` is in `document_types`. A list
+the app cannot read whole stops rather than being called complete. If the
+account answers as signed out, or the tab is on ID.me, the run stops and
+keeps what it saved. Sign in again and run Resume.
 
 ## Tests
 

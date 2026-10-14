@@ -781,11 +781,12 @@ def goto_documents(page) -> bool:
         return False
 
 
-def bill_list_opens(page) -> bool:
-    """Whether both lists opened and could be read whole, which only a
-    signed-in page allows."""
+def bill_list_opens(page, notices: bool = True) -> bool:
+    """Whether the lists opened and could be read whole, which only a
+    signed-in page allows. The notices page is one of them only when
+    `notices` is true, as for collect_download_docs."""
     try:
-        collect_download_docs(page)
+        collect_download_docs(page, notices=notices)
         return True
     except (SessionExpired, ListStopped) as e:
         log.info("the IRS lists could not be read: %s", e)
@@ -807,12 +808,20 @@ def expand_all(page) -> None:
     return None
 
 
-def collect_download_docs(page) -> List[RawDoc]:
+def collect_download_docs(page, notices: bool = True) -> List[RawDoc]:
     """Every transcript, then the notices. Nothing is pressed. A list that
     will not open or cannot be read raises ListStopped holding everything
     read before it, and a signed-out account raises SessionExpired (or
-    OtpRequired)."""
+    OtpRequired).
+
+    The notices page is opened only when `notices` is true, which the app
+    asks only when notices are in scope ("Other Document" in its
+    document_types). Any notice there stops the list until one has been
+    seen, so a person who keeps notices out of scope is never stopped by
+    one."""
     docs = _transcripts(page)
+    if not notices:
+        return docs
     try:
         docs += _notices(page)
     except ListStopped as stop:
