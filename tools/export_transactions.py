@@ -37,6 +37,7 @@ the tool stops and says so. Without openpyxl it writes a .csv and says so.
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import json
 import os
@@ -94,7 +95,9 @@ PERIOD_RE = re.compile(
 CLOSING_RE = re.compile(r"(?:" + "|".join(_fuzzy(w) for w in ("closing date", "statement date",
                                                               "statement closing date"))
                         + r"|as of)\s*:?\s*(" + _DATE_ANY + r")", re.I)
-_ANY_DATE_RE = re.compile(_DATE_ANY, re.I)
+# A further date in the run that follows a closing date's label, after only
+# a space or a range word.
+DATE_RUN_RE = re.compile(r"\s*(?:(?:to|through|thru|-|–|—)\s*)?(" + _DATE_ANY + r")", re.I)
 # A card statement that prints every amount unsigned tells a payment or a
 # refund from a purchase only by the heading it sits under (Navy Federal's
 # Visa, #32). The heading is a line of its own, and its section runs until
@@ -293,11 +296,18 @@ def find_period(lines: List[str]) -> Tuple[Optional[str], Optional[str]]:
     for line in joined:
         m = CLOSING_RE.search(line)
         if m:
-            # The latest date on the line, not the first after the label.
-            # "Opening/Closing Date 07/27/26 - 08/26/26" put the OPENING
-            # date here, and every transaction in the closing month was
-            # then dated a year early (#29).
-            dates = [d for d in (parse_date(x) for x in _ANY_DATE_RE.findall(line)) if d]
+            # The latest date of the run that starts right after the label,
+            # not the first. "Opening/Closing Date 07/27/26 - 08/26/26" put
+            # the OPENING date here, and every transaction in the closing
+            # month was then dated a year early (#29). Nor the latest date
+            # anywhere on the line, which took the due date printed on the
+            # line after a closing date (#32).
+            run, at = [m.group(1)], m.end()
+            more = DATE_RUN_RE.match(line, at)
+            while more:
+                run.append(more.group(1))
+                more = DATE_RUN_RE.match(line, more.end())
+            dates = [d for d in (parse_date(x) for x in run) if d]
             if dates:
                 return None, max(dates)
     return None, None
@@ -653,16 +663,17 @@ def _bracketed_sections(txns: List[dict], marks: List[tuple]) -> Optional[List[d
 # statement's summary box did, and its closing date was lost with it (#32).
 SCATTER_MIN = 20
 # A character continues a rebuilt line when it starts no further right of
-# the line's last character than this many of that character's widths, a
-# word space and some, and sits within this many of its own heights of the
+# the line's last character than this many of that last character's
+# widths, a word space and some.
+JOIN_WIDTHS = 3.0
+# Nor when it overlaps that last character by more than this many of the
+# last character's widths, since two letters of one line hardly overlap,
+# and a letter of the line below set under it does.
+JOIN_OVERLAP = 0.25
+# Nor when it sits further than this many of its own heights from the
 # line's average height. Of the lines it could continue, it takes the one
 # nearest its height. Bands of height alone cut the closing date's label in
 # two when its characters drifted more than 4pt apart (#32).
-JOIN_WIDTHS = 3.0
-# Nor when it overlaps that last character by more than this many of its
-# widths, since two letters of one line hardly overlap, and a letter of
-# the line below set under it does.
-JOIN_OVERLAP = 0.25
 JOIN_HEIGHTS = 0.75
 # Pieces of one row, such as a label and a value printed well to its
 # right, are read as one line when their average heights are within this
@@ -686,41 +697,54 @@ def _mean_top(piece: List[dict]) -> float:
 
 
 def _rows(pieces: List[List[dict]]) -> List[List[dict]]:
-    """Pieces whose average heights are close, read as one row."""
-    rows: List[List[List[dict]]] = []
+    """Pieces whose average heights are close, read as one row. A piece
+    joins the highest row begun within reach above it."""
+    rows: List[List[dict]] = []
+    firsts: List[float] = []  # the average height of each row's first piece, rising
     for piece in sorted(pieces, key=_mean_top):
-        for row in rows:
-            if abs(_mean_top(piece) - _mean_top(row[0])) <= ROW_HEIGHTS * _height(piece[0]):
-                row.append(piece)
-                break
+        top = _mean_top(piece)
+        n = bisect.bisect_left(firsts, top - ROW_HEIGHTS * _height(piece[0]))
+        if n < len(rows):
+            rows[n].extend(piece)
         else:
-            rows.append([piece])
-    return [[c for piece in row for c in piece] for row in rows]
+            rows.append(list(piece))
+            firsts.append(top)
+    return rows
 
 
 def _band_lines(chars: List[dict]) -> List[Tuple[float, str]]:
     """Characters put back into lines, each read left to right, a space
     where the gap is wider than a quarter of a character. Taken left to
     right, each character continues the line it touches that sits nearest
-    its height, so a line holds together however far its characters drift,
-    and a column beside it stays apart. Pieces of one row are then read as
-    one line. Returns (top, text) for each line."""
+    its height, so a line holds together while each of its characters sits
+    within three quarters of a character's height of the line's average.
+    A column whose lines fall between the rows of the one beside it stays
+    apart. Pieces of one row are then read as one line, a column at the
+    same height included, as pdfplumber reads it. Returns (top, text) for
+    each line."""
     pieces: List[List[dict]] = []
     tops: List[float] = []  # each piece's tops summed, for its average
+    open_: List[int] = []  # the pieces a later character may still reach
     for c in sorted(chars, key=lambda c: (c["x0"], c["top"])):
-        best, best_d = None, None
-        for n, piece in enumerate(pieces):
-            last = piece[-1]
+        best, best_d, still = None, None, []
+        for n in open_:
+            last = pieces[n][-1]
             width = max(last["x1"] - last["x0"], 1.0)
             gap = c["x0"] - last["x1"]
-            if gap < -JOIN_OVERLAP * width or gap > JOIN_WIDTHS * width:
+            if gap > JOIN_WIDTHS * width:
+                # Characters come left to right, so none later reaches it.
                 continue
-            d = abs(c["top"] - tops[n] / len(piece))
+            still.append(n)
+            if gap < -JOIN_OVERLAP * width:
+                continue
+            d = abs(c["top"] - tops[n] / len(pieces[n]))
             if d <= JOIN_HEIGHTS * _height(c) and (best_d is None or d < best_d):
                 best, best_d = n, d
+        open_ = still
         if best is None:
             pieces.append([c])
             tops.append(c["top"])
+            open_.append(len(pieces) - 1)
         else:
             pieces[best].append(c)
             tops[best] += c["top"]
