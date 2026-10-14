@@ -20,6 +20,9 @@ config.*.json
 # Runtime state / output
 discovery.json
 progress.json
+# NetBenefits keeps the plans of a sign-in with several here, with the
+# site's own plan and employer numbers in their addresses.
+plans.json
 new-this-run.txt
 run-summary.txt
 # ...and any hand-made copy of them. A file like "discovery.json.pre-fix" or
@@ -28,6 +31,7 @@ run-summary.txt
 # building a new app.
 discovery.json.*
 progress.json.*
+plans.json.*
 # Same reasoning for config: a "config.json.save" or "config.json.bak" holds
 # the owner name and local output paths just as the original does. The
 # example stays allowed by the rule above.

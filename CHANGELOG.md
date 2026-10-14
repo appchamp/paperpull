@@ -24,13 +24,18 @@ All notable changes to PaperPull are recorded here. Versioning follows
   to another Fidelity site, as one plan's did to the Fidelity retail
   sign-in, is left for you to open yourself and never followed, and a
   sign-out partway stops the run and keeps what it saved. Plan and employer
-  numbers are kept out of file names and diagnostics. The plans of one
-  employer share one combined statement, which is saved once under the
-  employer's name, or the plans' names, and counted for each plan it
-  covers, and a statement that does not name the plan it was made for is
-  set aside for review. A sign-in with one plan works exactly as before,
-  with the same file names and records. The several-plans path was built
-  from a read-only survey of one sign-in and It ran live on one sign-in with two employers and four plans, 78 statements saved.
+  numbers are kept out of file names and diagnostics, and the plan list a
+  run keeps, `plans.json`, is never committed. The plans of one employer
+  share one combined statement, which is saved once under the employer's
+  name, or the plans' names, and counted for each plan whose own request
+  gives that very statement, and a statement that does not name the plan
+  it was made for is set aside for review. A sign-in with one plan works
+  exactly as before, with the same file names and records, and one that
+  gains a second plan keeps what it saved rather than saving it again. A
+  Choose a Plan page that shows one plan beside other links naming a plan
+  stops the run and says so. The several-plans path was built from a
+  read-only survey of one sign-in, and it ran live on one sign-in with two
+  employers and four plans, 78 statements saved.
 
 ## [0.51.0] - 2026-10-14
 
