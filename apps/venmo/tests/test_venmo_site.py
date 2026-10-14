@@ -321,6 +321,12 @@ class Months(unittest.TestCase):
         self.assertEqual(len(site.months_to_walk(TODAY)), site.MAX_MONTHS)
         self.assertEqual(site.months_to_walk(TODAY, limit=0), [])
 
+    def test_the_month_just_ended_waits_a_day(self):
+        """On the 1st the month that ended last night is not walked yet,
+        since the computer's date can be a day ahead of Venmo's own."""
+        self.assertEqual(site.months_to_walk(date(2026, 10, 1), limit=2), ["2026-08", "2026-07"])
+        self.assertEqual(site.months_to_walk(date(2026, 10, 2), limit=2), ["2026-09", "2026-08"])
+
     def test_the_walk_stops_at_the_start_date(self):
         self.assertEqual(site.months_to_walk(TODAY, floor="2026-07-31"), ["2026-09", "2026-08", "2026-07"])
         self.assertEqual(site.months_to_walk(TODAY, floor="2026-08-01"), ["2026-09", "2026-08"])
@@ -563,6 +569,13 @@ class Download(WithPrinter):
         ok = site.download_bill(page, None, date_, out, trace=[], href=href, document_id=month, today=today,
                                 profile=site.profile_tag(FAKE_PROFILE_ID) if profile is None else profile)
         return ok, out
+
+    def test_the_month_just_ended_is_not_printed_on_the_first(self):
+        ok, out = self.save(Page(), today=date(2026, 10, 1))
+        self.assertFalse(ok)
+        self.assertFalse(out.exists())
+        ok, out = self.save(Page(), today=date(2026, 10, 2))
+        self.assertTrue(ok)
 
     def test_a_paged_month_is_drawn_whole_before_it_is_printed(self):
         page = Page(rows=10, total=23)

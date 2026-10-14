@@ -122,7 +122,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass
-from datetime import date as _date
+from datetime import date as _date, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -181,6 +181,10 @@ ACCOUNT_TYPE = "personal"
 MAX_MONTHS = 24
 # The first month a statement address can name, since its year is 20xx.
 FIRST_MONTH = "2000-01"
+# A month counts as finished only this many whole days after its last
+# day. The computer's date can be a day ahead of Venmo's own, and a
+# payment of the month's last evening can post after midnight here.
+SETTLE_DAYS = 1
 # Venmo's sign-in, matched in the lowered address.
 LOGIN_URL_MARKERS = ["id.venmo.com", "/signin", "/sign-in", "/login", "/account/logout"]
 # The completed transaction list and its rows, as drawn on 2026-10-13: one
@@ -369,7 +373,9 @@ def months_to_walk(today: _date, floor: str = "", limit: Optional[int] = None) -
     it comes first. No walk goes back past FIRST_MONTH, the first month a
     statement address can name (statement_query). The month under way is
     never one, since its statement is not final, and a saved statement is
-    never fetched again."""
+    never fetched again. Neither is the month before it until SETTLE_DAYS
+    have passed since that month's last day."""
+    today = today - timedelta(days=SETTLE_DAYS)
     if limit is None:
         limit = -1 if floor else MAX_MONTHS
     y, m = today.year, today.month
@@ -1171,7 +1177,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     month = (document_id or "").strip()
     today = today or _date.today()
     if href != DOCUMENTS_PATH or not month_end(month) or month_end(month) != (iso_date or "") \
-            or month_end(month) >= today.isoformat() or not profile:
+            or month_end(month) >= (today - timedelta(days=SETTLE_DAYS)).isoformat() or not profile:
         log.info("no finished statement month was recorded for this document")
         if trace is not None:
             trace.append({"note": "no recorded statement"})
