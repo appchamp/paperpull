@@ -415,6 +415,52 @@ def make_app(tmp, *args):
     return docs.App(docs.build_parser().parse_args([*args, "--config", str(cfg)]))
 
 
+class OwnBrowser(unittest.TestCase):
+    def test_a_config_with_no_cdp_url_opens_its_browser_through_the_core(self):
+        """A run whose settings name no cdp_url opens a browser of its own
+        through the core, which says so (#90), never straight through
+        Playwright."""
+        import types
+        from unittest import mock
+        tmp = tempfile.mkdtemp()
+        app = make_app(tmp, "--all")
+        app.config.update({"cdp_url": "", "profile_dir": str(Path(tmp) / "profile")})
+        launched = []
+
+        class Context:
+            def set_default_timeout(self, ms):
+                pass
+
+        class Chromium:
+            def launch_persistent_context(self, user_data_dir, **kw):
+                launched.append(("playwright", user_data_dir))
+                return Context()
+
+        class Playwright:
+            chromium = Chromium()
+
+            def stop(self):
+                pass
+
+        class Starter:
+            def start(self):
+                return Playwright()
+        fake = types.ModuleType("playwright.sync_api")
+        fake.sync_playwright = Starter
+        core_launch = docs.browser_launcher.launch_own_browser
+
+        def own(chromium, user_data_dir, **kw):
+            launched.append(("core", user_data_dir))
+            return core_launch(chromium, user_data_dir, **kw)
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": fake}), \
+                mock.patch.object(docs.browser_launcher, "launch_own_browser", own), \
+                redirect_stdout(io.StringIO()) as said:
+            self.assertIsInstance(app.browser(), Context)
+        profile = str(Path(tmp) / "profile")
+        self.assertEqual(launched, [("core", profile), ("playwright", profile)])
+        self.assertIn("no cdp_url", said.getvalue())
+
+
 class Orchestrator(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
