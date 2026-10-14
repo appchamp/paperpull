@@ -167,7 +167,10 @@ PROVIDER_SKIP_FIELDS = {"Robinhood": ("undated_key", "source_url", "category", "
                                       "title", "account", "pdf_sha256", "text_sha256"),
                         "American Family": ("pdf_sha256", "date", "account"),
                         "AT&T": ("category", "date", "account", "pdf_size", "pdf_pages"),
-                        "Target": ("invoices",)}
+                        "Target": ("invoices",),
+                        # Rename tells two accounts' files apart by it, and the
+                        # record's account_ref never travels (PROVIDER_PRIVATE_FIELDS).
+                        "Chase Business": ("account_digest",)}
 
 
 def _optum_form(rec: dict) -> bool:
@@ -206,6 +209,19 @@ PROVIDER_UNFINISHED_FIELDS = {"Apple": ("refused_runs", "not_asked_runs")}
 # core/tests/test_a_minimal_history_moves_a_cut_key.py.
 KEY_FIELDS = ("category", "doc_type", "date", "title", "account", "listed_account",
               "occurrence", "document_id")
+
+# Fields one provider keeps only for this computer's runs, left out of every
+# export, full or --minimal. Chase Business mints its account ids and its
+# statement ids anew each sign-in, so its records keep account_ref and
+# documentId empty, and both fields are left out all the same so no record
+# an earlier build wrote can carry one. The key and the record's own
+# account_digest hold a short unsalted digest of the account's class and
+# last four, never the digits, so a moved history still skips the statement
+# and Rename still tells two accounts' files apart
+# (chasebusiness_docs.Document.key and told_apart_by). The digest is no
+# secret, since a last four has only ten thousand values. Checked by
+# core/tests/test_migrate_tool.py.
+PROVIDER_PRIVATE_FIELDS = {"Chase Business": ("account_ref", "document_id")}
 
 # Chase has kept an account's last four in its key since 0.17.1 whatever its
 # length, where the other apps keep it only past forty characters, so its
@@ -561,9 +577,13 @@ def build(root: Path, minimal: bool = False):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for place in places:
             recs = place["records"]
+            reader = _reader(place, places)
             if minimal:
-                reader = _reader(place, places)
                 recs = {k: dict(_skip_fields(v, reader), **_key_fields(k, v, reader))
+                        for k, v in recs.items()}
+            private = PROVIDER_PRIVATE_FIELDS.get(reader, ())
+            if private:
+                recs = {k: {f: x for f, x in v.items() if f not in private}
                         for k, v in recs.items()}
             name, n = place["folder"], 2
             while name.lower() in used:
