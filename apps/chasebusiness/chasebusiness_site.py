@@ -84,8 +84,9 @@ KNOWN CEILINGS (ponytail: left until a live run shows otherwise)
     stop the list.
   * Two statements of one account on one date stop the list, on every run,
     since nothing on a row tells them apart.
-  * Rows do not name their account, so a saved PDF is kept only when its
-    text prints the account's last four (names_tail).
+  * Rows do not name their account, so a saved PDF is kept only when the
+    first account number its text prints ends in the account's last four
+    (names_tail).
   * Tax documents, notices, ATM receipts, check images and branch documents
     are never opened. The business card's statements were not in the center
     when it was surveyed, and the card is listed like any account.
@@ -1880,26 +1881,49 @@ def download_statement(page, run: Run, dl_dir, out_path, *, account_digest: str,
 
 
 def names_tail(text: str, tail: str) -> bool:
-    """Whether a statement's text prints these four digits as the end of an
-    account number, in full or masked: at least four digits or masking
-    marks before them, in groups a space or a dash may part, as in
-    "000000123451234" or "XXXX XXXX XXXX 1234". A checking statement the
-    owner saved prints its account number whole on a line of its own,
-    apart from its "Account Number:" label, so no label is asked for. A
-    phone number, a check number or a date ending in the same digits is not
-    such a number. Four digits are needed.
+    """Whether the first account number a statement's text prints, the one
+    in its header, ends in these four digits. An account number is printed
+    in full or masked, eight or more digits or masking marks in groups of
+    four or more that a space or a dash may part, ending in four digits,
+    as in "000000123451234" or "XXXX XXXX XXXX 1234" (_account_number). A
+    checking statement the owner saved prints its account number whole on
+    a line of its own, apart from its "Account Number:" label, so no label
+    is asked for. Only the first such number is judged, so another
+    account's statement that names this account in a transfer line, or a
+    long transaction number ending in the same four, is not kept. A phone
+    number, a check number or a date is no such number. Four digits are
+    needed.
 
     Each run of digits and marks is found once, whole, and its groups are
-    judged here, so a long run that ends in other digits is read in one
-    pass rather than tried every way a pattern could split it."""
+    judged here, so a long run is read in one pass rather than tried every
+    way a pattern could split it."""
     if not re.fullmatch(r"\d{4}", tail or ""):
         return False
     for run in _NUMBER_RUN_RE.finditer(text or ""):
-        groups = re.split(r"[ -]", run.group(0))
-        if all(len(g) >= 4 for g in groups) and groups[-1].endswith(tail) \
-                and len("".join(groups)) >= 8:
-            return True
+        last = _account_number(run.group(0))
+        if last:
+            return last.endswith(tail)
     return False
+
+
+def _account_number(run: str) -> str:
+    """The last group of the account number a run of digits and marks holds,
+    or "" for none. The number is the run's longest stretch of groups four
+    or more long, the first of the longest on a tie, so a short group
+    beside it on the same line, a page number or a date, is not part of
+    it. The stretch must hold eight or more digits or marks and end in four
+    digits. One pass over the groups."""
+    best, best_len, cur, cur_len = "", 0, "", 0
+    for g in re.split(r"[ -]", run) + [""]:
+        if len(g) >= 4:
+            cur, cur_len = g, cur_len + len(g)
+            continue
+        if cur_len > best_len:
+            best, best_len = cur, cur_len
+        cur, cur_len = "", 0
+    if best_len < 8 or not best[-4:].isdigit():
+        return ""
+    return best
 
 
 # A run of digits and masking marks, in groups a single space or dash

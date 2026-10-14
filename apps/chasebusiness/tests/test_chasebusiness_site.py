@@ -1622,6 +1622,50 @@ def test_a_long_run_that_names_no_tail_is_read_in_one_pass():
     assert _time.process_time() - started < 1.0
 
 
+@pytest.mark.parametrize("text", [
+    "Account Number: 000000998877\nBook Transfer Credit A/C 000000987654321 Ref 77",
+    "Account Number: 000000998877\nOnline Transfer From Chk ...1111 Transaction#: 9876544321",
+    "Card ending XXXX XXXX XXXX 8877 01/31/26\nPayment Ref 000000554321",
+])
+def test_only_the_header_account_number_is_judged(text):
+    """Another account's statement can print this account's number in a
+    transfer line, and a long transaction number can end in the same
+    four. Only the first account number, the header's, is judged."""
+    assert not site.names_tail(text, "4321")
+
+
+@pytest.mark.parametrize("text", [
+    "XXXX XXXX XXXX 4321 01/31/26",
+    "Account Number: 000000123454321 1",
+    "Primary Account 000 000123454321",
+    "********\nAccount Number: 000000123454321\nTransaction#: 9876500001",
+])
+def test_a_short_group_beside_the_number_does_not_hide_it(text):
+    """A date or a page number on the number's own line is a short group
+    beside it, not part of it, and a row of marks with no digits is no
+    number, so the header's number is still read."""
+    assert site.names_tail(text, "4321")
+
+
+def test_another_accounts_statement_naming_this_account_is_not_kept(tmp_path):
+    from paperpull_core import testkit
+    page = center()
+    page.download_body = testkit.text_pdf(["Business Complete Checking", "Account Number: 000000998877",
+                                           "Book Transfer Debit A/C 000000554321 Ref 1"])
+    trace: list = []
+    got, out = take(page, tmp_path, trace=trace)
+    assert got is False and not out.exists()
+    assert {"note": "the pdf does not print the account's last four"} in trace
+
+
+def test_the_header_number_is_read_in_one_pass_whatever_comes_after_it():
+    import time as _time
+    started = _time.process_time()
+    assert not site.names_tail("1 " * 200000 + "12-" * 100000 + "X" * 200000 + "4320", "4321")
+    assert site.names_tail(("1234 " * 100000) + "4321 01" + " 9" * 100000, "4321")
+    assert _time.process_time() - started < 1.0
+
+
 def _options_state(labels):
     return {"options": [{"id": "container-%d-filterstyledselect-0" % i, "labels": [t], "shown": True}
                         for i, t in enumerate(labels)]}
