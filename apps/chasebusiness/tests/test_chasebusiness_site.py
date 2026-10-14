@@ -1666,6 +1666,90 @@ def test_the_header_number_is_read_in_one_pass_whatever_comes_after_it():
     assert _time.process_time() - started < 1.0
 
 
+# The top of a business checking statement, in the order its header
+# prints. Every name, address and number is invented. The bank's return
+# address ends in a ZIP+4, and the mailing line under it starts with an
+# eight digit sort number and holds a run of zeros.
+_RETURN_ADDRESS = ["January 01, 2026 through January 31, 2026", "P O Box 900417",
+                   "Columbus, OH 43299-0417"]
+_MAIL_SORT = "00012345 DRE 802 219 30425 NNNNNNNNNNN 1 000000000 64 0000"
+_ADDRESSEE = ["QUILLFEATHER WIDGETS LLC", "77 INVENTED WAY", "SPRINGFIELD ZZ 99999-0001"]
+_SERVICE = ["CUSTOMER SERVICE INFORMATION", "Web site: Chase.com", "Service Center: 1-800-555-0199"]
+_TRANSFER = ["Online Transfer To Chk ...1111 Transaction#: 9876500002"]
+
+
+def _header(account_lines, before=(), after=()):
+    return "\n".join(list(before) + list(account_lines) + list(after))
+
+
+@pytest.mark.parametrize("account_lines", [
+    ["Account Number: 000000123454321"],
+    ["Account Number 0000 0001 2345 4321"],
+    ["Account  Number :", "000000123454321"],
+])
+def test_a_zip_plus_four_before_the_labeled_number_does_not_hide_it(account_lines):
+    """The bank's return address can print before the account number, and
+    its ZIP+4 is not an account number. The number after the label is the
+    one judged."""
+    text = _header(account_lines, before=_RETURN_ADDRESS, after=_SERVICE + [_MAIL_SORT] + _ADDRESSEE)
+    assert site.names_tail(text, "4321")
+
+
+def test_a_mail_sort_line_before_the_labeled_number_does_not_hide_it():
+    text = _header(["Account Number:", "000000123454321"], before=[_MAIL_SORT] + _ADDRESSEE,
+                   after=_SERVICE + _TRANSFER)
+    assert site.names_tail(text, "4321")
+
+
+@pytest.mark.parametrize("before", [
+    ["P O Box 900417", "Columbus, OH 43299-4321"],
+    ["00004321 DRE 802 219 30425 NNNNNNNNNNN 1 000000000 64 0000"],
+    ["Ref 000000554321"],
+])
+def test_a_labeled_number_of_another_account_is_refused(before):
+    """Four digits that happen to match, in a ZIP+4, a sort number or any
+    number printed before the label, do not stand for the labeled number
+    of another account."""
+    text = _header(["Account Number: 000000998877"], before=before,
+                   after=_SERVICE + ["Book Transfer Credit A/C 000000554321 Ref 77"])
+    assert not site.names_tail(text, "4321")
+
+
+@pytest.mark.parametrize("before", [
+    _RETURN_ADDRESS,
+    [_MAIL_SORT],
+    _RETURN_ADDRESS + [_MAIL_SORT] + _ADDRESSEE,
+])
+def test_with_no_label_the_first_account_number_is_still_found(before):
+    """With no label the first account number is judged, and a ZIP+4, a
+    sort number or a run of zeros printed before it is no account number."""
+    text = _header(["Business Complete Checking 000000123454321"], before=before, after=_TRANSFER)
+    assert site.names_tail(text, "4321")
+    text = _header(["Business Complete Checking 000000998877"], before=before,
+                   after=["Book Transfer Credit A/C 000000554321 Ref 77"])
+    assert not site.names_tail(text, "4321")
+
+
+def test_a_statement_whose_header_prints_a_zip_plus_four_first_is_kept(tmp_path):
+    from paperpull_core import testkit
+    page = center()
+    page.download_body = testkit.text_pdf(_RETURN_ADDRESS + ["Account Number: 000000123454321"] + _SERVICE
+                                          + [_MAIL_SORT] + _ADDRESSEE)
+    got, out = take(page, tmp_path)
+    assert got is True and out.exists()
+
+
+def test_another_accounts_statement_is_not_kept_for_four_digits_before_its_label(tmp_path):
+    from paperpull_core import testkit
+    page = center()
+    page.download_body = testkit.text_pdf(["P O Box 900417", "Columbus, OH 43299-4321",
+                                           "Account Number: 000000998877"] + _SERVICE)
+    trace: list = []
+    got, out = take(page, tmp_path, trace=trace)
+    assert got is False and not out.exists()
+    assert {"note": "the pdf does not print the account's last four"} in trace
+
+
 def _options_state(labels):
     return {"options": [{"id": "container-%d-filterstyledselect-0" % i, "labels": [t], "shown": True}
                         for i, t in enumerate(labels)]}

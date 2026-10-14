@@ -62,9 +62,12 @@ a short digest of them, and that digest is no secret.
 A list the app cannot read whole stops rather than being called complete.
 The account menu is read twice and both readings must agree, and the
 year picker's oldest year must say it ends the menu. A statement is saved
-only when exactly one row matches it, and kept only when the first
-account number its PDF prints, the one in its header, ends in the
-account's last four, since the rows do not name their account. A
+only when exactly one row matches it, and kept only when the account
+number its PDF prints after the "Account Number" label in its header
+ends in the account's last four, since the rows do not name their
+account. A PDF with no such label is judged by the first account number
+it prints, passing over a ZIP code, a mail sort number, a phone number
+or a date before it. A
 statement whose save menu or Save as PDF Chase has turned off is left
 for review, and the run goes on to the next one.
 

@@ -85,8 +85,11 @@ KNOWN CEILINGS (ponytail: left until a live run shows otherwise)
   * Two statements of one account on one date stop the list, on every run,
     since nothing on a row tells them apart.
   * Rows do not name their account, so a saved PDF is kept only when the
-    first account number its text prints ends in the account's last four
-    (names_tail).
+    account number after its "Account Number" label, or with no label the
+    first account number its text prints, ends in the account's last four
+    (names_tail). No real statement has been read by this rule yet, so a
+    live run that leaves every statement for review should look here
+    first.
   * Tax documents, notices, ATM receipts, check images and branch documents
     are never opened. The business card's statements were not in the center
     when it was surveyed, and the card is listed like any account.
@@ -1881,25 +1884,31 @@ def download_statement(page, run: Run, dl_dir, out_path, *, account_digest: str,
 
 
 def names_tail(text: str, tail: str) -> bool:
-    """Whether the first account number a statement's text prints, the one
-    in its header, ends in these four digits. An account number is printed
-    in full or masked, eight or more digits or masking marks in groups of
-    four or more that a space or a dash may part, ending in four digits,
-    as in "000000123451234" or "XXXX XXXX XXXX 1234" (_account_number). A
-    checking statement the owner saved prints its account number whole on
-    a line of its own, apart from its "Account Number:" label, so no label
-    is asked for. Only the first such number is judged, so another
-    account's statement that names this account in a transfer line, or a
-    long transaction number ending in the same four, is not kept. A phone
-    number, a check number or a date is no such number. Four digits are
-    needed.
+    """Whether the statement's own account number, the one in its header,
+    ends in these four digits. An account number is printed in full or
+    masked, eight or more digits or masking marks in groups of four or
+    more that a space or a dash may part, ending in four digits, as in
+    "000000123451234" or "XXXX XXXX XXXX 1234" (_account_number).
+
+    When the text has an "Account Number" label, the first account number
+    printed after it is judged, on the label's line or a later one, since
+    the owner's saved statement printed its number on a line of its own
+    apart from the label. Only when there is no label is the first account
+    number in the whole text judged. Either way only one number is judged,
+    so another account's statement that names this account in a transfer
+    line, or a long transaction number ending in the same four, is not
+    kept. A ZIP+4, a mail sort number, a run of zeros, a phone number, a
+    check number or a date printed before the number is no account number
+    and is passed over (_account_number). Four digits are needed.
 
     Each run of digits and marks is found once, whole, and its groups are
     judged here, so a long run is read in one pass rather than tried every
     way a pattern could split it."""
     if not re.fullmatch(r"\d{4}", tail or ""):
         return False
-    for run in _NUMBER_RUN_RE.finditer(text or ""):
+    text = text or ""
+    label = _ACCOUNT_LABEL_RE.search(text)
+    for run in _NUMBER_RUN_RE.finditer(text, label.end() if label else 0):
         last = _account_number(run.group(0))
         if last:
             return last.endswith(tail)
@@ -1912,18 +1921,40 @@ def _account_number(run: str) -> str:
     or more long, the first of the longest on a tie, so a short group
     beside it on the same line, a page number or a date, is not part of
     it. The stretch must hold eight or more digits or marks and end in four
-    digits. One pass over the groups."""
-    best, best_len, cur, cur_len = "", 0, "", 0
-    for g in re.split(r"[ -]", run) + [""]:
-        if len(g) >= 4:
-            cur, cur_len = g, cur_len + len(g)
+    digits. A stretch of digits alone is no account number when it holds
+    eight digits or fewer, as a mail sort number, a page code or a date
+    does, when every digit is a zero, or when it is a ZIP+4, five digits, a
+    dash and four digits. One pass over the groups."""
+    # Groups at the even places, the space or dash before each at the odd.
+    parts = re.split(r"([ -])", run) + [" ", ""]
+    first = last = start = -1
+    best_len = cur_len = 0
+    for i in range(0, len(parts), 2):
+        if len(parts[i]) >= 4:
+            if not cur_len:
+                start = i
+            cur_len += len(parts[i])
             continue
         if cur_len > best_len:
-            best, best_len = cur, cur_len
-        cur, cur_len = "", 0
-    if best_len < 8 or not best[-4:].isdigit():
+            first, last, best_len = start, i - 2, cur_len
+        cur_len = 0
+    if best_len < 8 or not parts[last][-4:].isdigit():
         return ""
-    return best
+    groups = parts[first:last + 1:2]
+    digits = "".join(groups)
+    if digits.isdigit():
+        zip_plus_four = [len(g) for g in groups] == [5, 4] and parts[first + 1] == "-"
+        if len(digits) <= 8 or not digits.strip("0") or zip_plus_four:
+            return ""
+    return parts[last]
+
+
+# The label Chase prints before a statement's account number, "Account
+# Number" in title case or capitals with any spacing between its words. A
+# colon after it, if any, is passed over with the other text before the
+# number. Lower case is prose, as in "tell us your name and account
+# number", not the label.
+_ACCOUNT_LABEL_RE = re.compile(r"\b(?:Account\s+Number|ACCOUNT\s+NUMBER)\b")
 
 
 # A run of digits and masking marks, in groups a single space or dash
