@@ -611,8 +611,9 @@ def test_a_label_whose_characters_drift_more_than_4pt_stays_whole():
     more than 4pt below its start, so bands of height read it as
     "Statement Clos 09/13/2026 about." with "i ng Date" on the next line,
     and the statement had no period. A character now continues the line it
-    touches, so the label stays in front of its date, and the paragraph
-    in the column beside it stays apart."""
+    touches, so the label stays in front of its date. The word of the column
+    beside it, at the same height, reads after the date, as pdfplumber would
+    read a row."""
     label = "Statement Closing Date09/13/2026"
     start = label.index("ing")
     tls = ([_line("Credit Limit $9,000.00", 100.0)]
@@ -622,11 +623,31 @@ def test_a_label_whose_characters_drift_more_than_4pt_stays_whole():
            + _drifting("Payment Due Date 10/07/2026", 300.0, lambda i: 133.0 + DRIFT[i % 8] / 2)
            + [_line("Days in Billing Cycle 31", 160.0)])
     lines = xt.page_lines(tls)
-    assert lines[0] == "Credit Limit $9,000.00"
-    assert lines[1].startswith("Statement Closing Date09/13/2026")
-    assert "Payment Due Date 10/07/2026" in lines
-    assert not any(line.startswith("i") for line in lines)
+    assert lines == ["Credit Limit $9,000.00", "Statement Closing Date09/13/2026 about.",
+                     "Payment Due Date 10/07/2026", "Days in Billing Cycle 31"]
     assert xt.find_period(lines) == (None, "2026-09-13")
+    # With nothing above it, the label's line is joined with the due date's.
+    assert xt.find_period(lines[1:]) == (None, "2026-09-13")
+
+
+@pytest.mark.parametrize("lines, closing", [
+    (["Statement Closing Date09/13/2026 about.", "Payment Due Date 10/07/2026"], "2026-09-13"),
+    (["Payment Due Date 10/07/2026", "Statement Closing Date09/13/2026 about."], "2026-09-13"),
+    (["Minimum Payment Due 10/07/2026", "Statement Closing Date 09/13/2026"], "2026-09-13"),
+    (["Credit Limit $9,000.00", "Statement Closing Date09/13/2026 by 10/07/2026."], "2026-09-13"),
+    (["Statement Closing Date 09/13/2026 Payment Due Date 10/07/2026"], "2026-09-13"),
+    # American Express statements of 2016 print the next closing date beside it.
+    (["Closing Date03/14/16 Next Closing Date04/13/16 Account Ending"], "2016-03-14"),
+    # Target Circle Card prints the due date on the line before.
+    (["Payment Due Date: 10/17/2026", "Statement Closing Date: 9/18/2026"], "2026-09-18"),
+])
+def test_a_closing_date_is_never_taken_from_a_due_date_beside_it(lines, closing):
+    """The closing date is the latest of the dates that run on right after
+    its label. The latest date anywhere on the label's line, joined with
+    the line before or after it, was the due date or the next closing date
+    on each of these (#32). The last two shapes are from real statements,
+    whose Period End this moved back to the statement's own date."""
+    assert xt.find_period(lines) == (None, closing)
 
 
 def test_two_lines_of_one_column_stay_apart_however_their_characters_drift():

@@ -17,9 +17,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   so it was cut off from its date and the statement still had no period.
   Each character now continues the line it touches that sits nearest its
   height, and the pieces of one row are read as one line, so the label
-  stays in front of its date and the column beside the box stays apart. A
-  page pdfplumber reads whole is not touched, and the export reads every
-  statement again once after the update.
+  stays in front of its date. The closing date is also the latest of the
+  dates that run on right after its label, no longer the latest date
+  anywhere on the label's line and the next. That was the due date when
+  one printed there, and it gave American Express statements that print a
+  Next Closing Date beside the Closing Date, and Target Circle Card
+  statements with the due date on the line before, a Period End a month
+  late. A page pdfplumber reads whole is not rebuilt, and the export reads
+  every statement again once after the update.
 
 ## [0.51.0] - 2026-10-14
 
