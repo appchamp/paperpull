@@ -870,10 +870,16 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     """Save the transcript discovery recorded with id `document_id`, dated
     `iso_date`, at address path `href`. The list is asked for again and the
     transcript is fetched only when exactly one item there still carries
-    that same id, date and address. `dl_dir` is unused: nothing here goes
-    through the browser's downloads. Nothing is pressed. SessionExpired
+    that same id, date and address. `dl_dir` is unused, since nothing here
+    goes through the browser's downloads. Nothing is pressed.
+
+    A list that no longer holds the record answers False, so the record
+    goes to review and the run goes on. The IRS keeps each kind of
+    transcript online for a window of years that moves forward every year,
+    so a transcript discovery recorded and no run has saved yet can drop
+    off the list, and that is this record's matter alone. SessionExpired
     propagates to the run, and so does ListStopped when the list cannot be
-    read again or no longer holds exactly one such item."""
+    read again or holds the record more than once."""
     out_path = Path(out_path)
     doc_id = (document_id or "").strip()
     if not _DOC_ID_RE.fullmatch(doc_id) or not is_download_url(BASE + (href or "")):
@@ -887,13 +893,18 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     except ListStopped as stop:
         log.info("the transcript list stopped while looking for the one dated %s: %s", iso_date, stop)
         raise
+    if not found:
+        log.info("the transcript list no longer holds the recorded transcript dated %s", iso_date)
+        if trace is not None:
+            trace.append({"note": "the list no longer holds the record", "matches": 0})
+        return False
     if len(found) != 1:
         log.info("%d items match the recorded transcript dated %s, none taken", len(found), iso_date)
         if trace is not None:
             trace.append({"note": "no single item matches the record", "matches": len(found)})
-        # The list is no longer the one discovery read, so what discovery
-        # called whole is not; the run stops rather than carry on from it.
-        raise ListStopped("the transcript list changed since it was read")
+        # One record listed twice is a list this app cannot read, so the run
+        # stops rather than choose between them.
+        raise ListStopped("the transcript list holds the record more than once")
     return _fetch(page, BASE + found[0].href, out_path, trace)
 
 

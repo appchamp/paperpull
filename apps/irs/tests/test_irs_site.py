@@ -377,15 +377,31 @@ class Download(unittest.TestCase):
             self.assertEqual(page.context.request.asked, [], kw)
             self.assertFalse(out.exists())
 
-    def test_a_list_that_no_longer_holds_exactly_the_record_stops(self):
-        for page, kw in [(Page(answers=[Resp()]), dict(date="2023-12-31")),
-                         (Page(answers=[Resp()]), dict(doc_id="transcript-account-202312-30")),
-                         (Page(answers=[Resp()]), dict(href=self.HREF.replace("/account/", "/return/"))),
-                         (Page(items=ITEMS + [dict(ITEMS[0])], answers=[Resp()]), {}),
-                         (Page(list_answer=Resp(500, ctype="application/json", body=b"{}")), {})]:
-            with self.assertRaises(site.ListStopped, msg=kw):
-                self.fetch(page, **kw)
-            self.assertNotIn((T_ACCT, 0), page.context.request.asked, kw)
+    def test_a_record_the_list_no_longer_holds_is_not_taken_and_stops_nothing(self):
+        """The IRS moves each kind of transcript's years online forward every
+        year, so a transcript discovery recorded can drop off the list. That
+        record goes to review, and the run goes on."""
+        for items, kw in [(ITEMS[1:], {}),
+                          (ITEMS, dict(date="2023-12-31")),
+                          (ITEMS, dict(doc_id="transcript-account-202312-30")),
+                          (ITEMS, dict(href=self.HREF.replace("/account/", "/return/")))]:
+            page = Page(items=items, answers=[Resp()])
+            out = Path(tempfile.mkdtemp()) / "o.pdf"
+            trace = []
+            ok = site.download_bill(page, None, kw.get("date", "2024-12-31"), out, trace=trace,
+                                    href=kw.get("href", self.HREF),
+                                    document_id=kw.get("doc_id", "transcript-account-202412-30"))
+            self.assertFalse(ok, kw)
+            self.assertFalse(out.exists(), kw)
+            self.assertEqual(page.context.request.asked, [(API, 0)], kw)
+            self.assertEqual(trace, [{"note": "the list no longer holds the record", "matches": 0}], kw)
+
+    def test_a_list_that_cannot_be_read_again_stops(self):
+        for page in (Page(items=ITEMS + [dict(ITEMS[0])], answers=[Resp()]),
+                     Page(list_answer=Resp(500, ctype="application/json", body=b"{}"))):
+            with self.assertRaises(site.ListStopped):
+                self.fetch(page)
+            self.assertNotIn((T_ACCT, 0), page.context.request.asked)
 
     def test_signed_out_answers_raise_and_save_nothing(self):
         for answer in [Resp(302, ctype="text/html", body=b"", location="https://api.id.me/"),
@@ -517,10 +533,9 @@ class Orchestrator(unittest.TestCase):
         for word in ("Jane", "Smith", "123 Main", "Main St"):
             self.assertNotIn(word, everything + " ".join(names), word)
 
-    def test_a_list_that_changed_or_stopped_since_discovery_stops_the_run(self):
+    def test_a_list_that_cannot_be_read_again_stops_the_run(self):
         from paperpull_core import listing
-        for later, why in [([ITEMS[1]], "the transcript is gone"),
-                           ([ITEMS[0], dict(ITEMS[0])], "it is listed twice"),
+        for later, why in [([ITEMS[0], dict(ITEMS[0])], "it is listed twice"),
                            (None, "the list does not answer")]:
             app = make_app(tempfile.mkdtemp(), "--all")
             listing.started(app)
@@ -539,6 +554,37 @@ class Orchestrator(unittest.TestCase):
             self.assertIn("could not be read again", said.getvalue(), why)
             self.assertEqual(app.stats["manual_review"] + app.stats["failed"], 0, why)
             self.assertEqual(app.progress.data, {}, why)
+
+    def test_a_transcript_that_drops_off_the_list_goes_to_review_and_the_run_goes_on(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from paperpull_core import listing
+        from paperpull_core.models import State
+        app = make_app(self.tmp, "--all")
+        listing.started(app)
+        for r in site.collect_download_docs(Page()):
+            app._record_rawdoc(r, site.BILLING_URL)
+        listing.read_whole(app)
+        app.check_session = lambda p: None
+        app._delay = lambda *a, **k: None
+        app.write_failure = lambda *a, **k: None
+        pages = []
+
+        def later():
+            # The IRS no longer lists the 2024 account transcript.
+            pages.append(Page(items=ITEMS[1:], answers=[Resp(body=b"%PDF-1.4 " + b"x" * 3000)]))
+            return pages[-1]
+        app._on_its_site = later
+        gone = "id:transcript-account-202412-30"
+        first = sorted(app._select(), key=lambda d: d.key != gone)
+        self.assertEqual(first[0].key, gone)
+        valid = SimpleNamespace(ok=True, reason="", size_bytes=3009, page_count=1)
+        with mock.patch.object(docs.receipt_pdf, "validate_pdf", lambda *a, **k: valid),                 redirect_stdout(io.StringIO()):
+            app.process(first)
+        self.assertEqual(app.progress.get(gone)["state"], State.NEEDS_MANUAL_REVIEW.value)
+        self.assertEqual((app.stats["manual_review"], app.stats["tax_documents"]), (1, 3))
+        self.assertNotIn((T_ACCT, 0), pages[0].context.request.asked)
+        self.assertEqual(listing.last(app), listing.COMPLETE)
 
     def test_a_record_saved_before_its_sibling_appeared_is_renamed_in_discovery(self):
         app = make_app(self.tmp, "--discover")

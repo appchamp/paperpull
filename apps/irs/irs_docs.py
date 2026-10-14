@@ -614,8 +614,10 @@ class App:
                 # against this one.
                 self.session_ended()
             except site.ListStopped:
-                # The list could not be read again, or no longer matches
-                # what discovery read, so the run stops here.
+                # The list could not be read again, or holds this document
+                # more than once, so the run stops here. A document the list
+                # no longer holds is not this. It goes to review and the run
+                # goes on (irs_site.download_bill).
                 self.list_changed()
             except Exception as e:
                 # Only the kind of failure, never its text: a browser or PDF
@@ -639,14 +641,14 @@ class App:
 
     def list_changed(self) -> None:
         """Stop the run because the transcript list could not be read again
-        or has changed since discovery read it. The listing is noted as one
-        that stopped (paperpull_core.listing), so neither this run nor a
-        Resume calls it whole; nothing is recorded against the document."""
+        or holds a document more than once. The listing is noted as one that
+        stopped (paperpull_core.listing), so neither this run nor a Resume
+        calls it whole. Nothing is recorded against the document."""
         listing.started(self)
         self.write_failure("read the documents list again", "the list changed or stopped")
         tabs.stop(self, [
-            "The IRS transcript list could not be read again, or has changed since it",
-            "was read, so this run stops here. Everything saved so far is kept.",
+            "The IRS transcript list could not be read again, or lists one transcript",
+            "more than once, so this run stops here. Everything saved so far is kept.",
             "Run Download again to read the list afresh.",
         ])
 
