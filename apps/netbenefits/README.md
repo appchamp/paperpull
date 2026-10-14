@@ -9,6 +9,10 @@ Mapped and run against a real account on 2026-09-19. Thirty-nine quarterly
 statements back to the plan's first quarter in 2016, every one valid, and
 a second run downloaded nothing.
 
+**Several employers and plans.** One owner's sign-in with two employers and
+four plans was surveyed read-only on 2026-10-14, and the app was changed to
+handle it (below). That change then ran live on the same sign-in on 2026-10-14: Discover listed the four plans with 39 quarters each, and Pilot plus Run All saved 39 combined University of California statements and 39 X-Ray Medical Group statements, every PDF naming the plans its label says, with nothing sent to manual review.
+
 ## How it reads the site
 
 NetBenefits keeps no archive of statements. Its Statements page is a
@@ -27,6 +31,46 @@ after a real statement, since a plan has one start date. A run scoped with
 `--year` or `--start-date` makes only the years it wants. Each statement is
 identified by its kind and period end date. The plan's name goes in the
 filename, the plan number never does.
+
+**A sign-in with several plans.** NetBenefits remembers the plan you last
+looked at, and its Statements page then shows that plan straight away, so
+the app reads the plan list from the site's "Choose a Plan" page first,
+which lists every plan on the sign-in by name, each linking to its own
+Statements page. A sign-in it lists one plan for goes on exactly as before.
+When there is no such page, the "Select Account" page the Statements
+address shows when no plan is remembered is read instead. Nothing on
+either page is pressed, and the employer chooser, whose Continue changes a
+saved preference, is never used.
+
+For each plan the app asks for the plan's address from inside the page, a
+request the browser will not follow to another site. If the Statements
+page then shows that plan, by its heading, the plan's name and its number,
+the plan is open, and if not it is left for you. The tab never opens a
+plan's own address. A statement is made only while the page shows the plan
+it is filed under, and it is filed under the plan's name from the list,
+as in `2026-06-30 NetBenefits Quarterly Statement - ABC 457(b) Plan.pdf`,
+never under the employer the statement's own header names. A plan whose
+address sends you elsewhere (on the surveyed sign-in, one plan's went to
+the Fidelity retail sign-in) is left for you to open yourself, counted as
+needing review, and never followed. If the session is gone when a later
+plan is asked for, the run stops and keeps what it saved. Records are kept
+by a digest of the plan, never its numbers, and the plan list is kept in
+`plans.json` beside the progress file so a later run can find the plans
+even when neither list page shows. If it cannot, it says so and asks you
+to sign out and in, then Discover, then Resume.
+
+**Combined statements.** NetBenefits makes one combined statement for the
+plans of one employer, and asking for it from any of those plans gives the
+same statement. After each statement is saved, the app reads its text. It
+must name the plan it was made for, or it is set aside for review as the
+wrong document. When it names other plans of the list too, it is saved
+once, under the employer's name when the site's header gives one and the
+statement carries it too (`... Quarterly Statement - Lakeside College of
+Arts Plans.pdf`), or else under the plans' names (`... Quarterly Statement
+- ABC 403(b), ABC 457(b) and ABC DCP Plans.pdf`), and the other plans'
+statements for that period are recorded as covered by that file, so they
+are not made again. A statement for one plan is filed under that plan as
+above.
 
 `statement_period` in `config.json` is `quarterly` by default, the cadence
 a plan issues on paper. Set it to `monthly` for one per month instead.
