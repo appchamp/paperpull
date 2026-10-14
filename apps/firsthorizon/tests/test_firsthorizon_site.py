@@ -225,7 +225,8 @@ class Loc:
 class Bank:
     """Accounts: dicts of id, title, statements [(date, docId)], open
     (expanded when the page loads), appear_at (ms after load before the
-    panel is drawn, for the last accounts only), title_at (ms after load
+    panel is drawn, in its place among the others, so every panel after it
+    moves one place on once it is), title_at (ms after load
     before the title's balance is drawn) and hidden_at (ms after load from
     which the page hides the panel). `download` says what the Download
     PDF button does. `single_open` makes the accordion keep one panel open."""
@@ -306,7 +307,7 @@ class Bank:
 
     def click(self, loc):
         if loc.kind == "panel":
-            i = loc.at["n"]
+            i = self.drawn_now()[loc.at["n"]]
             self.presses.append(("panel", i))
             if self.single_open:
                 self.open = [False] * len(self.open)
@@ -411,13 +412,17 @@ class Bank:
     def drawn(self, a, key):
         return self.time - self.loaded_at >= a.get(key, 0)
 
+    def drawn_now(self):
+        """The accounts whose panels are drawn now, in the page's order. The
+        page's index of a panel is its place in this list."""
+        return [i for i, a in enumerate(self.accounts) if self.drawn(a, "appear_at")]
+
     def state(self):
         panels = []
-        for i, a in enumerate(self.accounts):
-            if not self.drawn(a, "appear_at"):
-                continue
+        for n, i in enumerate(self.drawn_now()):
+            a = self.accounts[i]
             title = a["title"] if self.drawn(a, "title_at") else a["title"].rsplit(" $", 1)[0]
-            panels.append({"index": i, "title": title, "labels": [title],
+            panels.append({"index": n, "title": title, "labels": [title],
                            "expanded": "true" if self.open[i] else "false",
                            "region": a.get("region", "accordion-%d" % i),
                            "cards": [{"label": "Monthly statement for " + mdy(d), "shown": True,
@@ -427,8 +432,9 @@ class Bank:
 
     def labels_of(self, loc):
         if loc.kind == "panel":
-            i = loc.at["n"]
-            return [self.accounts[i]["title"]] if i < len(self.accounts) else None
+            drawn = self.drawn_now()
+            n = loc.at["n"]
+            return [self.accounts[drawn[n]]["title"]] if n < len(drawn) else None
         if loc.kind == "button":
             i = self.region_index(loc.at["region"])
             cards = self.cards(i)
@@ -679,6 +685,33 @@ def test_a_panel_drawn_late_is_private_before_it_is_pressed(monkeypatch):
     assert asked == [True, True]
 
 
+def every_drawn_title_private(asked, monkeypatch):
+    """The core's press, as the made-up bank's, noting at each press whether
+    the nickname of every panel drawn then is a private word."""
+    def click(page, locator, *, css, what, words, step="press a control", **kw):
+        nicks = [page.accounts[i]["title"].split(" (", 1)[0] for i in page.drawn_now()]
+        asked.append(all(n in site.private_words() for n in nicks))
+        page.click(locator)
+    monkeypatch.setattr(site.pressing, "click", click)
+
+
+def test_a_panel_drawn_late_ahead_of_one_not_walked_is_never_pressed(monkeypatch):
+    """A panel drawn after the panels were read, ahead of one not walked
+    yet, moves that one a place on, so the panel at its index is the late
+    one. The list stops there, the late panel is not pressed, and its title
+    is private."""
+    bank = Bank([acct1(), acct2(appear_at=2500), acct3()])
+    asked = []
+    every_drawn_title_private(asked, monkeypatch)
+    with pytest.raises(site.ListStopped) as stop:
+        site.collect_download_docs(bank, run_on(bank))
+    assert bank.presses == [("panel", 0)], "the late panel is never pressed"
+    assert asked == [True]
+    assert [d.account_id for d in stop.value.docs] == [ACCT1, ACCT1], "what was read is kept"
+    for w in (NICK2, "9753"):
+        assert w in site.private_words(), w
+
+
 def test_two_open_panels_that_cannot_be_told_apart_stop_the_list():
     same = [("2026-09-16", DOC5)]
     bank = Bank([acct1(open=True, statements=[("2026-09-16", DOC1)]), acct3(open=True, statements=same)])
@@ -862,6 +895,45 @@ def test_a_panel_open_on_load_is_looked_at_before_any_panel_is_pressed(tmp_path)
     ok, _out, _ = take(bank, tmp_path, acct=ACCT3, doc=DOC5)
     assert ok
     assert bank.presses == [("download", 1, "2026-09-16")]
+
+
+def test_a_panel_drawn_late_ahead_of_the_account_stops_the_run_rather_than_review(monkeypatch, tmp_path):
+    """The late panel takes the index of the account's own panel, which is
+    not pressed yet. Pressing it would find another account there and send
+    the statement to review. The run stops instead, with the late panel
+    never pressed."""
+    bank = Bank([acct1(), acct2(appear_at=2500), acct3()])
+    asked = []
+    every_drawn_title_private(asked, monkeypatch)
+    with pytest.raises(site.pressing.Stop) as stop:
+        take(bank, tmp_path, acct=ACCT3, doc=DOC5)
+    assert stop.value.reason == "the statements page stopped"
+    assert bank.presses == [("panel", 0)], "the late panel is never pressed"
+    assert asked == [True]
+    assert not (tmp_path / "o.pdf").exists()
+
+
+def test_a_panel_drawn_late_after_the_account_is_found_is_private_before_the_card_is_pressed(
+        monkeypatch, tmp_path):
+    bank = Bank([acct1(), acct2(appear_at=2500)])
+    asked = []
+    every_drawn_title_private(asked, monkeypatch)
+    ok, _out, _ = take(bank, tmp_path)
+    assert ok
+    assert bank.presses == [("panel", 0), ("download", 0, "2026-09-16")]
+    assert asked == [True, True]
+
+
+def test_an_account_drawn_late_is_never_called_gone(tmp_path):
+    """The account's own panel drawn only after the panels were read is not
+    walked, so the account is not found. The panels did not hold still, so
+    the run stops rather than send the statement to review."""
+    bank = Bank([acct1(), acct3(appear_at=2500)])
+    with pytest.raises(site.pressing.Stop) as stop:
+        take(bank, tmp_path, acct=ACCT3, doc=DOC5)
+    assert stop.value.reason == "the statements page stopped"
+    assert bank.presses == [("panel", 0)]
+    assert NICK3 in site.private_words()
 
 
 @pytest.mark.parametrize("how,reason", [("two", "more than one"), ("none", "no download"),
@@ -1062,7 +1134,17 @@ def test_a_panel_already_open_is_never_pressed():
     run = run_on(bank)
     site._open(bank, run)
     with pytest.raises(site.ListStopped):
-        site._expand(bank, run, 0)
+        site._expand(bank, run, 0, "accordion-0")
+    assert bank.presses == []
+
+
+@pytest.mark.parametrize("region", ["accordion-1", ""], ids=["another region", "no region"])
+def test_a_panel_is_pressed_only_in_the_region_it_was_read_in(region):
+    bank = Bank([acct1(), acct2()])
+    run = run_on(bank)
+    site._open(bank, run)
+    with pytest.raises(site.ListStopped):
+        site._expand(bank, run, 0, region)
     assert bank.presses == []
 
 

@@ -1115,11 +1115,21 @@ def _from_load(b: Bound, panel: dict) -> Bound:
     return Bound(b.index, product_of(panel.get("title")), b.account_id, b.statements, b.region)
 
 
-def _expand(page, run: Run, i: int) -> Bound:
+def _expand(page, run: Run, i: int, region: str) -> Bound:
     """Press panel `i` open, once, while it reads aria-expanded="false",
     and bind it to the one answer that press brought. Anything else stops
-    the list; a panel is never closed."""
-    before = _panel(_read(page), i)
+    the list; a panel is never closed.
+
+    `region` is the region the panel had when the panels were read. A panel
+    the page draws late, ahead of this one, moves it one place on, and the
+    panel then at `i` is another one. So the panel at `i` must still have
+    that region, or the list stops and nothing is pressed. Every title on
+    the page is made private before that, a late one among them."""
+    now = _read(page)
+    _guard_titles(now)
+    before = _panel(now, i)
+    if not region or (before.get("region") or "") != region:
+        raise ListStopped("an account's panel moved before it was pressed")
     if before.get("expanded") != "false":
         raise ListStopped("an account's panel is not closed")
     mark = run.watch.mark()
@@ -1199,7 +1209,7 @@ def collect_download_docs(page, run: Optional[Run] = None) -> List[RawDoc]:
                 skipped += 1
                 log.info("an account's panel title is not one this app reads; it is skipped")
                 continue
-            b = _from_load(loaded[i], p) if i in loaded else _expand(page, run, i)
+            b = _from_load(loaded[i], p) if i in loaded else _expand(page, run, i, p.get("region") or "")
             if b.account_id in seen:
                 raise ListStopped("two panels carry one account")
             seen.add(b.account_id)
@@ -1266,14 +1276,24 @@ def _reach_card(page, run: Run, account_id: str, product: str, document_id: str,
     while it is read."""
     opened = _open(page, run)
     loaded = _bind_loaded(page, run, opened)
-    mine = [p for p in _settled_panels(page, run, opened) if product_of(p.get("title")) == product]
+    panels = _settled_panels(page, run, opened)
+    mine = [p for p in panels if product_of(p.get("title")) == product]
     b = None
     for p in [p for p in mine if p["index"] in loaded] + [p for p in mine if p["index"] not in loaded]:
-        got = _from_load(loaded[p["index"]], p) if p["index"] in loaded else _expand(page, run, p["index"])
+        got = _from_load(loaded[p["index"]], p) if p["index"] in loaded \
+            else _expand(page, run, p["index"], p.get("region") or "")
         if got.account_id == account_id:
             b = got
             break
     if b is None:
+        # The account is called not on the page only when the panels held
+        # still while they were walked. A panel drawn late may be the
+        # account's own, so the run stops rather than send it to review.
+        _settle(page, run)
+        now = _read(page)
+        _guard_titles(now)
+        if _shape(now.get("panels") or []) != _shape(panels):
+            raise ListStopped("the account panels changed while the account was sought")
         if trace is not None:
             trace.append({"note": "the account is not on the page"})
         return None
@@ -1282,7 +1302,11 @@ def _reach_card(page, run: Run, account_id: str, product: str, document_id: str,
         if trace is not None:
             trace.append({"note": "no single statement matches the record", "matches": len(st)})
         return None
-    panel = _panel(_read(page), b.index)
+    # Every title drawn now is private before the card's Download PDF is
+    # pressed, a panel drawn late among them.
+    now = _read(page)
+    _guard_titles(now)
+    panel = _panel(now, b.index)
     if panel.get("expanded") != "true" or (panel.get("region") or "") != b.region:
         raise ListStopped("the account's panel closed or moved before its card was read")
     cards = [n for n, c in enumerate(panel.get("cards") or [])
