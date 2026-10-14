@@ -2461,10 +2461,11 @@ class Source(unittest.TestCase):
         row, and canceled spelled the American way."""
         repo = HERE.parent.parent
         changelog = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
-        # The newest section, Unreleased or the version it became.
-        newest = changelog.split("\n## [", 1)[1].split("\n## [", 1)[0]
-        bullets = [b for b in re.split(r"\n- ", newest) if b.startswith("**Spectrum")]
-        self.assertEqual(len(bullets), 2)
+        # The app came after 0.51.0, so its bullets are above that heading,
+        # in Unreleased or the version it became.
+        newer = changelog.split("## [0.51.0]", 1)[0]
+        bullets = [b for b in re.split(r"\n- ", newer) if b.startswith("**Spectrum")]
+        self.assertGreaterEqual(len(bullets), 2)
         row = [line for line in (repo / "PROVIDERS.md").read_text(encoding="utf-8").splitlines()
                if line.startswith("| [`spectrum`]")]
         self.assertEqual(len(row), 1)
