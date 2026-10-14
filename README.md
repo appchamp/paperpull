@@ -56,7 +56,7 @@ signed installer and automatic updates. Or download it free from the
 [Releases page](https://github.com/rheeloaded/paperpull/releases). Nothing
 is held back from the free build. See [Support](#support).
 
-Sixty-one providers are supported today, all built on the same pattern.
+Sixty-seven providers are supported today, all built on the same pattern.
 Seven more, Wells Fargo, SBA, Verizon Mobile,
 Meijer, American Family, Stripe and FedEx, are built and waiting for someone with an account to
 test them ([#27](https://github.com/rheeloaded/paperpull/issues/27),
@@ -137,7 +137,7 @@ test them ([#27](https://github.com/rheeloaded/paperpull/issues/27),
 | [`usaa`](apps/usaa) | USAA | Statements | JSON-API enumeration |
 | [`usbank`](apps/usbank) | U.S. Bank | Credit-card statements | Ported by [@davidrudnick](https://github.com/davidrudnick); fresh live pilot pending |
 | [`vanguard`](apps/vanguard) | Vanguard | Account statements | **Contributed by [@tylerverry](https://github.com/tylerverry), 135 statements across five accounts.** The statements page's own list, read while its year picker is walked, then each statement's own download control, pressed through the guard |
-| [`venmo`](apps/venmo) | Venmo | Monthly account statements | **Built and run on one account, 24 statements.** Venmo has no PDF statement, so each month's statement page is opened by its own address and printed to PDF; only the month's own "Show more" is pressed, and the CSV is not taken |
+| [`venmo`](apps/venmo) | Venmo | Monthly account statements, printed from the Statements page | **Contributed by [@JasperDale420](https://github.com/JasperDale420), 24 months saved on a full run.** Reads two years unless you set a From date, and says so when older months may hold more. Show more is the only press, and a month is printed only once every transaction is drawn |
 | [`verizon`](apps/verizon) | Verizon (Fios) | Bill statements | Real Edge (bot block); dropdown + CDP download |
 | [`verizonmobile`](apps/verizonmobile) | Verizon Mobile (wireless) | Monthly bills | **Untested, built without an account. Have one? [Help test it](apps/verizonmobile/README.md#help-test-it-no-programming-needed)** |
 | [`walmart`](apps/walmart) | Walmart | Receipts | Hardened against bot detection |
@@ -633,7 +633,7 @@ Every contribution keeps the **read-only, local, no-credentials** design, see
 
 ## Status & roadmap
 
-- ✅ All **sixty-eight** apps pass their tests, the sixty-one that are
+- ✅ All **seventy-four** apps pass their tests, the sixty-seven that are
   supported and the seven still waiting for a tester, 22,453 of them
   across the repo. Most are in regular use by the author. The rest were built or
   confirmed by people who hold those accounts, named in the table above
@@ -717,8 +717,11 @@ found a bug and diagnosed it to the line.
   run against a retail account's monthly statements and tax documents,
   the Optum Bank app, built and run against an HSA, the Shelby County
   Trustee app, run against a Memphis parcel's sixteen years of receipts,
-  the SDG&E app, run against a new account's first eight bills, and the
-  Alpaca app, run whole against a Live brokerage account.
+  the SDG&E app, run against a new account's first eight bills, the Alpaca
+  app, run whole against a Live brokerage account, the First Horizon,
+  Chase Business, TreasuryDirect, Venmo, IRS and Spectrum apps, each
+  run on their own accounts, and NetBenefits for a sign-in with several
+  plans.
 - [@marecabo](https://github.com/marecabo), Amazon's legal invoice PDFs on
   the German store.
 - [@watling777](https://github.com/watling777), the tester behind AT&T,
