@@ -7,6 +7,20 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **The transaction export reads the closing date of a summary box whose
+  characters drift apart (#32).** 0.51.0 rebuilt such a box's lines by
+  height alone. On a Navy Federal Visa statement the end of the
+  "Statement Closing Date" label sat more than 4 points below its start,
+  so it was cut off from its date and the statement still had no period.
+  Each character now continues the line it touches that sits nearest its
+  height, and the pieces of one row are read as one line, so the label
+  stays in front of its date and the column beside the box stays apart. A
+  page pdfplumber reads whole is not touched, and the export reads every
+  statement again once after the update.
+
 ## [0.51.0] - 2026-10-14
 
 Alpaca arrives, statements and trade confirmations from a Live brokerage

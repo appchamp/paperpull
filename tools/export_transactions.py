@@ -49,7 +49,7 @@ from typing import Dict, List, Optional, Tuple
 
 INDEX_SUFFIX = " Document Index.csv"
 CACHE_NAME = ".transactions-cache.json"
-CACHE_VERSION = 7      # 2: the index date drives the year, #29. 3: split decimals, empty brackets, #32. 4: sidebar bleed, neighbor descriptions. 5: dates checked against the period. 6: credits signed by their heading, #32. 7: scattered lines rebuilt, #32
+CACHE_VERSION = 8      # 2: the index date drives the year, #29. 3: split decimals, empty brackets, #32. 4: sidebar bleed, neighbor descriptions. 5: dates checked against the period. 6: credits signed by their heading, #32. 7: scattered lines rebuilt, #32. 8: rebuilt by touching characters, not bands of height, #32
 
 # -- shapes -----------------------------------------------------------------------
 _MON = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?"
@@ -652,24 +652,88 @@ def _bracketed_sections(txns: List[dict], marks: List[tuple]) -> Optional[List[d
 # each of its lines into a column of single characters. A Navy Federal Visa
 # statement's summary box did, and its closing date was lost with it (#32).
 SCATTER_MIN = 20
-# How far apart in height two characters of one rebuilt line may sit.
-BAND_PT = 4.0
+# A character continues a rebuilt line when it starts no further right of
+# the line's last character than this many of that character's widths, a
+# word space and some, and sits within this many of its own heights of the
+# line's average height. Of the lines it could continue, it takes the one
+# nearest its height. Bands of height alone cut the closing date's label in
+# two when its characters drifted more than 4pt apart (#32).
+JOIN_WIDTHS = 3.0
+# Nor when it overlaps that last character by more than this many of its
+# widths, since two letters of one line hardly overlap, and a letter of
+# the line below set under it does.
+JOIN_OVERLAP = 0.25
+JOIN_HEIGHTS = 0.75
+# Pieces of one row, such as a label and a value printed well to its
+# right, are read as one line when their average heights are within this
+# many of a character's heights.
+ROW_HEIGHTS = 0.5
+# A piece of fewer characters has no average height to trust. The start of
+# a line is one, when its second character drifted nearer the line below,
+# and its characters go to the row nearest their height instead.
+SURE_CHARS = 3
+# A character's height when pdfplumber gives none.
+CHAR_HEIGHT_PT = 8.0
+
+
+def _height(c: dict) -> float:
+    h = c.get("size") or c.get("height") or 0.0
+    return float(h) if h > 0 else CHAR_HEIGHT_PT
+
+
+def _mean_top(piece: List[dict]) -> float:
+    return sum(c["top"] for c in piece) / len(piece)
+
+
+def _rows(pieces: List[List[dict]]) -> List[List[dict]]:
+    """Pieces whose average heights are close, read as one row."""
+    rows: List[List[List[dict]]] = []
+    for piece in sorted(pieces, key=_mean_top):
+        for row in rows:
+            if abs(_mean_top(piece) - _mean_top(row[0])) <= ROW_HEIGHTS * _height(piece[0]):
+                row.append(piece)
+                break
+        else:
+            rows.append([piece])
+    return [[c for piece in row for c in piece] for row in rows]
 
 
 def _band_lines(chars: List[dict]) -> List[Tuple[float, str]]:
-    """Characters grouped into lines by height, each read left to right, a
-    space where the gap is wider than a quarter of a character. Returns
-    (top, text) for each line."""
-    out: List[Tuple[float, str]] = []
-    band: List[dict] = []
-    for c in sorted(chars, key=lambda c: c["top"]):
-        if band and c["top"] - band[0]["top"] > BAND_PT:
-            out.append(_band_text(band))
-            band = []
-        band.append(c)
-    if band:
-        out.append(_band_text(band))
-    return out
+    """Characters put back into lines, each read left to right, a space
+    where the gap is wider than a quarter of a character. Taken left to
+    right, each character continues the line it touches that sits nearest
+    its height, so a line holds together however far its characters drift,
+    and a column beside it stays apart. Pieces of one row are then read as
+    one line. Returns (top, text) for each line."""
+    pieces: List[List[dict]] = []
+    tops: List[float] = []  # each piece's tops summed, for its average
+    for c in sorted(chars, key=lambda c: (c["x0"], c["top"])):
+        best, best_d = None, None
+        for n, piece in enumerate(pieces):
+            last = piece[-1]
+            width = max(last["x1"] - last["x0"], 1.0)
+            gap = c["x0"] - last["x1"]
+            if gap < -JOIN_OVERLAP * width or gap > JOIN_WIDTHS * width:
+                continue
+            d = abs(c["top"] - tops[n] / len(piece))
+            if d <= JOIN_HEIGHTS * _height(c) and (best_d is None or d < best_d):
+                best, best_d = n, d
+        if best is None:
+            pieces.append([c])
+            tops.append(c["top"])
+        else:
+            pieces[best].append(c)
+            tops[best] += c["top"]
+    rows = _rows([p for p in pieces if len(p) >= SURE_CHARS])
+    centers = [_mean_top(row) for row in rows]
+    loose: List[List[dict]] = []
+    for c in (c for p in pieces if len(p) < SURE_CHARS for c in p):
+        d, n = min(((abs(c["top"] - top), n) for n, top in enumerate(centers)), default=(None, None))
+        if d is not None and d <= JOIN_HEIGHTS * _height(c):
+            rows[n].append(c)
+        else:
+            loose.append([c])
+    return [_band_text(row) for row in rows + _rows(loose)]
 
 
 def _band_text(band: List[dict]) -> Tuple[float, str]:
