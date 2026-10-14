@@ -1439,11 +1439,10 @@ def choose_in_page(page, entry: Entry, entries: List[Entry], dl_dir, trace) -> b
     the one chosen and not the newest. False, nothing pressed, when there
     is not exactly one row the guard allows for it, when the row's words
     changed before the press, when its address is refused (is_safe_href),
-    or when Spectrum kept it turned off. Once the
-    row is pressed, a tab, a popup or a download, a page that is not this
-    statement's own, or a page that asked for anything but this statement
-    and one the list holds stops the run (chose_wrong). SessionExpired and
-    OtpRequired propagate."""
+    or when Spectrum kept it turned off. Once the row is pressed, a tab, a
+    popup or a download, a page that is not this statement's own, or a page
+    that asked for anything but this statement and one the list holds stops
+    the run (chose_wrong). SessionExpired and OtpRequired propagate."""
     index, text, why = row_for(page, entry, entries)
     if why:
         log.info("the statement dated %s was not chosen: %s", entry.date, why)
@@ -2195,8 +2194,9 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
     whose account links did not settle, that did not draw its statements or
     draws two Mobile links, for a link whose href leads anywhere
     (is_void_href), and after the press for a list whose statement rows did
-    not draw and hold still, since what it shows then is not all of it. A tab, popup or download the
-    press brought stops the run. SessionExpired and OtpRequired propagate."""
+    not draw and hold still, since what it shows then is not all of it. A
+    tab, popup or download the press brought stops the run. SessionExpired
+    and OtpRequired propagate."""
     if not dl_dir:
         raise no_folder()
     before = tabs_now(page)

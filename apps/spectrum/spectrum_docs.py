@@ -312,7 +312,7 @@ class App:
         else:
             profile = Path(self.config["profile_dir"])
             profile.mkdir(parents=True, exist_ok=True)
-            self._context = browser_launcher.launch_own_browser(self._pw.chromium,
+            self._context = browser_launcher.launch_own_browser(self._pw.chromium, 
                 str(profile), headless=False, accept_downloads=True,
                 viewport={"width": 1400, "height": 950})
             self._cdp_mode = False
@@ -603,10 +603,10 @@ class App:
 
     def _on_its_site(self):
         """The tab Discover and the next statement are taken in, on
-        www.spectrum.net and never a tab of another site. Spectrum keeps its session in the
-        browser profile a new tab shares, so with no tab of the person's on
-        the site Statements is opened in a tab of this run's own
-        (tabs.on_its_site)."""
+        www.spectrum.net and never a tab of another site. Spectrum keeps its
+        session in the browser profile a new tab shares, so with no tab of
+        the person's on the site Statements is opened in a tab of this run's
+        own (tabs.on_its_site)."""
         return tabs.on_its_site(self, site.is_safe_url, "Spectrum",
                                 self._open_documents)
 
