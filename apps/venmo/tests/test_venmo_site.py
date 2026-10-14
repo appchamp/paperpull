@@ -845,18 +845,73 @@ class Orchestrator(WithPrinter):
         self.assertEqual(months[0], "2026-06")
         self.assertNotIn(docs.datetime.now().strftime("%Y-%m"), months, "the month under way is never listed")
 
-    def test_discovery_with_no_start_date_does_not_call_two_years_the_whole_list(self):
-        from paperpull_core import listing
-        app = make_app(self.tmp, "--discover")
+    def capped_app(self, *args):
+        """An app whose Venmo has transactions in every month, so a walk
+        with no start date stops at two years (CapReached). Each month is
+        printed as a PDF that passes the run's own check."""
+        from pypdf import PdfWriter
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        writer.add_metadata({"/Subject": "x" * 3000})
+        body = io.BytesIO()
+        writer.write(body)
+        self.printer.body = body.getvalue()
+        app = make_app(self.tmp, *args)
         page = Page(start=statement_url())
         app.page = lambda: page
         app.check_session = lambda p: None
-        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit):
-            app.cmd_discover()
+        app._on_its_site = lambda: Page()
+        app._delay = lambda *a, **k: None
+        return app
+
+    def test_discover_alone_lists_two_years_and_ends_as_a_run_that_stopped(self):
+        from unittest import mock
+        from paperpull_core import listing
+        make_app(self.tmp, "--discover")
+        page = Page(start=statement_url())
+        with mock.patch.object(docs.App, "page", lambda app: page), \
+                mock.patch.object(docs.App, "check_session", lambda app, p: None), \
+                redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit) as stop:
+            docs.main(["--discover", "--config", str(Path(self.tmp) / "config.json")])
+        self.assertEqual(stop.exception.code, 1)
+        said = said.getvalue()
+        self.assertIn("Documents known: %d" % site.MAX_MONTHS, said, "the months read are listed")
+        self.assertIn("Months older than the two years read were not listed", said)
+        self.assertIn("default_start_date", said)
+        app = make_app(self.tmp, "--discover")
         self.assertEqual(len(app.discovery.data), site.MAX_MONTHS, "what was read is kept")
         self.assertEqual(listing.last(app), listing.STOPPED)
-        self.assertIn("default_start_date", said.getvalue())
         self.assertEqual(list(app.paths.diagnostics.glob("failure-*.json")), [], "nothing went wrong")
+
+    def test_a_run_stopped_at_two_years_takes_what_it_read_and_then_stops(self):
+        app = self.capped_app("--all", "--yes")
+        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit) as stop:
+            app.cmd_run("all")
+        self.assertEqual(stop.exception.code, 1)
+        self.assertEqual(len(self.printer.printed), site.MAX_MONTHS, "every month read is saved")
+        self.assertEqual(app.stats["statements"], site.MAX_MONTHS)
+        self.assertIn("Months older than the two years read were not listed", said.getvalue())
+
+    def test_a_pilot_stopped_at_two_years_takes_its_statement_and_then_stops(self):
+        app = self.capped_app("--pilot")
+        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit) as stop:
+            app.cmd_pilot()
+        self.assertEqual(stop.exception.code, 1)
+        self.assertEqual(len(self.printer.printed), 1)
+        self.assertIn("No problems detected in the pilot", said.getvalue())
+        self.assertIn("Months older than the two years read were not listed", said.getvalue())
+
+    def test_a_resume_after_a_run_stopped_at_two_years_is_not_finished(self):
+        app = self.capped_app("--all", "--yes")
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            app.cmd_run("all")
+        self.assertEqual(len(self.printer.printed), site.MAX_MONTHS)
+        app = self.capped_app("--resume")
+        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit):
+            app.cmd_resume()
+        self.assertNotIn("everything in scope is complete", said.getvalue())
+        self.assertIn("not read to its end", said.getvalue())
+        self.assertEqual(len(self.printer.printed), site.MAX_MONTHS, "nothing is taken twice")
 
     def test_discovery_of_one_year_goes_back_to_its_first_month(self):
         year = date.today().year - 1

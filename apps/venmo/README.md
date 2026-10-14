@@ -49,9 +49,9 @@ prints it to PDF, filed as `<month end> Venmo Statement.pdf`, for example
    Statements page.
 8. Click **Pilot**. It saves last month's statement as a PDF in
    `Statements\`. Open it and say whether it shows the whole month, then
-   attach a fresh Diagnose file. If it stops because the oldest of two
-   years has transactions, choose "Between two dates" under "Which dates",
-   set a From date, and click **Pilot** again.
+   attach a fresh Diagnose file. If it then says months older than two
+   years were not listed, choose "Between two dates" under "Which dates"
+   and set a From date before your next run.
 
 **If a run stops early, send the file it wrote.** Every failed run leaves a
 `failure-*.json` in the `Diagnostics` folder and prints where it put it. It
@@ -77,8 +77,9 @@ profile from it (the profile id is kept out of every file and log). Then,
 newest first, it opens each finished month by that address with the month
 and year changed, back to your start date. With no start date it reads
 two years, and when the oldest of those months has transactions the run
-keeps the months it listed and stops before downloading, rather than call
-the list complete, since older months may have them too. To read further
+saves those months as usual and then ends as a run that stopped, rather
+than call the list complete, since older months may have them too. A
+Resume after it does not call the run finished either. To read further
 back, choose "Between two dates" under "Which dates" and set a From date,
 or set `default_start_date` in `config.json`, and the walk goes back to
 that date. A run of one year walks back to that year's first day. A month is listed,

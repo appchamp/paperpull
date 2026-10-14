@@ -204,6 +204,9 @@ def told_apart_by(record: dict) -> str:
 class App:
     _journal = None
     _requests = None
+    # Set when this run's listing read two years and the oldest month had
+    # transactions (venmo_site.CapReached). See _end_if_capped.
+    _capped = False
 
     def __init__(self, args):
         self.args = args
@@ -484,7 +487,10 @@ class App:
                                         "href": persistable(getattr(r, "href", "") or "")}, save=False)
         return 0
 
-    def cmd_discover(self, quiet: bool = False) -> int:
+    def cmd_discover(self, quiet: bool = False, then_take: bool = False) -> int:
+        # `then_take` is True from Pilot and Run All, which take what was
+        # listed before a listing stopped at two years ends the run
+        # (_end_if_capped). Any other caller ends the run here on such a list.
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
@@ -508,10 +514,22 @@ class App:
         floor = self.args.start_date or self.config.get("default_start_date") or ""
         if self.args.year:
             floor = max(floor, "%04d-01-01" % int(self.args.year))
+        capped = False
         try:
             docs = site.collect_download_docs(page, floor=floor)
         except site.SessionExpired:
             self.session_ended()
+        except site.CapReached as stop:
+            # Two years were read and the oldest month has transactions.
+            # Nothing on the page went wrong, so the months read are listed
+            # and taken on this run as any others, and no failure file is
+            # written. The listing is not noted as whole, so a Resume does
+            # not call the run finished, and the run ends as one that
+            # stopped once it has taken them (_end_if_capped).
+            docs, capped = stop.docs, True
+            print(f"\n!! The Venmo statement list stopped at two years, since {stop}.")
+            print(f"   The {len(stop.docs)} statement(s) read are listed as usual, and the run")
+            print("   then stops rather than call the list read.")
         except site.ListStopped as stop:
             # What was listed is kept, and the listing stays noted as one
             # that stopped, so neither this run nor a Resume calls it whole.
@@ -520,14 +538,6 @@ class App:
             self.discovery.save()
             print(f"\n!! The Venmo statement list stopped partway, since {stop}.")
             print(f"   The {len(stop.docs)} statement(s) listed before it stopped are kept,")
-            if isinstance(stop, site.CapReached):
-                # Nothing on the page went wrong, so no failure file is
-                # written. A start date is what lets the walk go further.
-                print("   and this run stops rather than call the list read. To read further")
-                print("   back, choose Between two dates under Which dates and set a From")
-                print("   date, or set default_start_date in config.json, and the walk goes")
-                print("   back to that date.")
-                raise SystemExit(1)
             print("   and this run stops rather than call the list read. Run it again.")
             self.write_failure("read the documents list", "the list stopped partway")
             raise SystemExit(1)
@@ -536,14 +546,19 @@ class App:
         self.discovery.save()
         log.info("statements: %d months, %d new", len(docs), n_new)
 
+        # Two years with transactions in the oldest month are not the whole
+        # list, and the listing then stays noted as one that stopped.
+        self._capped = capped
         # The whole list is in, and only now may a Resume that carries on
         # from it call the run finished (paperpull_core.listing).
-        listing.read_whole(self)
+        if not capped:
+            listing.read_whole(self)
         self.stats["discovered"] = len(self.discovery.data)
 
         if not quiet:
             docs = [Document.from_dict(v) for v in self.discovery.data.values()]
-            print(f"\nDiscovery complete. Documents known: {len(docs)}")
+            print("\nDiscovery %s. Documents known: %d"
+                  % ("stopped at two years" if capped else "complete", len(docs)))
             by_cat = {}
             for d in docs:
                 by_cat.setdefault(d.category, []).append(d)
@@ -559,7 +574,21 @@ class App:
                 print(f"  Date range: {dates[0]} .. {dates[-1]}")
             if self.stats["skipped_out_of_scope"]:
                 print(f"  Skipped as out of scope: {self.stats['skipped_out_of_scope']}")
+        if not then_take:
+            self._end_if_capped()
         return n_new
+
+    def _end_if_capped(self) -> None:
+        """The end of a run whose listing stopped at two years. What it
+        listed has been taken by now, and the run stops as one that did not
+        finish, saying how to read further back."""
+        if not self._capped:
+            return
+        print("\n!! Months older than the two years read were not listed, so this run")
+        print("   stops as one that did not finish. To read further back, choose")
+        print("   Between two dates under Which dates and set a From date, or set")
+        print("   default_start_date in config.json, and the walk goes back to it.")
+        raise SystemExit(1)
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
         docs = [Document.from_dict(v) for v in self.discovery.data.values()]
@@ -788,10 +817,11 @@ class App:
     def cmd_pilot(self):
         self.stats["mode"] = "pilot"
         print("PILOT MODE - limited supervised test run.\n")
-        self.cmd_discover()
+        self.cmd_discover(then_take=True)
         docs = self._select(limit=self.config.get("pilot_count", 5))
         if not docs:
             print("\nNo documents in scope to pilot. Run --diagnose.")
+            self._end_if_capped()
             return
         print(f"\nDownloading {len(docs)} document(s)...")
         self.process(docs, dry_run=self.args.dry_run)
@@ -800,6 +830,7 @@ class App:
             # A pilot is the gate before a full run, so a pilot whose document
             # did not land as a valid PDF is a run that stopped, not a clean one.
             raise SystemExit(1)
+        self._end_if_capped()
 
     def _pilot_report(self, docs: List[Document]):
         print("\n" + "=" * 70)
@@ -839,10 +870,11 @@ class App:
             if ask("> ").strip().upper() != "YES":
                 print("Aborted. (Run the pilot first if you haven't: --pilot)")
                 return
-        self.cmd_discover()
+        self.cmd_discover(then_take=True)
         docs = self._select()
         print(f"\nDownloading {len(docs)} document(s)...")
         self.process(docs, dry_run=self.args.dry_run)
+        self._end_if_capped()
 
     def cmd_resume(self):
         self.stats["mode"] = "resume"
