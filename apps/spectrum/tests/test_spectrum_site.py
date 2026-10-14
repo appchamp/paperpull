@@ -22,9 +22,10 @@ from paperpull_core import pressing  # noqa: E402
 HOST = "www.spectrum.net"
 GRAPH = site.GRAPH_URL
 # Invented account details, which must never leave through a log, the
-# console, a record, a file name or a diagnostic.
-CUR = "8350990000012345"
-PRI = "8350990000067890"
+# console, a record, a file name or a diagnostic. Short and patterned on
+# purpose, so none has the shape of a real Spectrum account number.
+CUR = "111122223"
+PRI = "111144445"
 STREET = "Quuxberry"
 ADDRESS = "4321 Quuxberry Lane Apt 9B"
 
@@ -133,7 +134,7 @@ def good_press(page):
     page.blob = blob_result(data)
 
 
-MOB = "8350990000055555"
+MOB = "222255556"
 MOB_PHONE = "555-010-4477"
 NB = "\u00a0"
 MOBILE_DAYS = ["2026-09-13", "2026-08-13", "2026-07-13"]
@@ -645,7 +646,7 @@ class Families(unittest.TestCase):
         mismatch = list_answer()
         mismatch["data"]["viewer"]["account"]["statementList"]["statements"][0]["date"] = "2026-09-25T00:00:00-05:00"
         other_acct = list_answer(prior_account=PRI)
-        other_acct["data"]["viewer"]["account"]["statementList"]["accountTransfers"][0]["accountNumber"] = "8350990000000001"
+        other_acct["data"]["viewer"]["account"]["statementList"]["accountTransfers"][0]["accountNumber"] = "111177778"
         two_accts = list_answer()
         two_accts["data"]["viewer"]["account"]["statementList"]["statements"][1]["id"] = sid(PRI, "2026-08-26")
         digital = list_answer()
@@ -1784,7 +1785,7 @@ class MobileListing(WithFakeClick):
     def test_what_stops_the_mobile_list_keeps_the_internet_statements(self):
         two = Page(mobile=mobile_rows())
         two.links = lambda: [NB.join(["Mobile", "Account", "Number:", MOB]),
-                             "Mobile Account Number: 8350990000066666"] if two.where == "billing" else []
+                             "Mobile Account Number: 222288889"] if two.where == "billing" else []
         blank = Page(mobile=mobile_rows())
         blank.links = lambda: []
         elsewhere = Page(mobile=mobile_rows(), on_link=lambda p: setattr(p, "url", f"https://{HOST}/billing"))
@@ -2088,7 +2089,7 @@ class MobileTaking(WithFakeClick):
             self.take(page)
 
     def test_another_operations_failed_answer_is_only_logged(self):
-        bad = {"errors": [{"message": "Account 8350990000055555 not found"}]}
+        bad = {"errors": [{"message": "Account %s not found" % MOB}]}
         others = ("fetchMobileBillPresentmentCurrentStatement", "fetchMobileInsuranceInfo", "fetchCmsAlerts",
                   "somethingNew", "fetchMobile_" + MOB, "not a name; " + MOB)
 
@@ -2371,6 +2372,15 @@ class Source(unittest.TestCase):
         self.assertFalse(doc_types.should_skip(site.MOBILE_TITLE, rules))
         for title in ("Your Total So Far", "Order 1234567"):
             self.assertTrue(doc_types.should_skip(title, rules), title)
+
+    def test_no_file_holds_a_value_shaped_like_a_real_account_number(self):
+        """A Spectrum account number is a long run of digits. The invented
+        ones here are short and patterned, and no comment shows one."""
+        for path in [HERE / "spectrum_site.py", HERE / "spectrum_docs.py", Path(__file__), HERE / "README.md"]:
+            text = path.read_text(encoding="utf-8")
+            self.assertIsNone(re.search(r"(?<!\d)\d{13,}(?!\d)", text), path.name)
+            if path != Path(__file__):
+                self.assertIsNone(re.search(r"Account Number:? ?\d", text), path.name)
 
     def test_config(self):
         config = json.loads((HERE / "config.example.json").read_text())

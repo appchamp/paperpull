@@ -1836,7 +1836,7 @@ CHOOSE_MOBILE_STEP = "choose a Mobile statement"
 EXPAND_STEP = "expand the Mobile statement"
 _MONTH_WORDS = ("January|February|March|April|May|June|July|August|September|October|"
                 "November|December")
-# "Mobile Account Number: 8350..." with non-breaking spaces between the
+# "Mobile Account Number: <n>" with non-breaking spaces between the
 # words, read after normalized(), so any run of white space is one space.
 # The number may be shown whole or masked.
 _MOBILE_LINK_RE = re.compile(r"mobile account number ?:? ?([0-9*#\u2022xX. -]{0,40})")
