@@ -589,6 +589,17 @@ def test_statements_of_validates_every_entry():
             site.statements_of(bad, ACCT1)
 
 
+def test_one_account_listing_one_id_twice_stops_the_list():
+    """One id under two dates in one account's answer is one record's key
+    for two statements, so the second would be taken for the first."""
+    twice = {"accountDocumentLinks": {"STATEMENT": [entry(ACCT1, "2026-09-16", DOC1),
+                                                    entry(ACCT1, "2026-08-15", DOC1)]}}
+    with pytest.raises(site.ListStopped) as stop:
+        site.statements_of(twice, ACCT1)
+    assert "carry one id" in str(stop.value)
+    assert ACCT1 not in str(stop.value) and DOC1 not in str(stop.value)
+
+
 @pytest.mark.parametrize("resp", [
     Resp(f"{API}/v4/edocs/accounts/{ACCT1}/links", 302, "text/html", b"", "https://security.firsthorizon.com/"),
     Resp(f"{API}/v4/edocs/accounts/{ACCT1}/links", 401),
@@ -1270,6 +1281,96 @@ def test_a_list_that_stopped_partway_is_kept_and_never_called_whole(tmp_path):
     assert len(app.discovery.data) == 2
     assert listing.last(app) != listing.COMPLETE
     assert "First Horizon statement list stopped partway" in said.getvalue()
+
+
+def key_of(app, doc_id):
+    return [k for k, r in app.discovery.data.items() if r["document_id"] == doc_id][0]
+
+
+def without_times(records):
+    return {k: {f: v for f, v in r.items() if f != "updated_at"} for k, r in records.items()}
+
+
+@pytest.mark.parametrize("held_by", ["discovery", "progress"])
+def test_an_id_seen_again_under_another_date_stops_the_list_and_keeps_its_record(tmp_path, held_by):
+    """The record's key holds no date. Were the bank's statement id a place
+    in its list rather than the statement's own, a new statement would come
+    with an old one's id and be skipped as done. The list stops instead,
+    and the record stands as it was."""
+    import copy
+    from paperpull_core import listing
+    from paperpull_core.models import State
+    app = make_app(tmp_path, "--discover")
+    bank = Bank([acct1()])
+    wire(app, bank, tmp_path)
+    with redirect_stdout(io.StringIO()):
+        app.cmd_discover()
+    key = key_of(app, DOC1)
+    app.progress.update(key, dict(app.discovery.get(key), state=State.COMPLETED.value,
+                                  downloaded_ok=True))
+    if held_by == "progress":
+        # A discovery.json lost since, with the saved statement's record left.
+        del app.discovery.data[key]
+    before = copy.deepcopy((app.discovery.data, app.progress.data))
+    # The id moves on to a new statement, and the one it named is gone.
+    bank.accounts[0]["statements"] = [("2026-10-16", DOC1), ("2026-08-15", DOC2)]
+    app.write_failure = lambda *a, **k: None
+    with redirect_stdout(io.StringIO()) as said, pytest.raises(SystemExit) as stop:
+        app.cmd_discover()
+    assert stop.value.code == 1
+    assert "one statement id under two dates" in said.getvalue()
+    assert (app.discovery.data, app.progress.data) == before
+    assert listing.last(app) != listing.COMPLETE
+    for w in (ACCT1, DOC1):
+        assert w not in said.getvalue()
+
+
+def test_an_id_seen_again_under_its_own_date_changes_nothing(tmp_path):
+    from paperpull_core import listing
+    app = make_app(tmp_path, "--discover")
+    bank = Bank([acct1(), acct2()])
+    wire(app, bank, tmp_path)
+    with redirect_stdout(io.StringIO()):
+        app.cmd_discover()
+    before = without_times(app.discovery.data)
+    with redirect_stdout(io.StringIO()):
+        assert app.cmd_discover() == 0
+    assert without_times(app.discovery.data) == before
+    assert listing.last(app) == listing.COMPLETE
+
+
+def test_a_record_kept_with_no_date_is_given_the_listed_one(tmp_path):
+    """An older record with no date is filled in, never taken for a
+    statement of another date."""
+    from paperpull_core import listing
+    from paperpull_core.models import State
+    app = make_app(tmp_path, "--discover")
+    bank = Bank([acct1()])
+    wire(app, bank, tmp_path)
+    with redirect_stdout(io.StringIO()):
+        app.cmd_discover()
+    key = key_of(app, DOC1)
+    app.discovery.data[key]["date"] = ""
+    app.progress.update(key, dict(app.discovery.get(key), state=State.COMPLETED.value))
+    with redirect_stdout(io.StringIO()):
+        assert app.cmd_discover() == 0
+    assert app.discovery.get(key)["date"] == "2026-09-16"
+    assert listing.last(app) == listing.COMPLETE
+
+
+def test_an_account_listing_one_id_twice_stops_discovery(tmp_path):
+    """What the accounts walked before it listed is kept."""
+    from paperpull_core import listing
+    app = make_app(tmp_path, "--discover")
+    bank = Bank([acct2(), acct1(statements=[("2026-09-16", DOC1), ("2026-08-15", DOC1)])])
+    wire(app, bank, tmp_path)
+    app.write_failure = lambda *a, **k: None
+    with redirect_stdout(io.StringIO()) as said, pytest.raises(SystemExit) as stop:
+        app.cmd_discover()
+    assert stop.value.code == 1
+    assert "carry one id" in said.getvalue()
+    assert {r["document_id"] for r in app.discovery.data.values()} == {DOC3, DOC4}
+    assert listing.last(app) != listing.COMPLETE
 
 
 def test_the_run_stops_itself_before_the_bank_session_runs_out(tmp_path):

@@ -433,7 +433,8 @@ class App:
 
     def _record_rawdoc(self, r, source_url: str) -> int:
         """Record one statement (a RawDoc) the bank listed.
-        Returns 1 if new."""
+        Returns 1 if new. Raises ListStopped, with nothing written, for an
+        id a record holds under another date."""
         title = re.sub(r"\s+", " ", (r.title or "")).strip()
         if not title:
             return 0
@@ -460,6 +461,13 @@ class App:
                        account=(getattr(r, "account", "") or "").strip(),
                        document_id=(getattr(r, "document_id", "") or "").strip(),
                        account_id=getattr(r, "account_id", "") or "")
+        # The key holds no date. Were the bank's id a place in its list rather
+        # than the statement's own, a new statement would come with an old
+        # one's id and be skipped as done. So an id a record already holds
+        # under another date stops the list, with nothing written, and the
+        # record stands as it was. A record kept with no date is filled below.
+        if any(held != doc.date for held in self._held_dates(doc.key)):
+            raise site.ListStopped("the bank showed one statement id under two dates")
         if self.discovery.get(doc.key) is None:
             rec = doc.to_dict()
             rec["state"] = State.DISCOVERED.value
@@ -475,8 +483,23 @@ class App:
         # behind under the old one.
         if doc.account:
             refresh["account"] = doc.account
+        if doc.date and not str(self.discovery.get(doc.key).get("date") or "").strip():
+            refresh["date"] = doc.date
         self.discovery.update(doc.key, refresh, save=False)
         return 0
+
+    def _held_dates(self, key: str) -> set:
+        """The dates the records under this key hold, in discovery and in
+        progress, leaving out an empty one. Progress counts too, so a
+        statement saved before is never skipped for another one when
+        discovery.json has lost its record."""
+        held = set()
+        for store in (self.discovery, self.progress):
+            rec = store.get(key)
+            date = str(rec.get("date") or "").strip() if isinstance(rec, dict) else ""
+            if date:
+                held.add(date)
+        return held
 
     def cmd_discover(self, quiet: bool = False) -> int:
         # A listing that stops on the way, however it stops, is noted as one
@@ -491,6 +514,7 @@ class App:
         # or read; a blank tab of this run's own is opened there. Only an
         # account's panel is pressed, open, never closed.
         self.check_session(page)
+        stopped = None
         try:
             docs = site.collect_download_docs(page, self.run)
         except site.SessionExpired:
@@ -500,17 +524,24 @@ class App:
         except site.ListStopped as stop:
             # What was listed is kept, and the listing stays noted as one
             # that stopped, so neither this run nor a Resume calls it whole.
-            for r in stop.docs:
-                self._record_rawdoc(r, site.BILLING_URL)
-            self.discovery.save()
-            print(f"\n!! The First Horizon statement list stopped partway, since {stop}.")
-            print(f"   The {len(stop.docs)} statement(s) listed before it stopped are kept,")
+            docs, stopped = stop.docs, stop
+        kept = 0
+        try:
+            for r in docs:
+                n_new += self._record_rawdoc(r, site.BILLING_URL)
+                kept += 1
+        except site.ListStopped as stop:
+            # An id a record holds under another date. That record stands as
+            # it was, what was listed before it is kept, and the list stops
+            # the same way.
+            stopped = stop
+        self.discovery.save()
+        if stopped is not None:
+            print(f"\n!! The First Horizon statement list stopped partway, since {stopped}.")
+            print(f"   The {kept} statement(s) listed before it stopped are kept,")
             print("   and this run stops rather than call the list read. Run it again.")
             self.write_failure("read the documents list", "the list stopped partway")
             raise SystemExit(1)
-        for r in docs:
-            n_new += self._record_rawdoc(r, site.BILLING_URL)
-        self.discovery.save()
         log.info("statements: %d listed, %d new", len(docs), n_new)
 
         # The whole list is in, and only now may a Resume that carries on

@@ -74,7 +74,9 @@ KNOWN CEILINGS (left until a live run shows otherwise)
   * A panel expanded when the page loads is bound to its answer only when
     the dates make the pairing unique; otherwise the list stops. A panel is
     never collapsed to recover.
-  * Two statements of one account on one date stop the list.
+  * Two statements of one account on one date, or under one id, stop the
+    list, and so does an id a later listing shows under another date than
+    its record holds (firsthorizon_docs).
   * Only statements. Tax forms are online only once the holder enrolls in
     online tax statements, which this app never does.
   * The bank ends an idle session after ten minutes; a run stops itself
@@ -780,8 +782,10 @@ class Statement:
 
 def statements_of(got, account_id: str) -> List[Statement]:
     """One account's statements from its links answer. Not the signed-in
-    shape raises SessionExpired; an entry this cannot read, one for another
-    account, or two of one date stop the list."""
+    shape raises SessionExpired. An entry this cannot read, one for another
+    account, or two of one date or of one id stop the list. A record's key
+    is the account and the id alone, so two statements under one id would
+    be one record."""
     if not isinstance(got, dict) or not isinstance(got.get("accountDocumentLinks"), dict):
         raise SessionExpired("the documents answer is not the signed-in one")
     entries = got["accountDocumentLinks"].get("STATEMENT", [])
@@ -812,7 +816,10 @@ def statements_of(got, account_id: str) -> List[Statement]:
             raise ListStopped("a statement's address is not one this can read")
         if any(s.date == iso for s in out):
             raise ListStopped("two statements of one account carry one date")
-        out.append(Statement(iso, file.rsplit("/", 1)[-1], file))
+        doc_id = file.rsplit("/", 1)[-1]
+        if any(s.doc_id == doc_id for s in out):
+            raise ListStopped("two statements of one account carry one id")
+        out.append(Statement(iso, doc_id, file))
     return out
 
 

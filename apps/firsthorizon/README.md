@@ -59,6 +59,8 @@ open. Not yet seen:
 
 - More than one account on one sign-in.
 - Two statements of one account on one date, which stop the list.
+- One statement id under two dates, in one listing or from one listing to
+  the next, which also stops the list, leaving the saved record as it was.
 - Tax forms. They are online only once the account holder enrolls in
   online tax statements, a decision this app never makes for you. Until
   then there are none to download.
