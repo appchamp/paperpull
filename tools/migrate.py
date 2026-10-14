@@ -167,10 +167,7 @@ PROVIDER_SKIP_FIELDS = {"Robinhood": ("undated_key", "source_url", "category", "
                                       "title", "account", "pdf_sha256", "text_sha256"),
                         "American Family": ("pdf_sha256", "date", "account"),
                         "AT&T": ("category", "date", "account", "pdf_size", "pdf_pages"),
-                        "Target": ("invoices",),
-                        # Rename tells two accounts' files apart by it, and the
-                        # record's account_ref never travels (PROVIDER_PRIVATE_FIELDS).
-                        "Chase Business": ("account_digest",)}
+                        "Target": ("invoices",)}
 
 
 def _optum_form(rec: dict) -> bool:
@@ -214,13 +211,14 @@ KEY_FIELDS = ("category", "doc_type", "date", "title", "account", "listed_accoun
 # export, full or --minimal. Chase Business mints its account ids and its
 # statement ids anew each sign-in, so its records keep account_ref and
 # documentId empty, and both fields are left out all the same so no record
-# an earlier build wrote can carry one. The key and the record's own
-# account_digest hold a short unsalted digest of the account's class and
-# last four, never the digits, so a moved history still skips the statement
-# and Rename still tells two accounts' files apart
-# (chasebusiness_docs.Document.key and told_apart_by). The digest is no
-# secret, since a last four has only ten thousand values. Checked by
-# core/tests/test_migrate_tool.py.
+# an earlier build wrote can carry one. The key holds a short unsalted
+# digest of the account's class and last four, never the digits, so a moved
+# history still skips the statement, full or --minimal
+# (chasebusiness_docs.Document.key). The record's own account_digest is read
+# only by Rename, to tell two accounts' files apart (told_apart_by), so a
+# full export keeps it and --minimal leaves it out like any Rename-only
+# field. The digest is no secret, since a last four has only ten thousand
+# values. Checked by core/tests/test_migrate_tool.py.
 PROVIDER_PRIVATE_FIELDS = {"Chase Business": ("account_ref", "document_id")}
 
 # Chase has kept an account's last four in its key since 0.17.1 whatever its
