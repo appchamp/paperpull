@@ -1488,16 +1488,29 @@ class Orchestrator(WithFakeClick):
         self.assertEqual(page.presses, 0)
         self.assertEqual(app.progress.data, {})
 
-    def test_no_census_of_the_pages_requests(self):
-        src = (HERE / "spectrum_docs.py").read_text()
-        tree = ast.parse(src)
-        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
-            n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-        self.assertNotIn("Requests", names)
-        self.assertNotIn("api_census", src)
-        self.assertNotIn("_requests", names)
+    def test_the_census_describes_only_the_sites_own_answers(self):
+        """The request census every app keeps, started on the run's page and
+        bound to this app's own host. The page's GraphQL answers come from
+        apis.spectrum.net and are only counted, never described."""
+        from paperpull_core.api_census import Requests
         app = make_app(self.tmp, "--all")
-        self.assertFalse(hasattr(app, "requests"))
+        page = Page()
+        app._work_page = page
+        census = app.requests
+        self.assertIsInstance(census, Requests)
+        self.assertIs(app.requests, census, "made once")
+        self.assertEqual(len(page.listeners.get("response", [])), 1)
+
+        def answer(url, body):
+            return SimpleNamespace(url=url, status=200, headers={"content-type": "application/json"},
+                                   request=SimpleNamespace(method="POST"), json=lambda: body)
+        page.emit("response", answer(GRAPH, list_answer()))
+        page.emit("response", answer(f"https://{HOST}/api/billing/summary", {"accountNumber": CUR}))
+        report = census.report()
+        self.assertEqual((report["counts"]["provider"], report["counts"]["elsewhere"]), (1, 1))
+        self.assertEqual([e["path"] for e in report["seen"]], ["/api/billing/summary"])
+        self.assertNotIn(CUR, json.dumps(report))
+        self.assertNotIn("Account=", json.dumps(report))
 
     def test_a_download_again_hands_over_the_statements_own_copy(self):
         app = make_app(self.tmp, "--all", "--redownload")

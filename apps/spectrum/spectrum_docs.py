@@ -42,6 +42,7 @@ from paperpull_core import pressing
 from paperpull_core import renaming
 from paperpull_core import saved_copy
 from paperpull_core import tabs
+from paperpull_core.api_census import Requests
 from paperpull_core.journal import Journal
 from paperpull_core.run_reporting import report_run_result
 
@@ -221,6 +222,7 @@ def family_summary(summary: str, document_id: str) -> str:
 
 class App:
     _journal = None
+    _requests = None
 
     def __init__(self, args):
         self.args = args
@@ -344,9 +346,7 @@ class App:
         capture.clear_archived_copies(
             self._dl_dir, [r.get("pdf_path") for r in self.progress.data.values()
                            if isinstance(r, dict)])
-        # No census of the page's requests is started here, unlike other
-        # apps: it reads response headers, and this app reads nothing of a
-        # request or response but what spectrum_site.Watch names.
+        self.requests
         return self._work_page
 
     def close(self):
@@ -895,6 +895,20 @@ class App:
         print(f"\nVerified {len(rows)} index rows; {bad} problem(s).")
 
     @property
+    def requests(self):
+        """Which of the provider's own calls happened, and what came back.
+
+        Made on first use like the journal, and started at once, because
+        it only sees what arrives after it starts listening. Only answers
+        from www.spectrum.net are described, as shapes and counts, and the
+        page's GraphQL answers from apis.spectrum.net are only counted
+        (paperpull_core.api_census)."""
+        if self._requests is None:
+            self._requests = Requests(getattr(self, "_work_page", None), site.is_safe_url)
+            self._requests.start()
+        return self._requests
+
+    @property
     def journal(self):
         """The run's journal, made the first time anything writes to it.
 
@@ -943,7 +957,7 @@ class App:
             page=getattr(self, "_work_page", None),
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
-            requests=None,
+            requests=self._requests,
             provider='Spectrum', text=text, extra=extra)
         if not path:
             return
@@ -978,7 +992,7 @@ class App:
             page=getattr(self, "_work_page", None),
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
-            requests=None,
+            requests=self._requests,
             provider='Spectrum')
 
     def cmd_diagnose(self):
