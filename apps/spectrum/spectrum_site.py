@@ -2,10 +2,14 @@
 
 When Spectrum changes its billing pages, repair this file only.
 
-STATUS: built from the account owner's read-only survey of 2026-10-12
-(signed in, one press of View Printable Statement). The live run of
-2026-10-12/13 saved the newest statement and refused the rest (see below).
-Choosing an older statement in page is not yet run live.
+STATUS. Built from the account owner's read-only survey of 2026-10-12
+(signed in, one press of View Printable Statement). An early live run of
+2026-10-12/13 saved the newest statement and refused the rest (see below),
+which is why an older statement is chosen in page. Run that way on the
+owner's account, Discover listed 13 statements of two accounts, Pilot
+saved the newest, and Run All saved 10 more, each printing its own date,
+and left the two statements of 2026-02-26 for a manual save. Mobile is
+run live only as far as MOBILE says.
 
   * The site is an Angular app on https://www.spectrum.net. All billing data
     comes from the page's own POSTs to https://apis.spectrum.net/selfservice/graph
@@ -60,8 +64,12 @@ Choosing an older statement in page is not yet run live.
     statement kept earlier in this process or a PDF already in the folder.
     Anything else stops the run.
 
-MOBILE (survey of 2026-10-13, read only, not yet run live): Spectrum
-Mobile is a separate bill, and its site has no PDF of a Mobile statement.
+MOBILE. Built from the survey of 2026-10-13. Spectrum Mobile is a separate
+bill, and its site has no PDF of a Mobile statement. The live run of
+2026-10-13 listed all 12 Mobile statements and every row press landed on
+its statement's page, and the section check was then changed to the page
+as it was seen live. A whole Mobile run since that change has not been
+reported.
   * Billing (/billing, opened by its address) draws, under Statements, one
     link "Mobile Account Number: <n>" (an anchor with role=link, href
     "javascript:void(0)", non-breaking spaces between its words). Pressing
@@ -1452,8 +1460,8 @@ def choose_in_page(page, entry: Entry, entries: List[Entry], dl_dir, trace) -> b
         _note(trace, note="the row changed before the press")
         return False
     if not is_safe_href(href):
-        # The address itself is never logged: it may carry the statement id.
-        log.info("the statement dated %s was not chosen: the guard refused its row's address", entry.date)
+        # The address itself is never logged, since it may carry the statement id.
+        log.info("the statement dated %s was not chosen, since the guard refused its row's address", entry.date)
         _note(trace, note="the guard refused the row's address")
         return False
     if not dl_dir:
@@ -1466,7 +1474,7 @@ def choose_in_page(page, entry: Entry, entries: List[Entry], dl_dir, trace) -> b
         popups.append(1)
 
     # Observation only: a download the press began is counted and
-    # cancelled, and its file, if the browser had already written one,
+    # canceled, and its file, if the browser had already written one,
     # deleted. Nothing of it is read or saved.
     def on_download(download):
         downloads.append(1)
@@ -1693,7 +1701,7 @@ def _press_for_statement(page, el, entry: Entry, entries: List[Entry], out_path:
         popups.append(1)
 
     # Observation only: a download the press began is counted and
-    # cancelled, and its file, if the browser had already written one,
+    # canceled, and its file, if the browser had already written one,
     # deleted. Nothing of it is read or saved.
     def on_download(download):
         downloads.append(1)
@@ -2116,7 +2124,7 @@ class MobileWatch(Watch):
 
 class _Strays:
     """Tabs, popups and downloads a press brings. A download is only counted,
-    cancelled and deleted, and a file it left in the run's folder removed.
+    canceled and deleted, and a file it left in the run's folder removed.
     Nothing of either is read or kept."""
 
     def __init__(self, page, dl_dir):

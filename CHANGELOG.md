@@ -17,13 +17,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   only when it matches the PDF Spectrum sent for that statement, prints the
   statement's date and is not a copy of one already saved. Two statements
   of one date, one per account after a transfer, are left for a manual
-  save. No tab is opened and nothing is downloaded through your browser;
-  if the browser will not take the run's own download folder, nothing is
-  pressed and the run stops. A statement whose button Spectrum has turned
-  off is left for the next run. The app never pays and never touches Auto
-  Pay, paperless, equipment, service or settings, and account numbers and
-  the service address stay out of every file and log. Built from the
-  account owner's survey; a full live run is still to come.
+  save. No tab is opened and nothing is downloaded through your browser,
+  and if the browser will not take the run's own download folder, nothing
+  is pressed and the run stops. A statement whose button Spectrum has
+  turned off is left for the next run. The app never pays and never
+  touches Auto Pay, paperless, equipment, service or settings, and
+  account numbers and the service address stay out of every file and log.
+  On the account owner's own account Discover listed 13 statements of two
+  accounts, Pilot saved the newest and Run All saved 10 more.
 - **Spectrum Mobile statements, from the same app.** Spectrum has no PDF
   of a Mobile statement, so for each finished one the app opens Billing,
   presses its "Mobile Account Number" link, presses the statement's own
@@ -33,8 +34,9 @@ All notable changes to PaperPull are recorded here. Versioning follows
   way, the running total and device orders are not listed, and the page's
   own Print, Auto Pay, payments, device and settings controls are never
   pressed. The Mobile account number, phone numbers and amounts stay out
-  of every file name, record and log. Built from a survey; the live run
-  is still to come.
+  of every file name, record and log. A live run listed all 12 Mobile
+  statements and opened each one's own page, and a whole Mobile run is
+  still to come.
 
 ## [0.51.0] - 2026-10-14
 

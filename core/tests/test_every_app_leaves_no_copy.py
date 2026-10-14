@@ -547,7 +547,7 @@ TAKES_NOTHING = {
     "spectrum": "every Internet statement is the PDF in the page's own GraphQL answer, matched to "
                 "the Blob the page made of it, and every Mobile statement is its page printed with "
                 "receipt_pdf.print_page_to_pdf; nothing is downloaded through the browser, and a "
-                "download a press began is only counted, cancelled and deleted (see observes_only)",
+                "download a press began is only counted, canceled and deleted (see observes_only)",
 }
 
 
