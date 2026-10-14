@@ -26,6 +26,22 @@ All notable changes to PaperPull are recorded here. Versioning follows
   numbers and balances are kept out of every log, diagnostic file and file
   name. A full run on a contributor's checking account saved all 24
   statements online, one in Pilot and 23 in Run All.
+- **Chase Business statements from the business document center.** A new
+  `chasebusiness` app saves the monthly statements of the business accounts
+  on a Chase business profile, up to the seven years Chase keeps online,
+  filed as Business Checking, Business Card or Business Debit. It chooses
+  each account in the document center's menu, opens Statements, picks each
+  year and saves a statement through its row's own save menu and Save as
+  PDF. Those six kinds of control are the only ones it ever presses, and
+  payments, transfers, wires, Zelle, settings and sign-out are never
+  touched. A run stops on its own when Chase shows its session timeout or
+  signs you out, and keeps what it saved. Account names and numbers stay
+  out of every file name, log and diagnostic file. Chase gives accounts
+  and statements new ids at each sign-in, so a statement is known by its
+  account's class and a short digest of its last four, which tells two
+  accounts apart but is no secret, since a last four is easy to guess
+  from it. Verified on one profile, where it saved 10 checking statements
+  on a full run. A business card's statements are untested.
 
 ## [0.51.0] - 2026-10-14
 
