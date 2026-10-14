@@ -592,8 +592,9 @@ class Orchestrator(unittest.TestCase):
         first = sorted(app._select(), key=lambda d: d.key != gone)
         self.assertEqual(first[0].key, gone)
         valid = SimpleNamespace(ok=True, reason="", size_bytes=3009, page_count=1)
-        with mock.patch.object(docs.receipt_pdf, "validate_pdf", lambda *a, **k: valid),                 redirect_stdout(io.StringIO()):
-            app.process(first)
+        with mock.patch.object(docs.receipt_pdf, "validate_pdf", lambda *a, **k: valid):
+            with redirect_stdout(io.StringIO()):
+                app.process(first)
         self.assertEqual(app.progress.get(gone)["state"], State.NEEDS_MANUAL_REVIEW.value)
         self.assertEqual((app.stats["manual_review"], app.stats["tax_documents"]), (1, 3))
         self.assertNotIn((T_ACCT, 0), pages[0].context.request.asked)
