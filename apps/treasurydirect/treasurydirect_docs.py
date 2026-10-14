@@ -550,6 +550,11 @@ class App:
         if state in (State.COMPLETED.value, State.PDF_VERIFIED.value,
                      State.NO_RECEIPT_AVAILABLE.value, State.CANCELED.value):
             return True
+        # A taxable year's 1099 set aside for the account holder is told
+        # once. Later runs leave it as done, the person may have saved it
+        # by hand already.
+        if self._set_aside(doc, rec):
+            return True
         # a review copy counts only if its PDF is still present and valid;
         # a quarantined / failed one should be retried.
         if state == State.NEEDS_MANUAL_REVIEW.value:
@@ -557,6 +562,16 @@ class App:
             return bool(p and Path(p).exists()
                         and receipt_pdf.validate_pdf(Path(p), self.config["min_pdf_bytes"]).ok)
         return False
+
+    @staticmethod
+    def _set_aside(doc: Document, rec: dict) -> bool:
+        """Whether the record is a taxable year's 1099 set aside, with no
+        file, for the account holder to save by hand. This build never
+        presses a tax year's link (site.TAX_PAGES_SURVEYED), so one is only
+        ever told, and a build that takes 1099s takes it again."""
+        return (doc.document_id.endswith("-1099") and not site.TAX_PAGES_SURVEYED
+                and (rec or {}).get("state") == State.NEEDS_MANUAL_REVIEW.value
+                and not (rec or {}).get("pdf_path"))
 
     # -- processing --------------------------------------------------------
 
@@ -572,7 +587,10 @@ class App:
             print(f"\n[{i}/{len(docs)}] {doc.date or '(no date)'}  "
                   f"{doc.category}  {doc.summary}")
             if self._already_done(doc):
-                print("  Already downloaded and verified - skipping.")
+                if self._set_aside(doc, self.progress.get(doc.key)):
+                    print("  Listed on an earlier run for you to save by hand - skipping.")
+                else:
+                    print("  Already downloaded and verified - skipping.")
                 self.stats["skipped_completed"] += 1
                 continue
             if site.is_stale(doc.document_id):

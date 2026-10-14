@@ -823,6 +823,33 @@ class Accounts(Pressing):
         self.assertEqual(keys, {f"id:{digest}:{d.document_id}" for d in got})
 
 
+class Repeats(Pressing):
+    """What a run has told once is not told again on every later run."""
+
+    def test_a_taxable_year_set_aside_is_recorded_once(self):
+        tmp = tempfile.mkdtemp()
+        tab = Page(pages={"md.DisplayManageDirect": lambda: managedirect(TAXABLE_2025)})
+        counts, said = [], []
+        for _ in range(3):
+            app = make_app(tmp, "--all")
+            app.page = lambda: tab
+            app._on_its_site = lambda: tab
+            app._delay = lambda *a, **k: None
+            with redirect_stdout(io.StringIO()) as out:
+                app.cmd_discover(quiet=True)
+                app.process([d for d in app._select() if d.document_id.endswith("-1099")])
+            app.progress.save()
+            rows = [r for r in app.index_csv.read_all() if "1099" in r.get("Document Title", "")]
+            counts.append((app.stats["manual_review"], len(rows)))
+            said.append(out.getvalue())
+        self.assertEqual(counts, [(1, 1), (0, 1), (0, 1)])
+        self.assertIn("save by hand", said[-1])
+        self.assertFalse(any("Year" in p or "1099" in p for p in tab.pressed))
+        app = make_app(tmp, "--resume")
+        left = [d for d in app._select() if not app._already_done(d)]
+        self.assertFalse([d for d in left if d.document_id.endswith("-1099")])
+
+
 class OwnBrowser(unittest.TestCase):
     """Settings with no cdp_url open a browser of the app's own, and only
     through the core, which says so (#90). The sign-in opens on the port
