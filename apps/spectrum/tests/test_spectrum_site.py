@@ -1461,16 +1461,36 @@ class Orchestrator(WithFakeClick):
             app.cmd_discover()
         self.assertEqual(len(app.discovery.data), 5)
         self.assertIn("stopped partway", said.getvalue())
-        # Without the confirmed folder nothing is pressed for Mobile, and the
-        # Internet discovery ends as it did before.
+        # Without the confirmed folder nothing is pressed for Mobile, the
+        # Internet statements are kept, and the list is not called whole.
         tmp = tempfile.mkdtemp()
         app = make_app(tmp, "--discover")
         page = Page(mobile=mobile_rows())
         app.page = lambda: page
-        with redirect_stdout(io.StringIO()):
+        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit):
             app.cmd_discover()
         self.assertEqual(page.clicks, [])
         self.assertEqual(len(app.discovery.data), 5)
+        self.assertIn("stopped partway", said.getvalue())
+
+    def test_a_discovery_that_left_mobile_unread_is_never_called_whole(self):
+        """Resume carries on from a listing called whole as if it held every
+        statement, so one whose Mobile list was never read, or never settled,
+        stays noted as one that stopped."""
+        from paperpull_core import listing
+
+        def never_drawn(p):
+            p.where, p.url, p.mobile = "mlist", f"https://{HOST}{site.MOBILE_LIST_PATH}", []
+        for staged, page in ((False, Page(mobile=mobile_rows())),
+                             (True, Page(mobile=mobile_rows(), on_link=never_drawn))):
+            app = make_app(tempfile.mkdtemp(), "--discover")
+            app._staged = staged
+            app._dl_dir.mkdir(parents=True)
+            app.page = lambda page=page: page
+            with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                app.cmd_discover()
+            self.assertEqual(listing.last(app), listing.STOPPED, staged)
+            self.assertEqual(len(app.discovery.data), 5, "the Internet statements are kept")
 
     def test_discovery_opens_statements_before_it_asks_about_the_session(self):
         """With no Spectrum tab of the person's open, page() hands over a new
@@ -1792,11 +1812,43 @@ class MobileListing(WithFakeClick):
         self.assertIn(MOB, site.private_words())
         self.assertEqual(page.live_listeners(), 0)
 
-    def test_without_the_folder_the_internet_list_is_read_as_before(self):
+    def test_without_the_folder_the_list_stops_holding_the_internet_statements(self):
         page = Page(mobile=mobile_rows())
-        got = site.collect_download_docs(page, dl_dir=None)
-        self.assertEqual(len(got), 5)
+        with self.assertRaises(site.ListStopped) as stop:
+            site.collect_download_docs(page, dl_dir=None)
+        self.assertEqual(len(stop.exception.docs), 5)
         self.assertEqual((page.clicks, page.gotos), ([], [site.STATEMENTS_URL]))
+        self.assertIn("download folder", str(stop.exception))
+
+    def test_a_mobile_list_that_never_settles_is_not_read(self):
+        """Rows that never draw, or keep changing, are a list not read, never
+        a list of no statements."""
+        def never_drawn(p):
+            p.where, p.url, p.mobile = "mlist", f"https://{HOST}{site.MOBILE_LIST_PATH}", []
+
+        def growing(p):
+            p.where, p.url = "mlist", f"https://{HOST}{site.MOBILE_LIST_PATH}"
+            grown = []
+
+            def rows():
+                from datetime import date, timedelta
+                grown.append(mobile_row((date(2020, 1, 13) + timedelta(days=len(grown))).isoformat()))
+                return list(grown)
+            p.links = lambda: rows() if p.where == "mlist" else []
+
+        def only_under_way(p):
+            p.where, p.url = "mlist", f"https://{HOST}{site.MOBILE_LIST_PATH}"
+            p.mobile = mobile_rows([])[:1]
+        for on_link in (never_drawn, growing):
+            page = Page(mobile=mobile_rows(), on_link=on_link)
+            with self.assertRaises(site.ListStopped) as stop:
+                site.collect_download_docs(page, dl_dir=self.tmp)
+            self.assertEqual(len(stop.exception.docs), 5, on_link.__name__)
+            self.assertEqual(page.live_listeners(), 0)
+        # A list that settles with only the statement under way has no
+        # finished statement yet, which is a whole list.
+        got = site.collect_download_docs(Page(mobile=mobile_rows(), on_link=only_under_way), dl_dir=self.tmp)
+        self.assertEqual(len(got), 5)
 
     def test_no_mobile_account_is_no_mobile_statement(self):
         page = Page()

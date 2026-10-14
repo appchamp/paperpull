@@ -518,7 +518,8 @@ class App:
         self.check_session(page)
         try:
             # The Mobile list is reached by a press, which waits for the
-            # browser to have taken this run's download folder.
+            # browser to have taken this run's download folder. Without it
+            # the list stops partway, holding the Internet statements.
             docs = site.collect_download_docs(page, self._dl_dir if self._staged else None)
         except site.SessionExpired:
             self.session_ended()

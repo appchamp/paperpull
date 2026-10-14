@@ -71,7 +71,9 @@ Mobile is a separate bill, and its site has no PDF of a Mobile statement.
     Auto Pay: ..." with no year), "Your Total So Far ...", the finished
     statements "Statement <Month> <D>, <YYYY>" and an "Order <n> <date>"
     row. Only the finished statements are listed (mobile_days). A Mobile
-    statement is known as "mobile:YYYY-MM-DD".
+    statement is known as "mobile:YYYY-MM-DD". Rows that do not draw and
+    hold still, and a run whose download folder the browser did not take,
+    stop the list, which is then never called whole.
   * Pressing a finished statement's row moves the page to
     /mobile-billing/statement-history?statementId=<id>&newStatementVersion=..
     The page reads "Statement Details", the date ("AUGUST 13, 2026") and
@@ -1074,19 +1076,19 @@ def collect_download_docs(page, dl_dir=None, mobile: bool = True) -> List[RawDoc
     then, with `mobile`, every finished Mobile statement. The Internet list
     presses nothing. The Mobile list is reached by pressing Billing's
     "Mobile Account Number" link (open_mobile_list), which needs the run's
-    confirmed download folder `dl_dir`. Without it, Mobile is left unread
-    and the Internet statements are returned as before. A Mobile list that
-    stops raises ListStopped holding the Internet statements read, so they
-    are kept and the list is not called whole."""
+    confirmed download folder `dl_dir`. Without it, Mobile is left unread,
+    so the list raises ListStopped holding the Internet statements, as a
+    Mobile list that stops does. They are kept and the list is never
+    called whole while a part of it was not read."""
     internet = read_statement_list(page)
     if not mobile:
         return raw_docs(internet)
     if not dl_dir:
-        # The Internet list is read as before. Mobile is left unread, since
-        # no press is made without the folder, and the downloads stop the
-        # run for the same reason.
+        # No press is made without the folder, so the Mobile list is not
+        # read, and a list with a part unread is not the whole list.
         log.info("the download folder was not confirmed, so the Mobile statements were not opened")
-        return raw_docs(internet)
+        raise ListStopped("the browser did not take this run's download folder, so the Mobile "
+                          "statements were not read", raw_docs(internet))
     try:
         found = mobile_entries(page, dl_dir)
     except ListStopped as stop:
@@ -2182,9 +2184,10 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
     list, and return the dates of its finished statements (mobile_days).
     None, nothing pressed, when Billing draws no such link, as for an
     Internet-only customer. ListStopped, nothing pressed, for a Billing page
-    that did not draw its statements or draws two Mobile links, for a link
-    whose href leads anywhere (is_void_href), and after
-    the press for a list that did not settle. A tab, popup or download the
+    whose account links did not settle, that did not draw its statements or
+    draws two Mobile links, for a link whose href leads anywhere
+    (is_void_href), and after the press for a list whose statement rows did
+    not draw and hold still, since what it shows then is not all of it. A tab, popup or download the
     press brought stops the run. SessionExpired and OtpRequired propagate."""
     if not dl_dir:
         raise no_folder()
@@ -2210,8 +2213,10 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
         seen["still"] = seen["still"] + 1 if now == seen["links"] else 0
         seen["links"] = now
         return (bool(mobile) or internet) and seen["still"] >= 3
-    _wait_for(page, drawn)
+    settled = _wait_for(page, drawn)
     check_page(page)
+    if not settled:
+        raise ListStopped("Billing's account links did not settle")
     texts = _link_texts(page, MOBILE_LINK) or []
     mobile = [i for i, t in enumerate(texts) if mobile_account_number(t) is not None]
     for i in mobile:
@@ -2240,6 +2245,7 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
     session = MobileWatch(page)
     strays = _Strays(page, dl_dir)
     pressed = False
+    settled = False
     try:
         session.start()
         strays.start()
@@ -2256,7 +2262,7 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
             rows["still"] = rows["still"] + 1 if n == rows["n"] else 0
             rows["n"] = n
             return n > 0 and rows["still"] >= 3
-        _wait_for(page, listed)
+        settled = _wait_for(page, listed)
         why = strays.found()
     except (SessionExpired, OtpRequired, pressing.Stop):
         raise
@@ -2277,9 +2283,13 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
         raise ListStopped(why)
     if not _on_path(page, MOBILE_LIST_PATH):
         raise ListStopped("the Mobile link did not open the Mobile statements")
+    if not settled:
+        raise ListStopped("the Mobile statement rows did not draw and hold still")
     texts = _link_texts(page, MOBILE_ROW)
     if texts is None:
         raise ListStopped("the Mobile statement rows could not be read")
+    if sum(1 for t in texts if _flat(t).startswith("Statement")) != rows["n"]:
+        raise ListStopped("the Mobile statement rows changed as they were read")
     return mobile_days(texts)
 
 
