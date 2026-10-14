@@ -198,7 +198,7 @@ def test_a_history_v051_wrote_is_not_made_again(tmp_path):
     history = {}
     for key, rec in V051_RECORD.items():
         history[key] = dict(rec, pdf_path=str(out / "Statements" / rec["pdf_filename"]),
-                            discovered_at="2026-09-19T10:00:00", updated_at="2026-09-19T10:00:00")
+                            discovered_at="2026-07-02T10:00:00", updated_at="2026-07-02T10:00:00")
     (out / "progress.json").write_text(json.dumps(history), encoding="utf-8")
     (out / "discovery.json").write_text(json.dumps(history), encoding="utf-8")
     page = OnePlanPage(have={Q2, Q1, Q4})
