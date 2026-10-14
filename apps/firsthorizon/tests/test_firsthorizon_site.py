@@ -1225,6 +1225,53 @@ def test_pilot_gate():
     assert json.loads((HERE / "config.example.json").read_text())["pilot_count"] == 1
 
 
+def test_a_browser_of_its_own_opens_through_the_core_and_signs_in_on_the_example_port(
+        tmp_path, monkeypatch):
+    """With no cdp_url a run opens its own browser through the core, which
+    says so, never straight through Playwright (#90), and the sign-in falls
+    back to the port config.example.json names."""
+    import playwright.sync_api
+    app = make_app(tmp_path, "--discover")
+    app.config.update({"cdp_url": "", "profile_dir": str(tmp_path / "profile")})
+    seen = []
+
+    class Ctx:
+        def set_default_timeout(self, ms):
+            pass
+
+        def on(self, ev, f):
+            pass
+
+    class Chromium:
+        def launch_persistent_context(self, user_data_dir, **kw):
+            seen.append("playwright")
+            return Ctx()
+
+    class PW:
+        chromium = Chromium()
+
+        def start(self):
+            return self
+
+        def stop(self):
+            pass
+
+    def own(chromium, user_data_dir, **kw):
+        seen.append("core")
+        return chromium.launch_persistent_context(user_data_dir, **kw)
+    monkeypatch.setattr(playwright.sync_api, "sync_playwright", lambda: PW())
+    monkeypatch.setattr(docs.browser_launcher, "launch_own_browser", own)
+    app.browser()
+    assert seen == ["core", "playwright"]
+    ports = []
+    monkeypatch.setattr(docs.browser_launcher, "open_signin_browser",
+                        lambda profile, port, url, **kw: ports.append(port))
+    with redirect_stdout(io.StringIO()):
+        app.cmd_open_browser()
+    example = json.loads((HERE / "config.example.json").read_text())["cdp_url"]
+    assert ports == [example.rsplit(":", 1)[1]]
+
+
 # ---------------------------------------------------------------------------
 # Privacy
 # ---------------------------------------------------------------------------
