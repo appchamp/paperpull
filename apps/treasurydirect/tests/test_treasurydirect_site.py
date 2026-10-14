@@ -690,6 +690,66 @@ class Orchestrator(Pressing):
         self.assertTrue(docs.pilot_failed(done, []))
 
 
+class OwnBrowser(unittest.TestCase):
+    """Settings with no cdp_url open a browser of the app's own, and only
+    through the core, which says so (#90). The sign-in opens on the port
+    config.example.json names."""
+
+    def test_a_run_without_cdp_url_opens_its_browser_through_the_core(self):
+        import playwright.sync_api as sync_api
+        tmp = tempfile.mkdtemp()
+        app = make_app(tmp, "--discover")
+        app.config["cdp_url"] = ""
+        app.config["profile_dir"] = str(Path(tmp) / "profile")
+        called = {}
+
+        class Ctx:
+            pages = []
+
+            def set_default_timeout(self, ms):
+                called["timeout"] = ms
+
+        class Chromium:
+            def launch_persistent_context(self, *a, **k):
+                called["direct"] = True
+                return Ctx()
+
+        class Pw:
+            chromium = Chromium()
+
+            def stop(self):
+                pass
+
+        class Starter:
+            def start(self):
+                return Pw()
+
+        def launch(chromium, user_data_dir, **kw):
+            called["core"] = (chromium, user_data_dir)
+            return Ctx()
+        originals = (sync_api.sync_playwright, docs.browser_launcher.launch_own_browser)
+        sync_api.sync_playwright = lambda: Starter()
+        docs.browser_launcher.launch_own_browser = launch
+        try:
+            app.browser()
+        finally:
+            sync_api.sync_playwright, docs.browser_launcher.launch_own_browser = originals
+        self.assertNotIn("direct", called, "Playwright was asked for a browser directly")
+        self.assertIsInstance(called["core"][0], Chromium)
+        self.assertEqual(called["core"][1], app.config["profile_dir"])
+
+        opened = {}
+        original = docs.browser_launcher.open_signin_browser
+        docs.browser_launcher.open_signin_browser = lambda profile, port, url, **kw: opened.update(port=port)
+        try:
+            with redirect_stdout(io.StringIO()):
+                app.cmd_open_browser()
+        finally:
+            docs.browser_launcher.open_signin_browser = original
+        example = json.loads((HERE / "config.example.json").read_text())["cdp_url"]
+        self.assertEqual(opened["port"], example.rsplit(":", 1)[1])
+
+
 class Privacy(Pressing):
     """Nothing that names the account reaches a log line, the console, the
     run's records or a diagnostic, and all of it is registered as private."""
