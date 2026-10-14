@@ -82,6 +82,7 @@ telecoms, payroll systems, and retailers real people actually use.
 | [`usaa`](apps/usaa) | USAA | Statements | Bank / insurance |
 | [`usbank`](apps/usbank) | U.S. Bank | Credit-card statements | Card |
 | [`vanguard`](apps/vanguard) | Vanguard | Account statements, monthly and quarterly, for every account the statements page lists, an employer 401(k) among them. Contributed by @tylerverry. A full run on five accounts saved 135 statements back to 2020, every one a valid PDF | Brokerage |
+| [`venmo`](apps/venmo) | Venmo (account.venmo.com) | Monthly account statements, back to your start date. With none set it saves two years, and when the oldest of those months has transactions the run then ends as one that stopped rather than call the list whole. Venmo has no PDF statement on the web, so each finished month's statement page is opened by its own address and printed to PDF, with only the month's own "Show more" pressed until every transaction is drawn. Months with no transactions are skipped and the CSV is not taken. Built and run on one account, 24 statements with two busy months expanded in full. A business profile is not listed | Payments |
 | [`verizon`](apps/verizon) | Verizon (Fios) | Bill statements | Telecom |
 | [`verizonmobile`](apps/verizonmobile) | Verizon Mobile (wireless) | Monthly bills. UNTESTED, built without an account. Have one? Run Diagnose and attach the file to issue #31 | Telecom |
 | [`walmart`](apps/walmart) | Walmart | Receipts | Retail |
