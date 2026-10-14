@@ -2461,8 +2461,9 @@ class Source(unittest.TestCase):
         row, and canceled spelled the American way."""
         repo = HERE.parent.parent
         changelog = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
-        unreleased = changelog.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
-        bullets = [b for b in re.split(r"\n- ", unreleased) if b.startswith("**Spectrum")]
+        # The newest section, Unreleased or the version it became.
+        newest = changelog.split("\n## [", 1)[1].split("\n## [", 1)[0]
+        bullets = [b for b in re.split(r"\n- ", newest) if b.startswith("**Spectrum")]
         self.assertEqual(len(bullets), 2)
         row = [line for line in (repo / "PROVIDERS.md").read_text(encoding="utf-8").splitlines()
                if line.startswith("| [`spectrum`]")]

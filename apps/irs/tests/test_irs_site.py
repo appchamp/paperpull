@@ -901,10 +901,12 @@ class Docs(unittest.TestCase):
         return self.REPO.joinpath(*parts).read_text(encoding="utf-8")
 
     def changelog_entry(self):
+        # The newest section, Unreleased or the version it became.
         text = self.read("CHANGELOG.md")
-        unreleased, released = text.index("## [Unreleased]"), text.index("## [0.51.0]")
+        newest = text.index("\n## [")
+        older = text.index("\n## [", newest + 1)
         start = text.index("- **IRS Online Account")
-        self.assertTrue(unreleased < start < released)
+        self.assertTrue(newest < start < older)
         return text[start:text.index("\n\n", start)]
 
     def providers_rows(self):
