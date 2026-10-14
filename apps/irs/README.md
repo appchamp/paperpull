@@ -45,6 +45,10 @@ It does not read these yet.
   the notices page out of every run, take `"Other Document"` out of
   `document_types` in `config.json`, and it is never opened. If yours lists
   a notice, please send a Diagnose file.
+- A transcript of a kind other than the four above. The list is read
+  again before each transcript is saved, so one of another kind stops Run
+  All and Resume alike before either saves a transcript, until the app has
+  been taught it. If yours lists one, please send a Diagnose file.
 - W-2 or 1099 copies under information returns.
 - A fresher copy of a transcript already saved. The IRS updates an account
   transcript as the account changes, and the app takes each one once. Use
