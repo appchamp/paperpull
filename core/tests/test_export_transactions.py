@@ -591,6 +591,131 @@ def test_a_block_scattered_into_single_characters_is_rebuilt():
     assert xt.find_period(lines) == (None, "2026-09-13")
 
 
+def _drifting(text, x0, tops, size=8.0):
+    """A line as pdfplumber scatters it, one line per character, each
+    character at its own height, tops(i) for the character at position i."""
+    out = []
+    for i, ch in enumerate(text):
+        if ch == " ":
+            continue
+        c = {"text": ch, "x0": x0 + 5 * i, "x1": x0 + 5 * i + 4.5, "top": tops(i), "size": size}
+        out.append({"text": ch, "top": c["top"], "chars": [c]})
+    return out
+
+
+DRIFT = [-3.0, 2.5, -1.0, 3.0, 0.5, -2.5, 1.5, -0.5]
+
+
+def test_a_label_whose_characters_drift_more_than_4pt_stays_whole():
+    """dertbv's September Visa on 0.51.0 (#32). The end of the label sat
+    more than 4pt below its start, so bands of height read it as
+    "Statement Clos 09/13/2026 about." with "i ng Date" on the next line,
+    and the statement had no period. A character now continues the line it
+    touches, so the label stays in front of its date, and the paragraph
+    in the column beside it stays apart."""
+    label = "Statement Closing Date09/13/2026"
+    start = label.index("ing")
+    tls = ([_line("Credit Limit $9,000.00", 100.0)]
+           + _drifting(label, 300.0,
+                       lambda i: 125.0 + 0.2 * (i % 5) if start <= i < start + 8 else 120.0 + 0.3 * (i % 5))
+           + _drifting("about.", 470.0, lambda i: 121.0)
+           + _drifting("Payment Due Date 10/07/2026", 300.0, lambda i: 133.0 + DRIFT[i % 8] / 2)
+           + [_line("Days in Billing Cycle 31", 160.0)])
+    lines = xt.page_lines(tls)
+    assert lines[0] == "Credit Limit $9,000.00"
+    assert lines[1].startswith("Statement Closing Date09/13/2026")
+    assert "Payment Due Date 10/07/2026" in lines
+    assert not any(line.startswith("i") for line in lines)
+    assert xt.find_period(lines) == (None, "2026-09-13")
+
+
+def test_two_lines_of_one_column_stay_apart_however_their_characters_drift():
+    """Lines 8.5pt apart whose characters drift 3pt either way, the lower
+    one set half a character to the right, as proportional type falls. A
+    character of the lower line touches the upper line's last character
+    and can sit within reach of it. It continues the line nearest its
+    height."""
+    tls = (_drifting("Statement Closing Date 09/13/2026", 300.0, lambda i: 120.0 + DRIFT[i % 8])
+           + _drifting("Payment Due Date 10/07/2026", 302.5, lambda i: 128.5 + DRIFT[(i + 3) % 8]))
+    assert xt.page_lines(tls) == ["Statement Closing Date 09/13/2026", "Payment Due Date 10/07/2026"]
+
+
+def test_a_column_whose_rows_sit_between_the_labels_rows_is_not_glued_on():
+    """The column beside the summary box sets its lines between the box's
+    rows. Its first character is far from where the label's line ends, so
+    it starts a line of its own, and its date never reads as the label's."""
+    tls = ([_line("Credit Limit $9,000.00", 100.0)]
+           + _drifting("Statement Closing Date 09/13/2026", 300.0, lambda i: 120.0 + DRIFT[i % 8] / 3)
+           + _drifting("Payment Due Date 10/07/2026", 520.0, lambda i: 125.5 + DRIFT[i % 8] / 3))
+    lines = xt.page_lines(tls)
+    assert lines == ["Credit Limit $9,000.00", "Statement Closing Date 09/13/2026",
+                     "Payment Due Date 10/07/2026"]
+    assert xt.find_period(lines) == (None, "2026-09-13")
+
+
+def test_a_line_below_that_starts_where_a_label_ends_is_not_joined_to_it():
+    """The next row's date starts just right of where the label ends, the
+    only line it touches. It is a row below, so it starts a line of its
+    own, and the label keeps its own date."""
+    tls = ([_line("Credit Limit $9,000.00", 100.0)]
+           + _drifting("Statement Closing Date", 300.0, lambda i: 120.0 + DRIFT[i % 8] / 3)
+           + _drifting("09/13/2026", 470.0, lambda i: 120.0 + DRIFT[i % 8] / 3)
+           + _drifting("10/07/2026", 412.0, lambda i: 131.0 + DRIFT[i % 8] / 3))
+    lines = xt.page_lines(tls)
+    assert lines == ["Credit Limit $9,000.00", "Statement Closing Date 09/13/2026", "10/07/2026"]
+    assert xt.find_period(lines) == (None, "2026-09-13")
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_every_line_of_a_block_drifting_3pt_either_way_reads_whole(seed):
+    """Twelve lines 10pt apart whose characters each drift up to 3pt either
+    way, every other line set half a character over as proportional type
+    falls, so a letter of one line can sit nearer the next line's band than
+    its own. Every line reads whole, in order, for each of twenty blocks."""
+    import random
+    rnd = random.Random(seed)
+    tls = []
+    for r in range(12):
+        tls += _drifting(chr(65 + r) * 30, 40.0 + 2.5 * (r % 2),
+                         lambda i, r=r: 100.0 + 10 * r + rnd.uniform(-3, 3))
+    assert xt.page_lines(tls) == [chr(65 + r) * 30 for r in range(12)]
+
+
+def _rebuilt(*lines):
+    """xt._band_lines over lines given as (x0, tops), one letter each."""
+    chars = [tl["chars"][0] for r, (x0, tops) in enumerate(lines)
+             for tl in _drifting(chr(65 + r) * len(tops), x0, lambda i, tops=tops: tops[i])]
+    return [text for _, text in sorted(xt._band_lines(chars))]
+
+
+def test_a_letter_that_two_lines_could_take_goes_to_the_nearer_one():
+    """The second line's sixth letter, at 105.6, is within reach of both
+    lines. It continues its own, whose height it is nearer, not whichever
+    line was begun first. Found by search over small drifting blocks."""
+    assert _rebuilt((40.5, [99.5, 100.0, 102.3, 99.3, 100.0, 101.3, 103.4, 98.9]),
+                    (44.2, [110.6, 106.5, 112.4, 112.4, 111.4, 105.6, 109.9, 111.7])) == [
+        "AAAAAAAA", "BBBBBBBB"]
+
+
+def test_the_start_of_a_line_left_on_its_own_goes_back_to_its_line():
+    """The second line's first letter, at 113.7, is too far from the next
+    at 107.2 for them to join, and is left a piece too short to have a
+    height of its own. It goes to the line nearest its height, its own,
+    rather than standing as a line of one letter. Found by search."""
+    assert _rebuilt((40.0, [100.0, 96.0, 98.1, 96.7, 99.2, 96.3, 96.2, 98.4]),
+                    (41.2, [113.7, 112.8, 107.2, 113.1, 112.3, 110.8, 112.1, 111.8])) == [
+        "AAAAAAAA", "BBBBBBBB"]
+
+
+def test_a_value_printed_well_to_the_right_of_its_label_reads_after_it():
+    """A summary box can print the value at its right edge. The label and
+    the value are read as one line, the label first, even when the value
+    sits a little higher."""
+    tls = (_drifting("Statement Closing Date", 300.0, lambda i: 121.0 + DRIFT[i % 8] / 2)
+           + _drifting("09/13/2026", 450.0, lambda i: 119.5 + DRIFT[i % 8] / 4))
+    assert xt.page_lines(tls) == ["Statement Closing Date 09/13/2026"]
+
+
 def test_a_page_read_whole_is_left_exactly_as_pdfplumber_gave_it():
     tls = [_line("Previous Balance $2,500.00", 100.0), _line("A", 110.0), _line("B", 118.0),
            _line("08/16/26 NFO PAYMENT RECEIVED $1,482.17", 130.0)]
@@ -604,4 +729,4 @@ def test_a_closing_date_label_with_a_stray_space_is_still_read():
 
 
 def test_the_cache_is_read_again_for_the_rebuilt_lines():
-    assert xt.CACHE_VERSION >= 7
+    assert xt.CACHE_VERSION >= 8
