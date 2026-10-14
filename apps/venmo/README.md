@@ -49,7 +49,9 @@ prints it to PDF, filed as `<month end> Venmo Statement.pdf`, for example
    Statements page.
 8. Click **Pilot**. It saves last month's statement as a PDF in
    `Statements\`. Open it and say whether it shows the whole month, then
-   attach a fresh Diagnose file.
+   attach a fresh Diagnose file. If it stops because the oldest of two
+   years has transactions, choose "Between two dates" under "Which dates",
+   set a From date, and click **Pilot** again.
 
 **If a run stops early, send the file it wrote.** Every failed run leaves a
 `failure-*.json` in the `Diagnostics` folder and prints where it put it. It
@@ -73,48 +75,59 @@ The app opens Statements by its address, which
 Venmo settles on your profile's own statement address, and reads your
 profile from it (the profile id is kept out of every file and log). Then,
 newest first, it opens each finished month by that address with the month
-and year changed, back to your start date or two years. A month is listed,
+and year changed, back to your start date. With no start date it reads
+two years, and when the oldest of those months has transactions the run
+keeps the months it listed and stops before downloading, rather than call
+the list complete, since older months may have them too. To read further
+back, choose "Between two dates" under "Which dates" and set a From date,
+or set `default_start_date` in `config.json`, and the walk goes back to
+that date. A run of one year walks back to that year's first day. A month is listed,
 and later printed, only when the address still names that month, the
 month picker shows exactly that month, an "Account Statement" heading is
 drawn, nothing is still loading, and either the month's transaction rows
-or Venmo's own "No transactions yet for this month" are drawn, the same on
-two reads in a row. When the page's own request for the month's
-transactions is heard, an answer that says more are to come stops the
-month, and one that says signed out stops the run. The
-month still under way is left out, since its statement is not final yet,
-and so is a month with no transactions (counted only in the log). A busy
-month draws ten transactions at a time; before printing, the app presses
-that month's own "Show more", and nothing else, until every transaction is
-drawn, each press required to draw more and at most 60 presses. The
+are drawn, the same on two reads in a row, or Venmo's own "No transactions
+yet for this month" is, unchanged for two seconds. When the page's own
+request for the month's transactions is heard, an answer that says more
+are to come stops the month, and one that says signed out stops the run.
+The month still under way is left out, since its statement is not final
+yet, and so is a month with no transactions (counted only in the log). A
+busy month draws ten transactions at a time. Before printing, the app
+presses that month's own "Show more", and nothing else, until every
+transaction is drawn, each press required to draw more and at most 60
+presses. A "Show more" that Venmo has turned off is not pressed, and that
+month is left for review and the next run. Nothing is printed while the
+newest answer heard for the month says more transactions are to come. The
 number of transactions printed is kept in the month's record.
-Each statement remembers a one-way tag of the profile it was listed on;
-if the browser is later signed in to another Venmo profile, the run stops
+Each statement remembers a one-way tag of the profile it was listed on.
+If the browser is later signed in to another Venmo profile, the run stops
 and prints nothing.
 
 A page the app cannot read whole stops the run rather than being called
-complete: a month the page will not show as asked, a "Load more" control
-on a month, a business profile, or a month that never finishes drawing. If Venmo
-answers as signed out, the run stops and keeps what it saved. Sign in
-again and run Resume.
+complete. That is a month the page will not show as asked, a "Load more"
+control on a month, a business profile, or a month that never finishes
+drawing. If Venmo answers as signed out, the run stops and keeps what it
+saved. Sign in again and run Resume.
 
 ## Validation status
 
 Built 2026-10-13 from a read-only survey of a signed-in account, then run
-on that account: Discover listed 24 months, Pilot saved one, and a full
+on that account. Discover listed 24 months, Pilot saved one, and a full
 run saved the other 23 (a Chrome tab crash midway was carried on with
-Resume). Every PDF holds the whole statement; the two busy months printed
-12 and 11 transactions with no "Show more" left. Not yet seen:
+Resume). Every PDF holds the whole statement, and the two busy months
+printed 12 and 11 transactions with no "Show more" left. Not yet seen are
+the following.
 
 - How far back Venmo's statements go past two years. A month before the
   account opened shows the same "No transactions yet" as an empty month,
-  so it is skipped; the walk stops at your start date or two years.
+  so it is skipped, and with a start date the walk goes back to it.
 - A month busy enough to need many "Show more" presses (at most 60 are
   made, and each must draw more).
 - What a signed-out visit or answer looks like.
-- Tax documents (1099-K) are not listed: the surveyed account had none.
+- Tax documents (1099-K), which are not listed. The surveyed account had
+  none.
 - A business profile, which is not listed.
 
-**The CSV is never taken.** No PaperPull app keeps a CSV: the core's
+**The CSV is never taken.** No PaperPull app keeps a CSV. The core's
 download capture, file names, checks and Rename all take a PDF, so
 keeping the CSV would be a change to the core first.
 

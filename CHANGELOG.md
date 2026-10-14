@@ -15,14 +15,18 @@ All notable changes to PaperPull are recorded here. Versioning follows
   CSV. The app opens each finished month's statement page by its own
   address, presses its own "Show more" until every transaction is drawn,
   checks the page shows that month in full, and prints it to PDF
-  as `<month end> Venmo Statement.pdf`, back to your start date or two
-  years. Nothing else on the site is clicked, months with no transactions
-  and the month still under way are skipped, and the CSV is never taken. It never sends, requests or
-  transfers money and never touches banks, cards, crypto, business
-  profiles or settings, and your profile id, username, name, email and
-  phone stay out of every log and diagnostic file. Built and run on one
-  account: 24 statements, the two busy months expanded in full. A page
-  that is not what it expects stops the run rather than being guessed at.
+  as `<month end> Venmo Statement.pdf`, back to your start date. With no
+  start date it reads two years, and when the oldest of those months has
+  transactions it keeps what it listed and stops rather than call the list
+  whole. Nothing else on the site is clicked, months with no transactions
+  and the month still under way are skipped, and the CSV is never taken.
+  A month whose "Show more" Venmo has turned off is left for review. It
+  never sends, requests or transfers money and never touches banks,
+  cards, crypto, business profiles or settings, and your profile id,
+  username, name, email and phone stay out of every log and diagnostic
+  file. Built and run on one account, 24 statements with the two busy
+  months expanded in full. A page that is not what it expects stops the
+  run rather than being guessed at.
 
 ## [0.51.0] - 2026-10-14
 
