@@ -407,7 +407,7 @@ class Download(unittest.TestCase):
             self.assertFalse(ok, kw)
             self.assertFalse(out.exists(), kw)
             self.assertEqual(page.context.request.asked, [(API, 0)], kw)
-            self.assertEqual(trace, [{"note": "the list no longer holds the record", "matches": 0}], kw)
+            self.assertEqual(trace, [{"note": "the record is gone from the list", "matches": 0}], kw)
 
     def test_a_list_that_cannot_be_read_again_stops(self):
         for page in (Page(items=ITEMS + [dict(ITEMS[0])], answers=[Resp()]),

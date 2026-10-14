@@ -914,7 +914,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     if not found:
         log.info("the transcript list no longer holds the recorded transcript dated %s", iso_date)
         if trace is not None:
-            trace.append({"note": "the list no longer holds the record", "matches": 0})
+            trace.append({"note": "the record is gone from the list", "matches": 0})
         return False
     if len(found) != 1:
         log.info("%d items match the recorded transcript dated %s, none taken", len(found), iso_date)
