@@ -526,8 +526,12 @@ class App:
         return n_new
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
+        """The documents in scope, newest first. A snapshot of an earlier
+        day is never one, since it can no longer be taken under that day's
+        name (site.is_stale), so neither a run nor Resume counts it as
+        remaining."""
         docs = [Document.from_dict(v) for v in self.discovery.data.values()]
-        docs = [d for d in docs if self._in_scope(d)]
+        docs = [d for d in docs if self._in_scope(d) and not site.is_stale(d.document_id)]
         docs.sort(key=lambda d: d.date or "0000", reverse=True)
         limit = limit if limit is not None else self.args.max_docs
         return docs[:limit] if limit else docs

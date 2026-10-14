@@ -13,7 +13,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -529,8 +529,10 @@ class Orchestrator(Pressing):
         app._record_rawdoc(site._snapshot(site.HOLDINGS, "2020-01-01"), GATEWAY)
         app._on_its_site = lambda: (_ for _ in ()).throw(AssertionError("no tab is wanted"))
         app._delay = lambda *a, **k: None
+        self.assertEqual(app._select(), [])
+        # Handed to the run all the same, it is still not taken.
         with redirect_stdout(io.StringIO()) as out:
-            app.process(app._select())
+            app.process([docs.Document.from_dict(v) for v in app.discovery.data.values()])
         self.assertIn("earlier day", out.getvalue())
         self.assertEqual(app.progress.data, {})
 
@@ -848,6 +850,22 @@ class Repeats(Pressing):
         app = make_app(tmp, "--resume")
         left = [d for d in app._select() if not app._already_done(d)]
         self.assertFalse([d for d in left if d.document_id.endswith("-1099")])
+
+    def test_snapshots_of_earlier_days_are_not_selected_or_resumed(self):
+        app = make_app(tempfile.mkdtemp(), "--resume")
+        days = [(date.today() - timedelta(days=n)).isoformat() for n in (3, 2, 1, 0)]
+        for day in days:
+            for r in site.collect_download_docs(Page(), today=day):
+                app._record_rawdoc(r, GATEWAY)
+        app.discovery.save()
+        today = sorted(f"{k}-{TODAY}" for k in ("holdings", "security-history", "payment-history"))
+        self.assertEqual(sorted(d.document_id for d in app._select()), today)
+        handed = []
+        app.process = lambda left, dry_run=False: handed.extend(left)
+        with redirect_stdout(io.StringIO()) as out:
+            app.cmd_resume()
+        self.assertEqual(sorted(d.document_id for d in handed), today)
+        self.assertIn("3 document(s) remaining", out.getvalue())
 
 
 class OwnBrowser(unittest.TestCase):
