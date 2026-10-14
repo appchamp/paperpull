@@ -90,6 +90,12 @@ STOPS = {
         "pages the billing and payment tables every receipt is listed from, read as "
         "turned on before it is pressed, so a turned off NEXT where the footer says more "
         "pages leaves the rest of the list unread"),
+    ("spectrum", "open_mobile_list", "click", "open the Mobile statements"): (1,
+        "Billing's Mobile Account Number link reaches the list every Mobile statement is "
+        "taken from, so a turned off link there would leave every Mobile statement"),
+    ("spectrum", "expand_statement", "click", "expand the Mobile statement"): (1,
+        "the Mobile statement's own Expand All, read as turned on before it is pressed, "
+        "once the statement's row was pressed, so a press was made for the document already"),
     ("vanguard", "dismiss_timeout", "click", "continue the session"): (1,
         "keeps the session open for every document"),
     ("vanguard", "show_more", "click", "show more of the list"): (1,
@@ -551,6 +557,37 @@ def _shelbycounty_link(off: bool) -> str:
             'Print Receipt</a>' % (' aria-disabled="true"' if off else ""))
 
 
+def _spectrum(site, page, out, staging, trace):
+    entry = site.Entry(family="current", date="2026-06-30", statement_id="made-up-0001")
+    return site._press_for_statement(page, page.locator("#get"), entry, [entry], out, staging, trace,
+                                     lambda url: True)
+
+
+def _spectrum_choose(monkeypatch):
+    def call(site, page, out, staging, trace):
+        entry = site.Entry(family="current", date="2026-06-30", statement_id="made-up-0001")
+        monkeypatch.setattr(site, "STATEMENT_ROW", "#get")
+        monkeypatch.setattr(site, "row_for", lambda page, e, entries: (0, "Statement June 30, 2026", ""))
+        return site.choose_in_page(page, entry, [entry], staging, trace)
+    return call
+
+
+def _spectrum_mobile(monkeypatch):
+    def call(site, page, out, staging, trace):
+        monkeypatch.setattr(site, "MOBILE_ROW", "#get")
+        return site.choose_mobile(page, 0, "Statement June 30, 2026", "2026-06-30", staging, trace)
+    return call
+
+
+def _spectrum_row(off: bool) -> str:
+    return ('<a id="get" class="ctl" href="javascript:void(0);"%s onclick="window.presses++">'
+            'Statement June 30, 2026</a>' % (' aria-disabled="true"' if off else ""))
+
+
+def _spectrum_button(off: bool) -> str:
+    return _button(off, "View Printable Statement")
+
+
 def _pge_link(off: bool) -> str:
     return ('<a id="get" class="ctl" href="#"%s onclick="window.presses++; return false;">'
             'View Bill PDF</a>' % (' aria-disabled="true"' if off else ""))
@@ -575,6 +612,12 @@ def _how(app: str, function: str, monkeypatch):
         return "pge_site", _pge, _pge_link, "June 30, 2026"
     if (app, function) == ("shelbycounty", "_press_for_blob"):
         return "shelbycounty_site", _shelbycounty, _shelbycounty_link, "06/30/2026"
+    if (app, function) == ("spectrum", "_press_for_statement"):
+        return "spectrum_site", _spectrum, _spectrum_button, "June 30, 2026"
+    if (app, function) == ("spectrum", "choose_in_page"):
+        return "spectrum_site", _spectrum_choose(monkeypatch), _spectrum_row, "June 30, 2026"
+    if (app, function) == ("spectrum", "choose_mobile"):
+        return "spectrum_site", _spectrum_mobile(monkeypatch), _spectrum_row, "June 30, 2026"
     return None
 
 
