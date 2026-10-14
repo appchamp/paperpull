@@ -12,20 +12,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
 ### Added
 - **TreasuryDirect.** A new app for the U.S. Treasury's own site for
   savings bonds and Treasury securities. TreasuryDirect has no PDFs, so the
-  app saves its pages as PDFs: Current Holdings, Security History and
-  Payment History as dated snapshots, each kept only when its text names the
-  page. TreasuryDirect ends your session if a page is opened any way but by
-  its own links, so the app works in the tab you signed in with and only
-  presses the site's own tab and history links, checked by their words and
-  by exactly where they lead. It never opens an address, never submits a
-  form, and never presses BuyDirect, Gift Box, Logoff, the Investor InBox or
-  any link that changes your account. A year ManageDirect lists as taxable
-  is shown for you to save its 1099 yourself, since its pages have not been
-  seen yet. If TreasuryDirect signs you out or asks for a passcode or a
-  security answer, the run stops and keeps what it saved. Your account
-  number, name and session id are kept out of every log and diagnostic
-  file. Run on a contributor's own account: Discover listed 3 documents,
-  Pilot saved 1 and Run All the other 2, every PDF opened.
+  app saves its pages as PDFs. Current Holdings, Security History and
+  Payment History are dated snapshots, each kept only when its text names
+  the page and drawn without its link addresses. TreasuryDirect ends your
+  session if a page is opened any way but by its own links, so the app
+  works in the tab you signed in with and only presses the site's own tab
+  and history links, checked by their words and by exactly where they lead.
+  It never opens an address, never submits a form, and never presses
+  BuyDirect, Gift Box, Logoff, the Investor InBox or any link that changes
+  your account. A year ManageDirect lists as taxable is shown once for you
+  to save its 1099 yourself, since its pages have not been seen yet. One
+  sign-in can hold several accounts, so each document is kept under the
+  account it was listed on, by a digest of its number, and saved only while
+  your tab shows that account. If TreasuryDirect signs you out or asks for
+  a passcode or a security answer, the run stops and keeps what it saved.
+  Your account number, name and session id are kept out of every log and
+  diagnostic file. Run on a contributor's own account, where Discover
+  listed 3 documents, Pilot saved 1 and Run All the other 2, and every PDF
+  opened.
 
 ## [0.51.0] - 2026-10-14
 

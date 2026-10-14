@@ -1,17 +1,17 @@
 """TreasuryDirect tax document downloader (local, supervised).
 
 TreasuryDirect, the U.S. Treasury's own site for savings bonds and Treasury
-securities, has no PDFs. This saves its pages as PDFs instead: Current
-Holdings, Security History and Payment History as dated snapshots, and each
-taxable year's Form 1099 from ManageDirect. The app moves through the site
-only by pressing its own links in your signed-in tab, since opening one of
-its addresses ends the session, and renders each page without running
-anything in it. The orchestrator below is the same one every other
-statement app runs on. Everything about the site itself is in
-treasurydirect_site.py.
+securities, has no PDFs. This saves its pages as PDFs instead, Current
+Holdings, Security History and Payment History as dated snapshots, and
+lists each taxable year's Form 1099 from ManageDirect for you to save by
+hand. The app moves through the site only by pressing its own links in
+your signed-in tab, since opening one of its addresses ends the session,
+and renders each page without running anything in it. The orchestrator
+below is the same one every other statement app runs on. Everything about
+the site itself is in treasurydirect_site.py.
 
-Partly surveyed: see the surveyed block in treasurydirect_site.py and the
-README's Validation status. The 1099 pages are UNCONFIRMED.
+Partly surveyed, as the surveyed block in treasurydirect_site.py and the
+README's Validation status say. The 1099 pages are UNCONFIRMED.
 
 Usage:
     python treasurydirect_docs.py --login       verify connection to your browser

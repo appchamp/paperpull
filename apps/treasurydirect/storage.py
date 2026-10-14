@@ -1,9 +1,10 @@
 """What makes the TreasuryDirect app different, everything else is paperpull_core.
 
 This file used to be a copy of the same storage logic every other app
-carried. All that logic now lives in `paperpull_core`; what remains here is the
-declaration of SDG&E's own facts: the folders it files into, how a document
-routes to one, its CSV columns, and its config defaults.
+carried. All that logic now lives in `paperpull_core`, and what remains here
+is the declaration of TreasuryDirect's own facts, the folders it files
+into, how a document routes to one, its CSV columns, and its config
+defaults.
 
 To repair TreasuryDirect's *page* behavior, edit `treasurydirect_site.py` instead.
 """
