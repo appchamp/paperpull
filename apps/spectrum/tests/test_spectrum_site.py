@@ -255,6 +255,10 @@ class Page:
         self.clicks = []           # (css, step, what) of every press
         self.row_presses = []      # the index of each statement row pressed
         self.row_changes = {}      # index: words a row shows when read again
+        # The own href of a statement row, by its index, and of a Billing
+        # link or a Mobile row, by ("billing" or "mlist", its index). Each
+        # reads "javascript:void(0)", as the survey saw them, unless set.
+        self.hrefs = {}
         self.fail_wait = None      # page -> True when a wait should raise
         self.fail_on = set()       # events whose listener cannot be added
         self.url = f"https://{HOST}/account-summary"
@@ -418,6 +422,13 @@ class Row:
     def inner_text(self, **kw):
         return self.page.row_changes.get(self.index, self.page.row_texts()[self.index])
 
+    def get_attribute(self, name, **kw):
+        assert name == "href"
+        href = self.page.hrefs.get(self.index, "javascript:void(0)")
+        if isinstance(href, Exception):
+            raise href
+        return href
+
 
 class MRow:
     """An anchor with role=link, on Billing or the Mobile list."""
@@ -427,6 +438,13 @@ class MRow:
 
     def inner_text(self, **kw):
         return self.page.row_changes.get(("m", self.index), self.page.links()[self.index])
+
+    def get_attribute(self, name, **kw):
+        assert name == "href"
+        href = self.page.hrefs.get((self.page.where, self.index), "javascript:void(0)")
+        if isinstance(href, Exception):
+            raise href
+        return href
 
 
 def fake_click(page, el, **kw):
@@ -1013,6 +1031,47 @@ class InPage(WithFakeClick):
         ok, out, trace = self.take(page, "current", "2026-08-26")
         self.assertFalse(ok)
         self.assertEqual(page.clicks, [])
+
+    def test_the_row_address_guard(self):
+        mine = digital(CUR, "2026-08-26")
+        for href in (None, "", "  ", "javascript:void(0)", "javascript:void(0);", "JavaScript:void(0)",
+                     f"/billing/bill-details?pdfStatementId={mine}&isNextBill=false&isAccountTransfer=false",
+                     f"https://{HOST}/billing/statements", "/billing/bill-details"):
+            self.assertTrue(site.is_safe_href(href), repr(href))
+        for href in ("/billing/autopay", "/billing/auto-pay", "/billing/makePayment", "/billing/make-payment",
+                     "/billing/pay-bill", "/billing/paperless", "/account/settings", "/support/equipment",
+                     "/services/upgrade", "/plan/change", "/logout", "/sign-out", "/id/signin",
+                     "/billing/statements?action=pay", "/billing/statements?autoPay=1",
+                     "/billing/statements?next=%2Fbilling%2Fpayment", "/billing/statements?x",
+                     "/billing/mobile-statements", "/billing/statements#pay", "#", "#/billing/payment",
+                     "billing/statements", "./payment", "//evil.test/billing", "/\\evil.test/billing",
+                     "/\t/evil.test/billing", "https://evil.test/billing/statements", f"http://{HOST}/billing",
+                     f"https://{HOST}:8443/billing", f"https://u@{HOST}/billing",
+                     f"https://{HOST}.evil.test/billing", "javascript:void(0);pay()", "javascript:autoPay()",
+                     "mailto:someone@example.com", 7):
+            self.assertFalse(site.is_safe_href(href), repr(href))
+        # A Mobile link or row is pressed only with the address the survey saw.
+        for href in (None, "", "javascript:void(0)"):
+            self.assertTrue(site.is_void_href(href), repr(href))
+        for href in ("/billing/statements", f"https://{HOST}/billing/mobile-statements", "#", "/billing/autopay"):
+            self.assertFalse(site.is_void_href(href), repr(href))
+
+    def test_a_row_whose_address_is_refused_is_not_pressed(self):
+        for href in ("/billing/autopay", "https://evil.test/statement", "#/billing/payment", OSError("gone")):
+            page = Page()
+            page.hrefs = {1: href}
+            ok, out, trace = self.take(page, "current", "2026-08-26")
+            self.assertFalse(ok, href)
+            self.assertEqual(page.clicks, [], href)
+            self.assertFalse(out.exists())
+            self.assertNotIn("autopay", json.dumps(trace))
+        mine = digital(CUR, "2026-08-26")
+        page = Page()
+        page.hrefs = {1: f"/billing/bill-details?pdfStatementId={mine}&isNextBill=false&isAccountTransfer=false"}
+        ok, out, trace = self.take(page, "current", "2026-08-26")
+        self.assertTrue(ok, trace)
+        self.assertEqual(page.row_presses, [1])
+        self.assertNotIn(mine, json.dumps(trace))
 
     def test_a_row_that_changed_before_the_press_is_not_pressed(self):
         for words in ("Statement August 26, 2026 Make a Payment", "Statement July 26, 2026", ""):
@@ -1744,6 +1803,17 @@ class MobileListing(WithFakeClick):
             self.assertNotIn(MOB, str(stop.exception))
             self.assertEqual(page.live_listeners(), 0)
 
+    def test_a_mobile_link_whose_address_is_refused_is_not_pressed(self):
+        for href in ("/billing/auto-pay", f"https://{HOST}/billing/mobile-statements", "https://evil.test/x",
+                     ValueError("gone")):
+            page = Page(mobile=mobile_rows())
+            page.hrefs = {("billing", 3): href}
+            with self.assertRaises(site.ListStopped) as stop:
+                site.collect_download_docs(page, dl_dir=self.tmp)
+            self.assertEqual(len(stop.exception.docs), 5)
+            self.assertEqual(page.link_presses, 0, href)
+            self.assertEqual(page.live_listeners(), 0)
+
     def test_a_tab_or_a_download_after_the_link_press_stops_the_run(self):
         def tab(p):
             p.context.pages.append(SimpleNamespace(close=lambda: None))
@@ -1824,6 +1894,18 @@ class MobileTaking(WithFakeClick):
         self.assertEqual(page.prints, 0)
         self.assertIn({"note": "the Mobile row is turned off"}, trace)
         self.assertEqual(page.live_listeners(), 0)
+
+    def test_a_mobile_row_whose_address_is_refused_is_not_pressed(self):
+        for href in ("/billing/autopay", "https://evil.test/x", "/mobile-billing/statement-history?statementId=Zq9",
+                     ValueError("gone")):
+            page = Page(mobile=mobile_rows())
+            page.hrefs = {("mlist", 3): href}
+            ok, out, trace = self.take(page)
+            self.assertFalse(ok, href)
+            self.assertEqual(page.link_presses, 1)
+            self.assertEqual((page.mobile_row_presses, page.prints), ([], 0), href)
+            self.assertFalse(out.exists())
+            self.assertEqual(page.live_listeners(), 0)
 
     def stops(self, **kw):
         page = Page(mobile=mobile_rows(), **kw)
@@ -2242,6 +2324,12 @@ class Source(unittest.TestCase):
             found.add((fn.name, css, guard))
         self.assertEqual(found, expected)
         self.assertEqual(len(presses), 5)
+        # Each anchor's own href is read and guarded before its press.
+        for name, guard in (("choose_in_page", "is_safe_href"), ("open_mobile_list", "is_void_href"),
+                            ("choose_mobile", "is_void_href")):
+            fn = next(f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef) and f.name == name)
+            self.assertIn(guard, {c.func.id for c in ast.walk(fn)
+                                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}, name)
         # The View Printable Statement press is guarded by its caller.
         take = next(f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef) and f.name == "take_statement")
         self.assertIn("is_safe_control", {c.func.id for c in ast.walk(take)

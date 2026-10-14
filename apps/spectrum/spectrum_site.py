@@ -115,6 +115,10 @@ service and buy equipment):
   rest is refused, and only "Statement Month D, YYYY" of that statement's
   date is allowed). The statement page's "View Printable Statement", once
   per statement, after is_safe_control, which allows that label exactly.
+  The href of every anchor pressed is read first. A statement row's must
+  lead nowhere or to a www.spectrum.net address with no refused word in
+  it (is_safe_href), and the Mobile link's and a Mobile row's must lead
+  nowhere, as the survey saw them (is_void_href).
   Nothing here fills, selects, types or scrolls. No host but
   www.spectrum.net is ever opened.
 
@@ -1260,8 +1264,10 @@ def is_safe_row(text, day: str) -> bool:
     word of this app's blocklist (pay, payment, Auto Pay, paperless,
     equipment, settings, sign out and the rest), then the shared core
     guards, and only then a row whose words start "Statement Month D, YYYY"
-    with exactly that date. A row whose address holds a refused word is
-    refused with it, and its statement is left for a manual save."""
+    with exactly that date. The row's own address is read just before the
+    press and must pass is_safe_href, so a row whose address holds a refused
+    word, or leads off the site, is never pressed and its statement is left
+    for a manual save."""
     label = normalized(text)
     if not label or not valid_iso(day):
         return False
@@ -1270,6 +1276,65 @@ def is_safe_row(text, day: str) -> bool:
     if SETTINGS_CONTROL_RE.search(label) or AUTH_CONTROL_RE.search(label):
         return False
     return row_day(text) == day
+
+
+# What a row or link that only runs the page's own script carries as its
+# href, as the survey saw it, with or without the closing semicolon.
+_VOID_HREF_RE = re.compile(r"javascript:void\(0\);?", re.I)
+
+
+def is_void_href(href) -> bool:
+    """Whether an anchor's own href leads nowhere. No href, an empty one and
+    "javascript:void(0)" do, and anything else does not."""
+    if href is None:
+        return True
+    if not isinstance(href, str):
+        return False
+    h = href.strip()
+    return not h or bool(_VOID_HREF_RE.fullmatch(h))
+
+
+def _address_words(part: str) -> str:
+    """A path or a query name as words, so the blocklist reads it as it
+    reads a label. "/billing/makePayment" reads "billing make Payment"."""
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", part)
+    return re.sub(r"[^A-Za-z0-9]+", " ", text).strip()
+
+
+def _refuses(words: str) -> bool:
+    return bool(FORBIDDEN_CONTROL_RE.search(words) or SETTINGS_CONTROL_RE.search(words)
+                or AUTH_CONTROL_RE.search(words))
+
+
+def is_safe_href(href) -> bool:
+    """Whether a statement row's own href may stand behind its press. Deny
+    by default. One that leads nowhere (is_void_href) passes. Otherwise it
+    must be an address on exactly www.spectrum.net, written whole or from
+    the site's root, with no port, credentials, fragment, backslash or
+    white space, and no word of this app's blocklist or the shared core
+    guards in its path, its query's names or its query's values. Anything
+    else, another host or scheme, a relative path or a fragment, is
+    refused."""
+    if is_void_href(href):
+        return True
+    if not isinstance(href, str):
+        return False
+    h = href.strip()
+    if "\\" in h or "#" in h or re.search(r"[\s\x00-\x1f\x7f]", h):
+        return False
+    if h.startswith("/") and not h.startswith("//"):
+        h = BASE + h
+    if not is_safe_url(h):
+        return False
+    try:
+        parts = urlsplit(h)
+        if parts.port is not None or parts.username or parts.password:
+            return False
+        pairs = _query_pairs(parts.query) if parts.query else []
+    except ValueError:
+        return False
+    words = [_address_words(unquote(parts.path))] + [_address_words(k) for k, _ in pairs] + [v for _, v in pairs]
+    return not any(_refuses(w) for w in words)
 
 
 def _flat(text) -> str:
@@ -1363,7 +1428,8 @@ def choose_in_page(page, entry: Entry, entries: List[Entry], dl_dir, trace) -> b
     the list was just read from, so the statement page the app moves to is
     the one chosen and not the newest. False, nothing pressed, when there
     is not exactly one row the guard allows for it, when the row's words
-    changed before the press, or when Spectrum kept it turned off. Once the
+    changed before the press, when its address is refused (is_safe_href),
+    or when Spectrum kept it turned off. Once the
     row is pressed, a tab, a popup or a download, a page that is not this
     statement's own, or a page that asked for anything but this statement
     and one the list holds stops the run (chose_wrong). SessionExpired and
@@ -1376,11 +1442,17 @@ def choose_in_page(page, entry: Entry, entries: List[Entry], dl_dir, trace) -> b
     row = page.locator(STATEMENT_ROW).nth(index)
     try:
         now = _flat(row.inner_text(timeout=2000))
+        href = row.get_attribute("href", timeout=2000)
     except Exception as e:
         _note(trace, note="the row could not be read", error=type(e).__name__)
         return False
     if now != text or not is_safe_row(now, entry.date):
         _note(trace, note="the row changed before the press")
+        return False
+    if not is_safe_href(href):
+        # The address itself is never logged: it may carry the statement id.
+        log.info("the statement dated %s was not chosen: the guard refused its row's address", entry.date)
+        _note(trace, note="the guard refused the row's address")
         return False
     if not dl_dir:
         raise no_folder()
@@ -2110,7 +2182,8 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
     list, and return the dates of its finished statements (mobile_days).
     None, nothing pressed, when Billing draws no such link, as for an
     Internet-only customer. ListStopped, nothing pressed, for a Billing page
-    that did not draw its statements or draws two Mobile links, and after
+    that did not draw its statements or draws two Mobile links, for a link
+    whose href leads anywhere (is_void_href), and after
     the press for a list that did not settle. A tab, popup or download the
     press brought stops the run. SessionExpired and OtpRequired propagate."""
     if not dl_dir:
@@ -2157,10 +2230,13 @@ def open_mobile_list(page, dl_dir, trace=None) -> Optional[List[str]]:
     link = page.locator(MOBILE_LINK).nth(mobile[0])
     try:
         label = link.inner_text(timeout=2000)
+        href = link.get_attribute("href", timeout=2000)
     except Exception as e:
         raise ListStopped("the Mobile link could not be read, %s" % type(e).__name__)
     if _flat(label) != _flat(texts[mobile[0]]) or not is_mobile_account_link(label):
         raise ListStopped("the guard refused the Mobile link")
+    if not is_void_href(href):
+        raise ListStopped("the Mobile link leads somewhere of its own, which the survey never saw")
     session = MobileWatch(page)
     strays = _Strays(page, dl_dir)
     pressed = False
@@ -2217,7 +2293,8 @@ def mobile_entries(page, dl_dir, trace=None) -> List[Entry]:
 def choose_mobile(page, index: int, text: str, day: str, dl_dir, trace=None) -> bool:
     """Press the Mobile list row `index`, read as `text`, to open the
     statement dated `day`. False, nothing pressed, when the row's words
-    changed or the guard refuses them, or Spectrum kept it turned off.
+    changed or the guard refuses them, its href leads anywhere
+    (is_void_href), or Spectrum kept it turned off.
     After the press, a tab, popup or download, a page that is not exactly a
     Mobile statement's own address, a statementId another date's page
     already carried, or a page that does not read this statement's date and
@@ -2228,11 +2305,15 @@ def choose_mobile(page, index: int, text: str, day: str, dl_dir, trace=None) -> 
     row = page.locator(MOBILE_ROW).nth(index)
     try:
         now = _flat(row.inner_text(timeout=2000))
+        href = row.get_attribute("href", timeout=2000)
     except Exception as e:
         _note(trace, note="the Mobile row could not be read", error=type(e).__name__)
         return False
     if now != _flat(text) or not is_safe_mobile_row(now, day):
         _note(trace, note="the Mobile row changed or was refused before the press")
+        return False
+    if not is_void_href(href):
+        _note(trace, note="the Mobile row leads somewhere of its own, which the survey never saw")
         return False
     session = MobileWatch(page)
     strays = _Strays(page, dl_dir)
