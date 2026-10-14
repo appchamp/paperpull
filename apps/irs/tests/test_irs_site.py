@@ -304,10 +304,23 @@ class ListReady(unittest.TestCase):
             self.assertFalse(site.bill_list_opens(Page(notices=seen)))
 
     def test_a_page_that_does_not_settle_or_draw_stops(self):
-        for page in (Page(ready=False), Page(settled=f"https://{HOST}/ola/"), Page(settled="https://www.irs.gov/")):
+        for page in (Page(ready=False), Page(settled=f"https://{HOST}/ola/")):
             with self.assertRaises(site.ListStopped):
                 site.collect_download_docs(page)
             self.assertEqual(page.context.request.asked, [])
+
+    def test_a_page_sent_off_the_online_account_is_signed_out(self):
+        """A signed-out visit is sent on to another IRS host, among others.
+        The account holder is asked to sign in again, not told the list
+        stopped, and nothing there is read."""
+        for where in ("https://la.www4.irs.gov/", "https://www.irs.gov/your-account",
+                      f"http://{HOST}{site.TRANSCRIPTS_PATH}", "https://irs.example/ola/tax_records/transcripts"):
+            page = Page(settled=where)
+            with self.assertRaises(site.SessionExpired, msg=where) as stop:
+                site.collect_download_docs(page)
+            self.assertNotIsInstance(stop.exception, site.OtpRequired, where)
+            self.assertEqual(page.context.request.asked, [], where)
+            self.assertFalse(site.bill_list_opens(Page(settled=where)), where)
 
     def test_sign_in_pages_are_session_expired_and_id_me_is_otp(self):
         with self.assertRaises(site.OtpRequired):
@@ -625,6 +638,16 @@ class Orchestrator(unittest.TestCase):
             app.cmd_discover()
         self.assertEqual(app.discovery.data, {})
         self.assertNotIn("Press Enter", out.getvalue())
+
+    def test_a_discovery_sent_off_the_online_account_asks_for_a_sign_in(self):
+        app = make_app(self.tmp, "--discover")
+        app.page = lambda: Page(start=site.DOCUMENTS_URL, settled="https://la.www4.irs.gov/")
+        app.write_failure = lambda *a, **k: None
+        with redirect_stdout(io.StringIO()) as said, self.assertRaises(SystemExit):
+            app.cmd_discover()
+        self.assertIn("signed out", said.getvalue())
+        self.assertNotIn("stopped partway", said.getvalue())
+        self.assertEqual(app.discovery.data, {})
 
     def test_a_tab_on_id_me_is_never_prompted_about(self):
         app = make_app(self.tmp, "--all")

@@ -581,9 +581,10 @@ def _settled_on(page, kind: str) -> bool:
 
 def _open(page, kind: str, timeout_ms: int = 30000) -> None:
     """Open one list page by its address. Raises OtpRequired or
-    SessionExpired when it is a sign-in page, and ListStopped when it does
-    not settle on its own address or does not draw. Registers what names
-    the taxpayer there. Nothing is pressed."""
+    SessionExpired when it is a sign-in page or lands off the Online
+    Account, and ListStopped when it settles elsewhere on the Online
+    Account or does not draw. Registers what names the taxpayer there.
+    Nothing is pressed."""
     try:
         page.goto(BASE + LIST_PATHS[kind], wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
@@ -591,6 +592,11 @@ def _open(page, kind: str, timeout_ms: int = 30000) -> None:
         _raise_if_signed_out(page)
         raise ListStopped(f"the {kind} page did not open")
     _raise_if_signed_out(page)
+    if address_signed_out(_page_url(page)):
+        # A signed-out visit is sent off the Online Account, to another IRS
+        # host among others, so the account holder is asked to sign in again
+        # rather than told the list stopped.
+        raise SessionExpired(f"the {kind} page was sent off the IRS Online Account")
     if not _settled_on(page, kind):
         raise ListStopped(f"the {kind} page settled off its own address")
     try:
