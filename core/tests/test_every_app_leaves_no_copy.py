@@ -586,8 +586,13 @@ def observes_only(func) -> bool:
     `download.delete()`. The name appearing anywhere else, read through
     (`download.cancel.__self__.path()`), handed on (`keep(download.cancel)`),
     rebound (`drop = download.delete; drop()`), or reused as another
-    function's parameter, and the listener is a taker like any other.
+    function's parameter, and the listener is a taker like any other. A
+    decorated function is never let off, since what a listener is handed
+    is then whatever the decorator made of it, and its body says nothing
+    of that.
     """
+    if func.decorator_list:
+        return False
     a = func.args
     if (a.posonlyargs or a.vararg or a.kwonlyargs or a.kwarg or a.defaults
             or len(a.args) != 1):
@@ -736,6 +741,29 @@ def test_a_listener_that_does_more_than_end_the_download_is_found(tmp_path, body
         + "def press(page):\n    page.on('download', on_download)\n", encoding="utf-8")
     line = 3 + body.count("\n")
     assert takes_from_a_folder(app) == [("made_site.py", line)]
+
+
+@pytest.mark.parametrize("decorator", ["@keep_a_copy\n", "@tools.keep_a_copy(folder)\n",
+                                       "@staticmethod\n"], ids=["name", "call", "builtin"])
+def test_a_decorated_listener_is_found(tmp_path, decorator):
+    """A decorator replaces the function the listener is handed, so its
+    own body says nothing of what runs. Here the wrapper copies the file
+    the browser wrote before it calls the handler, which only cancels."""
+    app = tmp_path / "made"
+    app.mkdir()
+    (app / "made_site.py").write_text(
+        "import shutil\n"
+        "def keep_a_copy(handler):\n"
+        "    def wrapper(download):\n"
+        "        shutil.copy(download.path(), 'kept.pdf')\n"
+        "        return handler(download)\n"
+        "    return wrapper\n"
+        + decorator +
+        "def on_download(download):\n"
+        "    download.cancel()\n"
+        "def press(page):\n"
+        "    page.on('download', on_download)\n", encoding="utf-8")
+    assert takes_from_a_folder(app) == [("made_site.py", 11)]
 
 
 def test_a_listener_that_only_ends_the_download_takes_nothing(tmp_path):
