@@ -45,25 +45,31 @@ STATUS, mapped 2026-09-18 against a signed-in session.
   /mybenefits/definedcontributions/navigation/dc/OnlineStatement?planChooser=yes,
   lists every plan whatever is remembered, as plain links whose text is
   the plan's name and whose address is that plan's Statements address
-  (OnlineStatement?plan=<digits>&). It is read first, and a login it shows
-  one plan for goes on exactly as a login with one plan always did. With
-  no such page, the Statements address shows a "Select Account" page when
-  no plan is remembered, a select named accountSelect whose options carry
-  the same addresses with the client too, and that is read instead. Its Go
-  button is never pressed. The plan's name comes from that list and from
-  nowhere else. The statement's own header names whichever employer the
-  site remembers, so it is never used as the plan's name.
+  (OnlineStatement?plan=<digits>&). It is read first, and only once the
+  tab is on a signed-in page of the statements site. A login it shows two
+  or more such addresses for is a login with several plans. One it shows
+  exactly one for, and no other link carrying a plan, goes on exactly as
+  a login with one plan always did. One such address beside other links
+  carrying a plan cannot be told either way, so the run stops and says
+  so, and writes no list of plans. With no such address, the Statements
+  address shows a "Select Account" page when no plan is remembered, a
+  select named accountSelect whose options carry the same addresses with
+  the client too, and that is read instead. Its Go button is never
+  pressed. The plan's name comes from that list and from nowhere else.
+  The statement's own header names whichever employer the site
+  remembers, so it is never used as the plan's name.
 
   A plan is chosen by asking for its address from inside the page, a
   same-origin request that the browser refuses to follow to any other
-  host. If the Statements page then shows that plan, by its form and its
-  heading, the plan's name and its number in brackets, the plan is open,
+  host. If the Statements page then shows that plan, by its form and a
+  heading naming the plan and its number in brackets, the plan is open,
   and if not it is left for the owner. The tab never loads a plan's own
-  address, since a redirect hop cannot be refused there. A statement is made only while the tab shows the plan it is filed
-  under. One plan on the surveyed login sent its address to the Fidelity
-  retail sign-in on digital.fidelity.com, so a plan whose address leaves
-  this host is left for the owner and never followed. The employer chooser
-  and its Continue, which change a saved preference, are never used.
+  address, since a redirect hop cannot be refused there. A statement is
+  made only while the tab shows the plan it is filed under. One plan on
+  the surveyed login sent its address to the Fidelity retail sign-in on
+  digital.fidelity.com, so a plan whose address leaves this host is left
+  for the owner and never followed. The employer chooser and its
+  Continue, which change a saved preference, are never used.
 
 SAFETY (this is a retirement account):
   Strictly READ-ONLY. NetBenefits can change contributions, move money
@@ -323,12 +329,13 @@ _MAKE_JS = """async ({tokenPath, statementPath, dateRange, want}) => {
   if (here.protocol !== 'https:' || here.hostname !== 'workplaceservices.fidelity.com') {
     throw new Error('Refusing to make a statement from an off-host page');
   }
-  // A redirect is refused, and a refused redirect here is the site
-  // sending a signed-out session to its sign-in page.
+  // A redirect is refused, and a refused redirect here is most often the
+  // site sending a signed-out session to its sign-in page. A network
+  // blip is refused the same way, so the caller asks the session.
   let tr;
   try {
     tr = await fetch(tokenPath, {credentials: 'include', headers: {'Accept': 'application/json'}, redirect: 'error'});
-  } catch (e) { return {status: 0, stage: 'token', signedOut: true}; }
+  } catch (e) { return {status: 0, stage: 'token', refused: true}; }
   if (tr.status !== 200) return {status: tr.status, stage: 'token'};
   const tj = await tr.json();
   const body = new URLSearchParams({txntoken: tj.txnTokenValue || '', sodReqIndicator: 'HACK',
@@ -337,7 +344,7 @@ _MAKE_JS = """async ({tokenPath, statementPath, dateRange, want}) => {
   try {
     r = await fetch(statementPath, {method: 'POST', credentials: 'include', redirect: 'error',
                     headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body.toString()});
-  } catch (e) { return {status: 0, stage: 'statement', signedOut: true}; }
+  } catch (e) { return {status: 0, stage: 'statement', refused: true}; }
   const html = await r.text();
   const title = (html.match(/<title>([^<]*)<\\/title>/i) || [, ''])[1].trim();
   const period = (html.match(/Statement Period:\\s*([0-9\\/]+\\s+to\\s+[0-9\\/]+)/) || [, ''])[1];
@@ -431,8 +438,13 @@ def make_statement(page, date_range: str, want_html: bool = False) -> dict:
             raise SessionExpired("the Statements page did not come back, sign in again")
         res = page.evaluate(_MAKE_JS, args)
     status = res.get("status")
-    if res.get("signedOut") is True:
-        raise SessionExpired("NetBenefits redirected the %s request, sign in again" % res.get("stage"))
+    if res.get("refused") is True:
+        # Signed out only when the page says so or the session's own token
+        # call is refused too. Otherwise this one request was refused, a
+        # network blip say, and only this statement fails, as before.
+        if looks_signed_out(page) or not _signed_in(page):
+            raise SessionExpired("NetBenefits redirected the %s request, sign in again" % res.get("stage"))
+        raise RuntimeError("NetBenefits refused the %s request" % res.get("stage"))
     if status in (401, 403):
         raise SessionExpired("NetBenefits answered %s" % status)
     if status != 200:
@@ -488,6 +500,19 @@ class PlanListUnavailable(RuntimeError):
     """This login has several plans and the site did not show their list."""
 
 
+class PlanListUnclear(PlanListUnavailable):
+    """The Choose a Plan page shows one plan's link of the shape a plan's
+    address has, and other links that carry a plan too, so whether this
+    sign-in has one plan or several cannot be told."""
+
+
+# What read_plan_choices answers when the Choose a Plan page lists exactly
+# one plan, by one address of the shape a plan's address has and no other
+# link that carries a plan. That is a sign-in with one plan, which goes on
+# exactly as it always did, whatever plans.json held before.
+ONE_PLAN = ()
+
+
 class PlanDidNotOpen(RuntimeError):
     """A plan that opened earlier in the run would not open again. `reason`
     is one of the fixed words above."""
@@ -502,6 +527,7 @@ class PlanDidNotOpen(RuntimeError):
 _plan_in_use: dict = {"plan": None}
 
 _READ_CHOOSER_JS = r"""() => {
+  if (location.protocol !== 'https:' || location.hostname !== 'workplaceservices.fidelity.com') return null;
   const text = (document.body && document.body.innerText) || '';
   if (!/choose a plan/i.test(text)) return null;
   return Array.from(document.querySelectorAll('a[href]'))
@@ -511,6 +537,7 @@ _READ_CHOOSER_JS = r"""() => {
 }"""
 
 _READ_CHOICES_JS = r"""() => {
+  if (location.protocol !== 'https:' || location.hostname !== 'workplaceservices.fidelity.com') return null;
   const sel = document.querySelector("select[name='accountSelect']");
   const text = (document.body && document.body.innerText) || '';
   if (!sel || !/requires you to select an account/i.test(text)) return null;
@@ -650,21 +677,30 @@ def _settle(page) -> None:
         page.wait_for_timeout(750)
 
 
-def _read_list(page, url: str, script: str) -> Optional[List[dict]]:
-    """The plans one list page shows, or None when the page is not that list.
-    The page is opened by its address and read with one script."""
+def _read_entries(page, url: str, script: str) -> Optional[List[dict]]:
+    """What one list page shows, each link or option as its text and its
+    address, or None when the page is not that list. The page is opened by
+    its address, and read with one script only once it is a signed-in page
+    of the statements site itself."""
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
     _settle(page)
     if looks_signed_out(page):
         raise SessionExpired("NetBenefits showed its sign-in page, sign in again")
+    if not on_documents_page(page):
+        # A page of another host, or one still on its way, is never read
+        # for plans, whatever its text says.
+        return None
     raw = page.evaluate(script)
     if not isinstance(raw, list):
         # The script answers a list only on its own page.
         return None
+    return [o for o in raw if isinstance(o, dict) and not o.get("disabled")]
+
+
+def _plans_from(entries: List[dict]) -> List[dict]:
+    """The plans a list's links or options make, each once."""
     plans, seen = [], set()
-    for o in raw:
-        if not isinstance(o, dict) or o.get("disabled"):
-            continue
+    for o in entries:
         plan = plan_from_option(o.get("text") or "", o.get("value") or "")
         if plan is None or plan["digest"] in seen:
             continue
@@ -676,32 +712,48 @@ def _read_list(page, url: str, script: str) -> Optional[List[dict]]:
     return plans
 
 
-def read_plan_choices(page) -> Optional[List[dict]]:
-    """The plans of a login with several, or None for a login with one.
+def _plan_numbers(entries: List[dict]) -> set:
+    """The plans whose address is of the exact shape a plan's address has,
+    by their number, each once however many links name it."""
+    return {ids[1] for ids in (plan_ids(o.get("value") or "") for o in entries) if ids}
+
+
+def read_plan_choices(page):
+    """The plans of a login with several, ONE_PLAN for a login the Choose a
+    Plan page shows one plan for, or None when neither list page shows.
 
     The Choose a Plan page comes first. It lists every plan whatever plan
-    the site is remembering, so a login it shows several plans for is a
-    login with several, and one it shows exactly one plan for is a login
-    with one plan, which goes on exactly as it always did. When it lists
-    nothing, the Statements address is opened afresh and its Select Account
-    page, shown only when the site remembers no plan, is read instead.
-    Every link and option is read, nothing is pressed. The tab ends on the
-    Statements address."""
+    the site is remembering, so a login it shows two or more plans for, by
+    two or more addresses of the exact shape a plan's address has, is a
+    login with several. One it shows exactly one such address for, and no
+    other link carrying a plan, is a login with one plan, which goes on
+    exactly as it always did. One such address with other links carrying a
+    plan cannot be told either way, and that is PlanListUnclear. With no
+    such address at all, the Statements address is opened afresh and its
+    Select Account page, shown only when the site remembers no plan, is
+    read instead. Every link and option is read, nothing is pressed. The
+    tab ends on the Statements address. Neither page is read unless the
+    tab is on a signed-in page of the statements site to begin with."""
+    if not on_documents_page(page):
+        return None
     # Whatever plan was open may not be once these pages have loaded.
     _plan_in_use["plan"] = None
-    chooser = _read_list(page, CHOOSER_URL, _READ_CHOOSER_JS)
-    one_plan = bool(chooser) and len(chooser) == 1 and bool(chooser[0]["path"])
-    select = _read_list(page, URLS["documents"], _READ_CHOICES_JS)
-    if chooser and not one_plan:
-        plans, where = chooser, "Choose a Plan"
-    elif one_plan:
-        return None
+    links = _read_entries(page, CHOOSER_URL, _READ_CHOOSER_JS) or []
+    exact = _plan_numbers(links)
+    others = [o for o in links if not plan_ids(o.get("value") or "")]
+    select = _read_entries(page, URLS["documents"], _READ_CHOICES_JS)
+    if len(exact) >= 2:
+        plans, where = _plans_from(links), "Choose a Plan"
+    elif len(exact) == 1 and others:
+        raise PlanListUnclear("the Choose a Plan page shows one plan and other plan links")
+    elif len(exact) == 1:
+        return ONE_PLAN
     elif select is None:
         return None
-    elif not select:
-        raise PlanListUnavailable("the Select Account page listed no plan")
     else:
-        plans, where = select, "Select Account"
+        plans, where = _plans_from(select), "Select Account"
+        if not plans:
+            raise PlanListUnavailable("the Select Account page listed no plan")
     log.info("NetBenefits lists %d plan(s) on its %s page, %d left for the owner",
              len(plans), where, sum(1 for p in plans if not p["path"]))
     return plans
@@ -718,17 +770,29 @@ def _heading_pattern(plan: dict) -> str:
     ids = plan_ids(plan.get("path") or "")
     if plan.get("shared_name") and ids:
         number = re.escape(ids[1])
-    return re.escape(name).replace("\\ ", " ") + r"\s*\(\s*" + number + r"\s*\)"
+    # No letter or digit before the name in the heading, so 'RETIREMENT
+    # SAVINGS PLAN (41111)' is not found inside 'ACME RETIREMENT SAVINGS
+    # PLAN (41111)'.
+    return (r"^[^A-Za-z0-9]*" + re.escape(name).replace("\\ ", " ")
+            + r"\s*\(\s*" + number + r"\s*\)")
+
+
+# The page's headings, where the Statements page names the plan it shows.
+HEADINGS = "h1, h2, h3, h4, h5, h6, [role='heading']"
 
 
 def _shows_plan(page, plan: dict) -> bool:
+    """Whether the Statements page shows this plan, by its statement form
+    and a heading naming the plan and its number. The rest of the page is
+    not read, since it can name other plans."""
     try:
         if page.locator("form[name='frmRequest']").count() == 0:
             return False
-        text = re.sub(r"\s+", " ", page.locator("body").inner_text(timeout=5000) or "")
+        headings = page.locator(HEADINGS).all_inner_texts()
     except Exception:
         return False
-    return bool(re.search(_heading_pattern(plan), text, re.I))
+    pattern = re.compile(_heading_pattern(plan), re.I)
+    return any(pattern.search(re.sub(r"\s+", " ", h or "")) for h in headings)
 
 
 def _signed_in(page) -> bool:
@@ -745,13 +809,13 @@ def open_plan(page, plan: dict) -> str:
     The plan's address is asked for from inside the page, with the
     session's cookies, as a same-origin request, and that request is what
     chooses the plan on the site. Its answer is the plan selector, not the
-    Statements page, so only its shape is checked: a 200 from this origin
+    Statements page, so only its shape is checked, a 200 from this origin
     at the address asked for. A redirect to any other host is refused by
     the browser before that host is asked anything, and such a plan, or any
     other answer, is left for the owner. If the session itself is gone by
     then, that is SessionExpired, not a plan to review. Then the tab
     reloads the Statements address, and that page must show this plan's
-    statement form and its heading, the plan's name and its number in
+    statement form and a heading naming the plan and its number in
     brackets, or the plan is left for the owner and no statement is made.
     The tab never loads the plan's own address. Nothing is pressed. The
     reason is one of the fixed words above, never an address or an
@@ -830,7 +894,7 @@ def _squeezed(text: str) -> str:
 
 
 def _name_key(plan: dict) -> str:
-    """What a plan is looked for by in a statement's text: its name from the
+    """What a plan is looked for by in a statement's text, its name from the
     plan list, without a bracketed number or a closing word "Plan", since a
     statement writes "ABC 457(B)" where the list says "ABC 457(B) PLAN"."""
     name = re.sub(r"\(\s*\d+\s*\)", "", plan.get("heading") or plan.get("label") or "")
@@ -838,16 +902,25 @@ def _name_key(plan: dict) -> str:
     return _squeezed(name)
 
 
+def statement_digest(text: str) -> str:
+    """The SHA-256 of a statement's text, its spacing squeezed, so two
+    plans' requests that gave the very same statement are told by it."""
+    return hashlib.sha256(re.sub(r"\s+", " ", text or "").strip().encode("utf-8")).hexdigest()
+
+
 def plans_named(text: str, plans, chosen: str = "") -> List[dict]:
     """The plans of the list whose names a statement's text carries, in the
     list's order, each once.
 
     NetBenefits makes one combined statement for the plans of one employer,
-    and every plan's own request gives that same statement. A plan whose
-    name is in a longer one's (ABC inside ABC DCP) counts only where it
-    stands on its own. Two plans with one name cannot be told apart by it,
-    so such a name counts only for the plan `chosen` (its digest), the one
-    the statement was made for, and never makes another plan covered."""
+    and every plan's own request gives that same statement. A name found
+    here only says which plans the statement may cover, since a plan's
+    name can be a few common words, and another plan is counted covered
+    only when its own request gives this very statement (statement_digest).
+    A plan whose name is in a longer one's (ABC inside ABC DCP) counts only
+    where it stands on its own. Two plans with one name cannot be told
+    apart by it, so such a name counts only for the plan `chosen` (its
+    digest), the one the statement was made for."""
     hay = _squeezed(text)
     keyed = [(p, _name_key(p)) for p in plans if p.get("path")]
     keys = [k for _, k in keyed]

@@ -81,7 +81,14 @@ one main item, as its PDF path does once the order is done. Until then
 that path is empty, so for an order still to finish the list adds them.
 An Apple purchase not saved yet keeps the start times of the runs on which
 Apple refused its receipt or it was not asked, so the third refusal still
-saves a record of the purchase, and one saved keeps neither.
+saves a record of the purchase, and one saved keeps neither. A NetBenefits
+statement keeps its kind, date, title, place among same-day twins and
+account, which is the plan's name its file name holds too, so a sign-in
+with one plan that gains another does not save its history again. On a
+sign-in with several plans it also keeps the plan's digest, the digests
+of the other plans a combined statement names and the digest of the
+statement's text, so a plan whose own statement is that one is not saved
+twice. None of these is a plan or employer number.
 A record still under a key that left out its account's
 last four, as the apps did past forty characters until 0.34.0 and Chase did
 at any length until 0.17.1, also keeps what its key is built from
@@ -169,10 +176,15 @@ PROVIDER_SKIP_FIELDS = {"Robinhood": ("undated_key", "source_url", "category", "
                         "AT&T": ("category", "date", "account", "pdf_size", "pdf_pages"),
                         "Target": ("invoices",),
                         # A combined statement covers its employer's other
-                        # plans for one period, found by the plans' digests
-                        # and the parts of the key. None names a person or
-                        # an account (netbenefits_docs._covered_already).
-                        "NetBenefits": ("category", "date", "title", "occurrence", "covers")}
+                        # plans for one period, found by the plans' digests,
+                        # the digest of its text and the parts of the key
+                        # (netbenefits_docs._covered_already). A period saved
+                        # while the login had one plan is found by the plan's
+                        # name, its account, which its file name holds too
+                        # (_saved_with_one_plan). None names a person or an
+                        # account number.
+                        "NetBenefits": ("category", "date", "title", "occurrence", "covers",
+                                        "plan", "text_sha256", "account")}
 
 
 def _optum_form(rec: dict) -> bool:

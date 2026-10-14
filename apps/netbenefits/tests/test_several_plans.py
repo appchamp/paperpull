@@ -61,9 +61,14 @@ class Locator:
             return self.page.employer
         return self.page.body()
 
+    def all_inner_texts(self):
+        if self.sel == site.HEADINGS:
+            return self.page.headings()
+        return [self.page.body()]
+
 
 class Page:
-    """Plans by their number: 'ok' is chosen by the look ahead, 'link' only
+    """Plans by their number. 'ok' is chosen by the look ahead, 'link' only
     by loading its own address, 'retail' redirects to the retail sign-in
     (as one plan's did on the surveyed login), 'sticky' is never chosen and
     leaves the site on the plan chosen before, 'login' is chosen and then
@@ -84,18 +89,34 @@ class Page:
         self.names = dict(NAMES)
         self.bare_probes, self.bare_redirects = 0, False
         self.employer = ""
+        # Where the Choose a Plan address lands, when not on its own page,
+        # and what a Statements page shows besides its heading.
+        self.chooser_lands = None
+        self.aside = ""
 
     def body(self):
         if self.kind == "chooser":
             return "Choose a Plan " + " ".join(t for t, _ in self.links or [])
         if self.kind == "statements":
-            return "Home %s (%s) Statements Time period Get statement" % (
-                self.names[self.in_context], self.in_context)
+            return "Home %s (%s) Statements Time period Get statement %s" % (
+                self.names[self.in_context], self.in_context, self.aside)
         if self.kind == "single":
             return "%s (12345) Statements Get statement" % self.single_heading
         if self.kind == "select":
             return "Select Account The page you've chosen requires you to select an account."
         return ""
+
+    def headings(self):
+        """The page's headings, where a Statements page names its plan."""
+        if self.kind == "statements":
+            return ["%s (%s)" % (self.names[self.in_context], self.in_context), "Statements"]
+        if self.kind == "single":
+            return ["%s (12345)" % self.single_heading, "Statements"]
+        if self.kind == "chooser":
+            return ["Choose a Plan"]
+        if self.kind == "select":
+            return ["Select Account"]
+        return []
 
     def title(self):
         return "Fidelity NetBenefits"
@@ -114,6 +135,7 @@ class Page:
         self.url = url
         if url == CHOOSER:
             self.kind = "chooser" if self.links is not None else "single" if self.single_heading else "select"
+            self.url = self.chooser_lands or url
             return
         if url == BARE:
             if self.in_context:
@@ -155,7 +177,7 @@ class Page:
                 self.in_context = plan
             if how == "login":
                 self.signs_out = True
-            # As live: a plain 200 at the link itself whose body is only the
+            # As live, a plain 200 at the link itself whose body is only the
             # selector, never the Statements page, whether or not it chose.
             return {"kind": "page", "status": 200, "origin": True, "redirected": False,
                     "password": False}
@@ -198,10 +220,11 @@ def fresh(monkeypatch):
     site.set_private_words([])
 
 
-def statements_by_plan(page, calls, single=None):
+def statements_by_plan(page, calls, single=None, header=None):
     """make_statement for the site. Like the real one it asks the tab for
     the plan in use first, so a statement is never made with another plan
-    chosen, and the answer comes from the plan the site has chosen."""
+    chosen, and the answer comes from the plan the site has chosen. `header`
+    is what the statement's own header names, when not another employer."""
     def make(pg, date_range, want_html=False):
         plan = site._plan_in_use.get("plan")
         if plan and not site._shows_plan(pg, plan):
@@ -217,7 +240,7 @@ def statements_by_plan(page, calls, single=None):
         return {"status": 200, "title": "Statement Details", "isStatement": True,
                 # The statement's own header names whichever employer the
                 # site remembers, which is never the label.
-                "plan": "NORTH-STAR MEDICAL GROUP, INC. 401(K) PROFIT SHARING PLAN", "period": date_range,
+                "plan": header or "NORTH-STAR MEDICAL GROUP, INC. 401(K) PROFIT SHARING PLAN", "period": date_range,
                 "html": "<html><head></head><body>%s|Statement Period %s</body></html>" % (
                     "|".join(named), date_range)}
     return make
@@ -279,7 +302,7 @@ def test_the_choose_a_plan_page_lists_every_plan_whatever_the_site_remembers():
 
 def test_a_choose_a_plan_page_with_one_plan_is_a_login_with_one_plan():
     page = Page(links=chooser_links(P457), single_heading="SOME CORP. RETIREMENT SAVINGS PLAN")
-    assert site.read_plan_choices(page) is None
+    assert site.read_plan_choices(page) == site.ONE_PLAN
 
 
 def test_with_no_choose_a_plan_page_the_select_account_page_is_read():
@@ -384,7 +407,7 @@ def test_a_plan_address_answered_from_elsewhere_on_the_site_is_left():
 
 
 def test_the_selector_answer_is_not_the_statements_page_and_the_heading_decides():
-    # The live shape: the look ahead answers 200 with the selector page and
+    # The live shape. The look ahead answers 200 with the selector page and
     # chooses the plan. The plan opens because the Statements page names it.
     page = multi_page(remembered=P457)
     plans = plans_of(page)
@@ -455,7 +478,9 @@ def test_a_statement_request_that_is_redirected_is_session_expired(monkeypatch):
             return type("L", (), {"count": lambda s: 0})()
 
         def evaluate(self, js, arg=None):
-            return {"status": 0, "stage": "token", "signedOut": True}
+            if js == site._SIGNED_IN_JS:
+                return False                      # the session's own token call is refused too
+            return {"status": 0, "stage": "token", "refused": True}
     monkeypatch.setattr(site, "_keep_awake", lambda page: None)
     with pytest.raises(site.SessionExpired):
         site.make_statement(P(), "01/01/2026-03/31/2026")
@@ -464,7 +489,7 @@ def test_a_statement_request_that_is_redirected_is_session_expired(monkeypatch):
 # -- discovery and download through the app -----------------------------------------
 
 def test_a_remembered_plan_no_longer_names_every_statement(monkeypatch, tmp_path, caplog):
-    """The live run that found this: the site remembered one plan, the app
+    """The live run that found this. The site remembered one plan, the app
     took the login for one with a single plan, and every statement was
     named after the employer in the statement's own header."""
     caplog.set_level("INFO")
@@ -508,7 +533,8 @@ def test_a_login_with_one_plan_is_listed_as_before(monkeypatch, tmp_path):
     app = app_on(tmp_path, page)
     app.cmd_discover(quiet=True)
     assert list(app.discovery.data) == ["Statement:2026-06-30:Quarterly Statement"]
-    assert app.discovery.data["Statement:2026-06-30:Quarterly Statement"]["plan"] == ""
+    # The record v0.51.0 wrote, with none of the fields several plans use.
+    assert not set(docs.PLAN_FIELDS) & set(app.discovery.data["Statement:2026-06-30:Quarterly Statement"])
     assert page.probes == []
     assert not (app.paths.root / "plans.json").exists() or json.loads(
         (app.paths.root / "plans.json").read_text()) == {}
@@ -645,8 +671,9 @@ def test_a_combined_statement_is_saved_once_for_the_plans_it_covers(monkeypatch,
     saved = sorted(p.name for p in (tmp_path / "out" / "Statements").iterdir())
     assert saved == ["2026-06-30 NetBenefits Quarterly Statement - ABC 403(b), ABC 457(b) and ABC DCP Plans.pdf",
                      "2026-06-30 NetBenefits Quarterly Statement - North-Star Medical Group.pdf"]
-    # Made once for the three, once for North-Star.
-    assert len([c for c in calls if c[2]]) == 2
+    # Each plan's own request is made, and the three ABC plans' requests give
+    # one statement, kept once.
+    assert sorted(c[0] for c in calls if c[2]) == sorted([P403, PDCP, P457, PXR])
     done = [app.progress.data[k] for k in app.progress.data]
     assert len(done) == 4 and all(r["downloaded_ok"] for r in done)
     covered = [r for r in done if "covered by the combined statement" in (r.get("notes") or "")]
@@ -705,9 +732,10 @@ def test_plan_names_are_found_however_the_pdf_spaced_them():
     assert [p["label"] for p in named] == ["ABC 403(b) Plan", "ABC DCP", "ABC 457(b) Plan"]
 
 
-def test_a_later_process_finds_the_combined_statement_and_makes_nothing(monkeypatch, tmp_path):
+def test_a_later_process_finds_the_combined_statement_and_keeps_no_second_copy(monkeypatch, tmp_path):
     app, page, calls = three_plans_one_statement(monkeypatch, tmp_path)
     app.process(app._select())
+    saved = sorted(p.name for p in (tmp_path / "out" / "Statements").iterdir())
     # The covered plans' records are gone, as for plans listed after the
     # statement was saved, and a new process is started.
     for key in [k for k, r in app.progress.data.items() if "covered by" in (r.get("notes") or "")]:
@@ -717,7 +745,9 @@ def test_a_later_process_finds_the_combined_statement_and_makes_nothing(monkeypa
     again = app_on(tmp_path, page)
     calls.clear()
     again.process(again._select())
-    assert not [c for c in calls if c[2]]
+    # Their own requests are made, give the saved statement, and nothing is kept twice.
+    assert len([c for c in calls if c[2]]) == 2
+    assert sorted(p.name for p in (tmp_path / "out" / "Statements").iterdir()) == saved
     assert sum("covered by" in (r.get("notes") or "") for r in again.progress.data.values()) == 2
 
 
@@ -729,7 +759,25 @@ def test_download_again_makes_the_combined_statement_again(monkeypatch, tmp_path
     again.args.redownload = True
     calls.clear()
     again.process(again._select())
-    assert len([c for c in calls if c[2]]) == 2          # once for the three, once for North-Star
+    assert len([c for c in calls if c[2]]) == 4          # each plan's own request once
+    covered = [r for r in again.progress.data.values() if "covered by" in (r.get("notes") or "")]
+    assert len(covered) == 2 and not any(r["pdf_path"] for r in covered)
+
+
+def test_download_again_rebuilds_a_deleted_combined_statement_for_a_covered_plan(monkeypatch, tmp_path):
+    """A file saved on an earlier run may be the one the person deleted, so
+    under Download again only a file this run saved covers a plan."""
+    app, page, calls = three_plans_one_statement(monkeypatch, tmp_path)
+    app.process(app._select())
+    for p in (tmp_path / "out" / "Statements").iterdir():
+        p.unlink()
+    site._plan_in_use["plan"] = None
+    again = app_on(tmp_path, page)
+    again.args.redownload = True
+    one = [d for d in again._select() if d.plan == site.plan_digest(P403)]
+    again.process(one)
+    assert saved_names(tmp_path) == [
+        "2026-06-30 NetBenefits Quarterly Statement - ABC 403(b), ABC 457(b) and ABC DCP Plans.pdf"]
 
 
 def test_two_plans_with_one_name_never_cover_each_other():
@@ -738,3 +786,221 @@ def test_two_plans_with_one_name_never_cover_each_other():
              site.plan_from_option("ABC DCP", LINK % PDCP)]
     named = site.plans_named("ABC 401(K) PLAN statement", twins, chosen=twins[0]["digest"])
     assert [p["digest"] for p in named] == [twins[0]["digest"]]
+
+
+# -- a Choose a Plan page that is not one plan's link alone ---------------------------
+
+Q1 = "01/01/2026-03/31/2026"
+NAV = "/mybenefits/savings2/navigation/dc/Summary?plan=%s"
+
+
+def saved_names(tmp_path):
+    folder = tmp_path / "out" / "Statements"
+    return sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+
+
+def one_plan_listed(monkeypatch, tmp_path, links, header="ABC 457(B) PLAN", have=(Q2,)):
+    """An app on a page whose Choose a Plan page shows `links` and whose
+    Statements page is its one plan's own, named `header`."""
+    page = Page(links=links, single_heading=header)
+    calls = []
+    monkeypatch.setattr(site, "make_statement",
+                        statements_by_plan(page, calls, single=set(have), header=header))
+    return app_on(tmp_path, page), page, calls
+
+
+def test_one_plan_link_beside_other_plan_links_stops_and_keeps_no_list(monkeypatch, tmp_path, capsys):
+    app, page, calls = one_plan_listed(monkeypatch, tmp_path,
+                                       [(NAMES[P457], LINK % P457), ("Plan Summary", NAV % P457)])
+    with pytest.raises(SystemExit):
+        app.cmd_discover(quiet=True)
+    assert app.stats["plans_unlisted"] == 1
+    assert "cannot tell whether this login has one" in capsys.readouterr().out
+    assert not (tmp_path / "out" / "plans.json").exists()
+    assert not app.discovery.data and not calls and page.probes == []
+
+
+@pytest.mark.parametrize("address", [site.WPS + LINK % P457,
+                                     "/mybenefits/savings2/navigation/dc/OnlineStatement?plan=%s" % P457],
+                         ids=["absolute", "savings2-without-client"])
+def test_one_plan_link_of_another_shape_is_a_login_with_one_plan(monkeypatch, tmp_path, address):
+    app, page, calls = one_plan_listed(monkeypatch, tmp_path, [(NAMES[P457], address)])
+    app.cmd_discover(quiet=True)
+    assert list(app.discovery.data) == ["Statement:2026-06-30:Quarterly Statement"]
+    assert not (tmp_path / "out" / "plans.json").exists()
+    assert page.probes == [] and app.stats["manual_review"] == 0
+
+
+def test_a_one_plan_chooser_lets_go_of_plans_kept_before(monkeypatch, tmp_path):
+    """plans.json as a run that took this page for several plans left it.
+    The page shows one plan, so the login has one plan, and a later run
+    with no list page at all does not go back to what was kept."""
+    app, page, calls = one_plan_listed(monkeypatch, tmp_path, chooser_links(P457))
+    for p in (P457, PXR):
+        kept = site.plan_from_option(NAMES[p], LINK % p)
+        app.plans.update(kept["digest"], kept, save=False)
+    app.plans.save()
+    app.cmd_discover(quiet=True)
+    assert list(app.discovery.data) == ["Statement:2026-06-30:Quarterly Statement"]
+    assert json.loads((tmp_path / "out" / "plans.json").read_text()) == {}
+    page.links = None                                  # no Choose a Plan page now
+    again = app_on(tmp_path, page)
+    again.cmd_discover(quiet=True)
+    assert list(again.discovery.data) == ["Statement:2026-06-30:Quarterly Statement"]
+    assert page.probes == []
+
+
+def test_a_choose_a_plan_page_off_the_statements_site_is_not_read():
+    page = multi_page(remembered=P457)
+    page.chooser_lands = "https://nb.fidelity.com/public/nb/default/home"
+    assert site.read_plan_choices(page) is None
+
+
+def test_no_plan_list_is_read_from_a_tab_off_the_statements_site():
+    page = multi_page(remembered=P457)
+    page.url = "https://nb.fidelity.com/public/nb/default/home"
+    assert site.read_plan_choices(page) is None
+    assert page.gotos == []
+
+
+# -- a login with one plan that gains another -----------------------------------------
+
+def gains_a_second_plan(monkeypatch, tmp_path, header):
+    """A login with one plan saves two quarters, then gains North-Star's
+    plan, and a Discover and a Run All follow. The statements made after."""
+    monkeypatch.setattr(receipt_pdf, "print_html_to_pdf", render_text)
+    app, one, _calls = one_plan_listed(monkeypatch, tmp_path, chooser_links(P457), header=header,
+                                       have=(Q2, Q1))
+    app.cmd_discover(quiet=True)
+    app.process(app._select())
+    assert len(saved_names(tmp_path)) == 2
+    site._plan_in_use["plan"] = None
+    two = Page(links=chooser_links(P457, PXR), remembered=P457)
+    calls = []
+    monkeypatch.setattr(site, "make_statement", statements_by_plan(two, calls))
+    again = app_on(tmp_path, two)
+    again.cmd_discover(quiet=True)
+    again.process(again._select())
+    return again, [(c[0], c[1]) for c in calls if c[2]]
+
+
+def test_a_login_with_one_plan_that_gains_a_second_does_not_make_its_history_again(monkeypatch, tmp_path):
+    # The statement named the plan as the list does, in its own case.
+    app, made = gains_a_second_plan(monkeypatch, tmp_path, header="ABC 457(B) PLAN")
+    assert made == [(PXR, Q2)]
+    assert saved_names(tmp_path) == [
+        "2026-03-31 NetBenefits Quarterly Statement - Abc 457(B) Plan.pdf",
+        "2026-06-30 NetBenefits Quarterly Statement - Abc 457(B) Plan.pdf",
+        "2026-06-30 NetBenefits Quarterly Statement - North-Star Medical Group.pdf"]
+    mine = [r for r in app.progress.data.values() if r.get("plan") == site.plan_digest(P457)]
+    assert len(mine) == 2 and all(r["downloaded_ok"] and not r["pdf_path"] for r in mine)
+    assert all("saved before this login had several plans" in r["notes"] for r in mine)
+
+
+def test_a_record_saved_under_another_plans_name_does_not_count_for_this_plan(monkeypatch, tmp_path):
+    app, made = gains_a_second_plan(monkeypatch, tmp_path, header="SOME CORP. RETIREMENT SAVINGS PLAN")
+    assert sorted(made) == sorted([(P457, Q2), (P457, Q1), (PXR, Q2)])
+
+
+# -- a record with no plan on a login with several -------------------------------------
+
+def test_a_record_with_no_plan_is_left_for_review_once_the_login_has_several(monkeypatch, tmp_path):
+    monkeypatch.setattr(receipt_pdf, "print_html_to_pdf", render_text)
+    app, one, _calls = one_plan_listed(monkeypatch, tmp_path, chooser_links(P457),
+                                       header="SOME CORP. RETIREMENT SAVINGS PLAN")
+    app.cmd_discover(quiet=True)                       # listed, never downloaded
+    site._plan_in_use["plan"] = None
+    page = multi_page()
+    calls = []
+    monkeypatch.setattr(site, "make_statement", statements_by_plan(page, calls, single={Q2}))
+    again = app_on(tmp_path, page)
+    again.cmd_discover(quiet=True)
+    again.process(again._select())
+    rec = again.progress.data["Statement:2026-06-30:Quarterly Statement"]
+    assert rec["state"] == State.NEEDS_MANUAL_REVIEW.value and not rec.get("downloaded_ok")
+    assert "its plan is not known" in rec["notes"] and not rec["pdf_path"]
+    assert len([c for c in calls if c[2]]) == 3          # the plans' own three, and no other
+    # A Resume in a new process, with plans.json alone, leaves it too.
+    site._plan_in_use["plan"] = None
+    resume = app_on(tmp_path, page)
+    calls.clear()
+    resume.process(resume._select())
+    assert not [c for c in calls if c[2]]
+    assert resume.progress.data["Statement:2026-06-30:Quarterly Statement"]["state"] == \
+        State.NEEDS_MANUAL_REVIEW.value
+
+
+# -- a plan counted covered only by its own statement ----------------------------------
+
+def test_a_plan_with_a_common_name_is_not_covered_by_another_plans_statement(monkeypatch, tmp_path):
+    """'Retirement Savings Plan' is in any statement that speaks of your
+    retirement savings plan. Its own statement is another one, and saved."""
+    acme, rsp = PXR, P457                              # ACME's statement is made first
+    page = Page(links=[("ACME 401(K) PLAN", LINK % acme), ("RETIREMENT SAVINGS PLAN", LINK % rsp)],
+                remembered=acme)
+    page.names.update({acme: "ACME 401(K) PLAN", rsp: "RETIREMENT SAVINGS PLAN"})
+    monkeypatch.setitem(HAVE, acme, {Q2})
+    monkeypatch.setitem(HAVE, rsp, {Q2})
+    monkeypatch.setitem(STATEMENT_NAMES, acme, ["ACME 401(K) PLAN",
+                                                "Your retirement savings plan grew this quarter"])
+    monkeypatch.setitem(STATEMENT_NAMES, rsp, ["RETIREMENT SAVINGS PLAN", "Balance 100.00"])
+    calls = []
+    monkeypatch.setattr(site, "make_statement", statements_by_plan(page, calls))
+    monkeypatch.setattr(receipt_pdf, "print_html_to_pdf", render_text)
+    app = app_on(tmp_path, page)
+    app.cmd_discover(quiet=True)
+    chosen = app._select()
+    assert [d.account for d in chosen] == ["Acme 401(k) Plan", "Retirement Savings Plan"]
+    app.process(chosen)
+    assert sorted(c[0] for c in calls if c[2]) == sorted([acme, rsp])
+    own = next(r for r in app.progress.data.values() if r["account"] == "Retirement Savings Plan")
+    assert own["downloaded_ok"] and "covered by" not in (own.get("notes") or "")
+    assert "Balance 100.00" in receipt_pdf.pdf_text(Path(own["pdf_path"]))
+
+
+# -- a combined statement named from the record written down for it ---------------------
+
+def test_a_combined_statement_that_cannot_be_renamed_keeps_the_summary_its_name_came_from(
+        monkeypatch, tmp_path):
+    app, page, calls = three_plans_one_statement(monkeypatch, tmp_path)
+    real = Path.replace
+
+    def held(self, target):
+        if str(target).endswith(" Plans.pdf"):
+            raise OSError("another program has it open")
+        return real(self, target)
+    monkeypatch.setattr(Path, "replace", held)
+    app.process(app._select())
+    files = [r for r in app.progress.data.values() if r.get("pdf_path")]
+    assert files
+    for rec in files:
+        name = docs.build_pdf_filename(rec["date"], rec["summary"], "", record=docs.Document.from_dict(rec))
+        assert name == Path(rec["pdf_path"]).name == rec["pdf_filename"]
+
+
+def test_rename_offers_nothing_after_a_combined_statement(monkeypatch, tmp_path, capsys):
+    app, page, calls = three_plans_one_statement(monkeypatch, tmp_path)
+    app.process(app._select())
+    capsys.readouterr()
+    app.cmd_rename()
+    assert "Every file is already named the way this app names them." in capsys.readouterr().out
+
+
+# -- the heading names the plan --------------------------------------------------------
+
+def test_a_plan_is_not_found_inside_a_longer_plans_heading():
+    page = Page({P457: "sticky"}, links=[("ACME RETIREMENT SAVINGS PLAN", LINK % P403),
+                                         ("RETIREMENT SAVINGS PLAN", LINK % P457)], remembered=P403)
+    page.names.update({P403: "ACME RETIREMENT SAVINGS PLAN", P457: "RETIREMENT SAVINGS PLAN"})
+    plans = plans_of(page)
+    # The site stays on ACME's plan, whose heading carries the other's name.
+    assert site.open_plan(page, plans[P457]) == site.DID_NOT_OPEN
+    assert site.open_plan(page, plans[P403]) == site.OPENED
+
+
+def test_a_plan_named_elsewhere_on_the_page_is_not_the_plan_it_shows():
+    page = multi_page(remembered=P403)
+    plans = plans_of(page)
+    page.aside = "Your other plans ABC 457(B) PLAN (%s)" % P457
+    assert not site._shows_plan(page, plans[P457])
+    assert site._shows_plan(page, plans[P403])

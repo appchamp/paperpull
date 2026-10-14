@@ -47,6 +47,7 @@ from paperpull_core import browser as browser_launcher
 import netbenefits_site as site
 import storage
 from paperpull_core.models import State
+from paperpull_core.keys import is_done as _is_done
 from paperpull_core.keys import stable_occurrences as _stable_occurrences
 from paperpull_core.words import shape, shape_tree, words_for, write_shaped
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
@@ -57,6 +58,15 @@ from storage import ensure_owner, PROJECT_DIR, set_filename_owner
 log = logging.getLogger("netbenefits_docs")
 
 DONE_STATES = {State.COMPLETED.value, State.NO_RECEIPT_AVAILABLE.value}
+
+# The fields only a record of a login with several plans carries.
+PLAN_FIELDS = ("plan", "covers", "text_sha256")
+
+
+def _folded(text) -> str:
+    """A name as it is compared, without its case or its spacing, since the
+    statement and the plan list write one name in different cases."""
+    return re.sub(r"\s+", " ", str(text or "")).strip().casefold()
 
 
 def ask(prompt: str) -> str:
@@ -89,8 +99,11 @@ class Document:
         # On a login with several plans, the plan's digest (never its ids).
         # Empty for a login with one plan, whose keys stay as they were.
         self.plan = plan
-        # The plans a combined statement saved for this one also covers.
+        # The other plans a combined statement saved for this one names,
+        # each counted covered only when its own request gives the same
+        # statement, by the digest of its text kept beside them.
         self.covers = kw.get("covers", [])
+        self.text_sha256 = kw.get("text_sha256", "")
         # Sticky "was successfully downloaded at least once" marker. Once set,
         # the document is never re-downloaded even if you delete the PDF (e.g.
         # after importing it into paperless-ngx).
@@ -120,7 +133,13 @@ class Document:
         return base if not self.occurrence else f"{base}#{self.occurrence}"
 
     def to_dict(self) -> dict:
-        return dict(self.__dict__)
+        """The record. A login with one plan writes the very record it
+        always wrote, without the fields only several plans use."""
+        d = dict(self.__dict__)
+        if not self.plan:
+            for field in PLAN_FIELDS:
+                d.pop(field, None)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Document":
@@ -159,7 +178,8 @@ class App:
         self.plans = JsonStore(self.paths.root / "plans.json", self.paths.backups)
         self.plans.load()
         self._plans_by_digest = {}
-        self._covered_this_run = set()
+        # The statements this run saved a file for, by key.
+        self._saved_this_run = set()
         self.rules = doc_types.load_rules()
 
         self._pw = None
@@ -395,11 +415,22 @@ class App:
 
         The site's Choose a Plan page is the list, or its Select Account
         page when there is no such page (site.read_plan_choices), and what
-        it lists replaces what plans.json held. When neither list shows,
-        the plans plans.json holds are the list, each checked again. A
-        login whose records name plans while no list is there is not taken
-        for a login with one plan, it raises PlanListUnavailable."""
+        it lists replaces what plans.json held. A Choose a Plan page that
+        shows one plan is a login with one plan, and plans.json is emptied,
+        so a later run with no list page does not go back to plans it held.
+        When neither list shows, the plans plans.json holds are the list,
+        each checked again. A login whose records name plans while no list
+        is there is not taken for a login with one plan, it raises
+        PlanListUnavailable. A Choose a Plan page that cannot be told
+        either way raises PlanListUnclear and writes nothing."""
         choices = site.read_plan_choices(page)
+        if choices == site.ONE_PLAN:
+            if self.plans.data:
+                log.info("NetBenefits lists one plan, the plans kept before are let go")
+                self.plans.data.clear()
+                self.plans.save()
+            self._plans_by_digest = {}
+            return None
         if choices is not None:
             self.plans.data.clear()
             for plan in choices:
@@ -415,8 +446,14 @@ class App:
         self._plans_by_digest = {p["digest"]: p for p in plans}
         return plans
 
-    def _say_plans_unlisted(self) -> None:
+    def _say_plans_unlisted(self, unclear: bool = False) -> None:
         self.stats["plans_unlisted"] = 1
+        if unclear:
+            print("\n!! NetBenefits' Choose a Plan page shows one plan, and other links that")
+            print("   name a plan too, so this app cannot tell whether this login has one")
+            print("   plan or several. Nothing was listed and nothing was downloaded. Please")
+            print("   report it on this provider's issue, so the app can learn that page.")
+            return
         print("\n!! This NetBenefits login has several plans, and the site did not")
         print("   show their list this time. Log out of NetBenefits in the open browser,")
         print("   sign in again, then run Discover, then Resume.")
@@ -459,8 +496,68 @@ class App:
             for d, occ in zip(rows, _stable_occurrences(rows, self.discovery.data,
                                                         fields=("title", "date", "plan"))):
                 n_new += self._record_statement_doc(d, occ)
+            self._saved_before_several(plan)
             self.discovery.save()
         return n_new
+
+    def _saved_before_several(self, plan: dict) -> int:
+        """This plan's periods saved while the login had one plan, counted
+        as done. Answers how many.
+
+        A login with one plan that gains a second keys each plan's
+        statements by the plan from then on, so the history it saved
+        under the old keys would be made again under the new ones. A
+        period of this plan is done when a record with no plan, of that
+        kind, date and title, was downloaded and its account, the name its
+        statement gave the plan, is this plan's name from the list. The
+        file stays that record's own, and this record names it in its
+        notes."""
+        label = _folded(plan["label"])
+        before = self._saved_with_one_plan(label) if label else []
+        counted = 0
+        for key, rec in list(self.discovery.data.items()):
+            if not before or rec.get("plan") != plan["digest"] \
+                    or _is_done(self.progress.get(key) or {}):
+                continue
+            doc = Document.from_dict(rec)
+            old = next((r for r in before if self._same_period(r, doc)), None)
+            if old is None:
+                continue
+            doc.downloaded_ok = True
+            doc.pdf_path = doc.pdf_filename = ""
+            name = Path(str(old.get("pdf_path") or "")).name
+            self._record(doc, State.COMPLETED,
+                         notes="saved before this login had several plans"
+                               + (", as " + name if name else ""))
+            counted += 1
+        if counted:
+            log.info("NetBenefits, %s: %d period(s) saved before, not made again",
+                     plan["label"], counted)
+        return counted
+
+    def _saved_with_one_plan(self, label: str) -> list:
+        """The records downloaded while the login had one plan whose
+        statement gave the plan the name `label`, compared folded."""
+        return [rec for rec in list(self.progress.data.values())
+                if isinstance(rec, dict) and not rec.get("plan")
+                and rec.get("downloaded_ok") is True and _folded(rec.get("account")) == label]
+
+    def _several_plans(self) -> bool:
+        """Whether this login is known to have several plans, by the plan
+        list this run read or the plans plans.json holds."""
+        return bool(self._plans_by_digest) or any(
+            site.checked_plan(r) for r in list(self.plans.data.values()))
+
+    def _left_without_plan(self, doc: "Document") -> None:
+        """A statement listed while the login had one plan, on a login that
+        now has several. It is not made, since it would be made for
+        whichever plan is open, and is left for review with a note."""
+        self._record(doc, State.NEEDS_MANUAL_REVIEW,
+                     notes="listed before this login had several plans, so its plan is not known")
+        self._write_row(doc, "No plan", "Needs Manual Review")
+        self.stats["manual_review"] += 1
+        print("  Listed before this login had several plans, so its plan is not known.")
+        print("  Not made. Left for review, and Discover lists each plan's own.")
 
     def _plan_for(self, page, doc: "Document") -> Optional[dict]:
         """The plan a document belongs to, or None for a login with one.
@@ -492,8 +589,8 @@ class App:
 
         try:
             plans = self._plan_list(page)
-        except site.PlanListUnavailable:
-            self._say_plans_unlisted()
+        except site.PlanListUnavailable as e:
+            self._say_plans_unlisted(unclear=isinstance(e, site.PlanListUnclear))
             raise SystemExit(0)
         n_new = 0
         if plans is not None:
@@ -603,6 +700,15 @@ class App:
                 print("  Already downloaded and verified - skipping.")
                 self.stats["skipped_completed"] += 1
                 continue
+            if not doc.plan and self._several_plans():
+                # Listed while the login had one plan, and which plan of
+                # several it is cannot be told. Made now, it would be made
+                # for whichever plan is open and filed as done.
+                if dry_run:
+                    print("  DRY RUN - would leave for review, it names no plan")
+                else:
+                    self._left_without_plan(doc)
+                continue
             filename = build_pdf_filename(doc.date, doc.summary, "", record=doc)
             if dry_run:
                 print(f"  DRY RUN - would save: {filename}")
@@ -625,10 +731,10 @@ class App:
                 # through the rest producing empty "manual review" entries.
                 print("Stopped. Everything downloaded so far is saved.")
                 return
-            except site.PlanListUnavailable:
+            except site.PlanListUnavailable as e:
                 # Every document after this one belongs to a plan that cannot
                 # be opened either, so none is marked failed. They wait.
-                self._say_plans_unlisted()
+                self._say_plans_unlisted(unclear=isinstance(e, site.PlanListUnclear))
                 print("Stopped. Everything downloaded so far is saved.")
                 return
             except Exception as e:
@@ -646,16 +752,6 @@ class App:
         whenever a filter or page changes).
         """
         self.check_session(page)
-        covering = self._covered_already(doc, self.progress.data) if doc.plan else None
-        # A combined statement saved earlier in this run covers this plan
-        # even with --redownload, which asks for each statement once.
-        if (covering is not None and not getattr(self.args, "redownload", False)) \
-                or doc.key in self._covered_this_run:
-            if doc.key not in self._covered_this_run:
-                self._cover(doc, covering)
-            self.stats["skipped_completed"] += 1
-            print("  Covered by a combined statement already saved - skipping.")
-            return
         folder = self.paths.folder_for(doc.category)
         # The last of the document id, used only if the name is taken.
         # Two documents on one day used to differ by " (2)", which says
@@ -741,6 +837,7 @@ class App:
                 return
         doc.downloaded_ok = True   # done for good, even if the file is deleted later
         self._record(doc, State.COMPLETED)
+        self._saved_this_run.add(doc.key)
         self.journal.checkpoint('a document is saved')
         self._write_row(doc, "Downloaded", "Completed")
         self.stats["new_files"].append(str(out_path))
@@ -753,20 +850,25 @@ class App:
         else:
             self.stats["other"] += 1
         print(f"  Saved: {out_path.name}")
-        if doc.covers:
-            self._cover_siblings(doc)
 
     # -- a statement that covers several plans -----------------------------
 
-    def _own_or_combined(self, page, doc: "Document", out_path: Path) -> Optional[Path]:
+    def _own_or_combined(self, page, doc: Document, out_path: Path) -> Optional[Path]:
         """The saved statement's own check, on a login with several plans.
 
         The statement must name the plan it was made for, or it is set aside
-        for review as the wrong document and None is answered. One that
-        names other plans of the list too is the employer's combined
-        statement. It is renamed for all of them, and the plans it covers
-        are noted on the record, so they are not made again."""
+        for review as the wrong document and None is answered. When it is,
+        by the digest of its text, the very statement another plan's request
+        gave for this period and saved, naming this plan too, this copy is
+        not kept, this plan is recorded as covered by that file, and None is
+        answered. One that names other plans of the list too is the
+        employer's combined statement. It is renamed for all of them, and
+        the plans it names are noted on the record with its digest, each to
+        be counted covered only when its own request gives the same
+        statement. The file is always named from the record written down
+        for it, so a rename that fails leaves the summary it was saved by."""
         text = receipt_pdf.pdf_text(out_path)
+        digest = site.statement_digest(text)
         named = site.plans_named(text, list(self._plans_by_digest.values()), chosen=doc.plan)
         if doc.plan not in {p["digest"] for p in named}:
             self.stats["wrong_document"] = self.stats.get("wrong_document", 0) + 1
@@ -785,11 +887,27 @@ class App:
                                'the statement did not name the plan it was made for')
             print("  !! The statement does not name its plan. Moved to Manual Review.")
             return None
+        covering = self._covered_already(doc, digest)
+        # Download again asks for each statement once, so a file saved
+        # earlier in this run covers this plan, and one saved before does
+        # not, since it may be the very file the person deleted.
+        if covering is not None and (not getattr(self.args, "redownload", False)
+                                     or covering in self._saved_this_run):
+            try:
+                out_path.unlink()
+            except OSError:
+                log.warning("could not remove the second copy of a combined statement for %s", doc.key)
+            self._cover(doc, self.progress.get(covering) or {})
+            self.stats["skipped_completed"] += 1
+            print("  The same statement as one already saved for another plan, not kept twice.")
+            return None
+        doc.text_sha256 = digest
         if len(named) < 2:
             return out_path
         label = site.combined_label(named, site.employer_name(page), text)
         suffix = " - " + doc.account
         base = doc.summary[:-len(suffix)] if doc.account and doc.summary.endswith(suffix) else doc.summary
+        own_summary = doc.summary
         doc.summary = f"{base} - {label}"
         doc.covers = [p["digest"] for p in named if p["digest"] != doc.plan]
         filename = build_pdf_filename(doc.date, doc.summary, "", record=doc)
@@ -798,9 +916,12 @@ class App:
             out_path.replace(target)
             out_path = target
         except OSError:
+            # The file keeps the name its own summary gave it, so the record
+            # keeps that summary too, and Rename finds nothing to change.
             log.warning("could not rename the combined statement for %s", doc.key)
+            doc.summary = own_summary
         doc.pdf_path, doc.pdf_filename = str(out_path), out_path.name
-        log.info("%s %s covers %d plans", doc.title, doc.date, len(named))
+        log.info("%s %s names %d plans", doc.title, doc.date, len(named))
         return out_path
 
     def _same_period(self, rec: dict, doc: "Document") -> bool:
@@ -819,26 +940,20 @@ class App:
                      notes="covered by the combined statement " + (source.get("pdf_filename") or ""))
         self._write_row(doc, "Covered by a combined statement", "Completed")
 
-    def _cover_siblings(self, doc: "Document") -> None:
-        """The other plans' records for this period, done by this file."""
-        source = doc.to_dict()
-        for key, rec in list(self.discovery.data.items()):
-            if rec.get("plan") in doc.covers and self._same_period(rec, doc):
-                sibling = Document.from_dict(rec)
-                if self._already_done(sibling):
-                    continue
-                self._covered_this_run.add(sibling.key)
-                self._cover(sibling, source)
-                print(f"  Also covers: {sibling.summary}")
-
-    def _covered_already(self, doc: "Document", records: dict) -> Optional[dict]:
-        """The record of a combined statement already saved for this period
-        that covers this plan, or None. Its caller asks only without
-        --redownload, which makes every statement in scope again."""
-        for rec in list(records.values()):
-            if rec.get("downloaded_ok") and doc.plan in (rec.get("covers") or []) \
-                    and self._same_period(rec, doc):
-                return rec
+    def _covered_already(self, doc: "Document", digest: str) -> Optional[str]:
+        """The key of another plan's statement saved for this period that
+        names this plan and is, by the digest of its text, the very
+        statement this plan's own request just gave, or None. A name alone
+        never makes a plan covered, since a plan's name can be a few common
+        words another employer's statement also has."""
+        if not digest:
+            return None
+        for key, rec in list(self.progress.data.items()):
+            if (isinstance(rec, dict) and rec.get("downloaded_ok") is True
+                    and rec.get("plan") and rec.get("plan") != doc.plan
+                    and doc.plan in (rec.get("covers") or [])
+                    and rec.get("text_sha256") == digest and self._same_period(rec, doc)):
+                return key
         return None
 
     # -- records -----------------------------------------------------------
@@ -1101,9 +1216,12 @@ class App:
             info["collected"] = len(docs)
             try:
                 choices = site.read_plan_choices(page)
-                info["plans"] = None if choices is None else {
-                    "listed": len(choices),
-                    "left_for_review": sum(1 for p in choices if not p["path"])}
+                if choices == site.ONE_PLAN:
+                    info["plans"] = {"listed": 1, "left_for_review": 0}
+                else:
+                    info["plans"] = None if choices is None else {
+                        "listed": len(choices),
+                        "left_for_review": sum(1 for p in choices if not p["path"])}
             except Exception as e:
                 info["plans"] = type(e).__name__
             info["samples"] = []
