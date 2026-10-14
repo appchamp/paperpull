@@ -62,6 +62,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
   diagnostic file. Run on a contributor's own account, where Discover
   listed 3 documents, Pilot saved 1 and Run All the other 2, and every PDF
   opened.
+- **IRS Online Account, tax transcripts, run in full on one account.** The
+  app saves your account, return, wage and income, and record of account
+  transcripts from your IRS Individual Online Account, reading the same
+  list the transcript page asks for and fetching each PDF by its own
+  address with your signed-in session. Nothing on the site is clicked, and
+  payments, payment plans, IP PINs, authorizations and your address are
+  never touched. You sign in yourself through ID.me. If the tab is on
+  ID.me or the account signs you out, the run stops and keeps what it
+  saved. Your name and SSN are kept out of every log, record and file
+  name. Two transcripts of one type and period are named apart by their
+  form or MFT, and a transcript the IRS stops listing before it is saved
+  goes to Manual Review while the run goes on. Built from a read-only
+  survey of one account and run in full on it, 26 transcripts listed and
+  all 26 saved as valid PDFs. Notices are not read yet. With notices in
+  scope, a notices page that lists one stops Run All rather than being
+  guessed at, and Resume then saves your transcripts. Take Other Document
+  out of the app's document types and the notices page is never opened.
+  Run Diagnose and attach the file to help.
 
 ## [0.51.0] - 2026-10-14
 
