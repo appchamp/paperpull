@@ -448,6 +448,61 @@ class Inert(unittest.TestCase):
         self.assertIn("Current Holdings", drawn["html"])
         self.assertIn("Series I Savings Bond", drawn["html"])
 
+    @staticmethod
+    def _drawn(html):
+        """The HTML render hands the fresh page, with a stand-in browser."""
+        drawn = {}
+
+        class Tmp:
+            def set_content(self, html, **kw):
+                drawn["html"] = html
+
+            def wait_for_timeout(self, ms):
+                pass
+
+        class Ctx:
+            def route(self, pattern, handler):
+                pass
+
+            def new_page(self):
+                return Tmp()
+
+            def close(self):
+                pass
+
+        class Signed:
+            class context:
+                class browser:
+                    @staticmethod
+                    def new_context(**kw):
+                        return Ctx()
+
+        original = receipt_pdf.print_page_to_pdf
+        receipt_pdf.print_page_to_pdf = lambda page, out: Path(out).write_bytes(b"%PDF-1.4 x")
+        try:
+            site.render(Signed(), html, Path(tempfile.mkdtemp()) / "x.pdf")
+        finally:
+            receipt_pdf.print_page_to_pdf = original
+        return drawn["html"]
+
+    def test_no_link_carries_the_session_id_into_the_pdf(self):
+        out = self._drawn(PAGES["hist.DisplayHistory"]())
+        for gone in (FAKE_PROCESS, "processID", "UIHandler"):
+            self.assertNotIn(gone, out)
+        for kept in ("Security History", "Payment History", "History"):
+            self.assertIn(kept, out)
+        tricky = ("<p><a title=\"a > b\" href='/RS/RSGatewayRW?processID=111'>One</a>"
+                  "<A HREF=/RS/RSGatewayRW?processID=222>Two</A>"
+                  "<a\nhref = \"/x?processID=333\">Three</a>"
+                  "<svg><a xlink:href=\"/x?processID=444\">Four</a></svg>"
+                  "<area href=\"/x?processID=555\"><p>href=words stay</p>")
+        cut = site.drop_links(tricky)
+        for gone in ("111", "222", "333", "444", "555", "processID"):
+            self.assertNotIn(gone, cut)
+        for kept in ("One", "Two", "Three", "Four", "href=words stay", 'title="a > b"'):
+            self.assertIn(kept, cut)
+        self.assertEqual(site.drop_links(None), "")
+
     def test_a_page_wrapped_whole_in_a_form_keeps_its_words(self):
         html = ('<html><body><form method="post" action="RSGatewayRW"><h1>History » Security History</h1>'
                 '<table><tr><td>Gift Received</td></tr></table><input type="radio" name="p">'

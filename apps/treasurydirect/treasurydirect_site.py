@@ -939,13 +939,32 @@ def unwrap_forms(html: str) -> str:
     return _FORM_TAG_RE.sub(lambda m: "</div>" if m.group(1) else "<div>", out)
 
 
+# One whole tag, a quoted value read as one piece so a ">" inside quotes
+# does not end it. Possessive, and a tag with no ">" runs to the end of the
+# page, so a page of broken tags is read in linear time.
+_TAG_RE = re.compile(r"<[a-zA-Z](?:\"[^\"]*+\"|'[^']*+'|[^'\">]++)*+>?")
+# A link's address inside one tag. Quoted values are passed over first, so
+# an address is found only where it stands as an attribute.
+_HREF_RE = re.compile(r"(\"[^\"]*+\"|'[^']*+')|(?<=[\s/\"'])(?:xlink:)?href\s*=\s*"
+                      r"(?:\"[^\"]*+\"|'[^']*+'|[^\s>]*+)", re.I)
+
+
+def drop_links(html: str) -> str:
+    """The page with every link's address taken out of its tags, the words
+    of each link kept. A link drawn into a PDF keeps its address there, and
+    every TreasuryDirect address carries the session's processID."""
+    return _TAG_RE.sub(lambda m: _HREF_RE.sub(lambda a: a.group(1) or "", m.group(0)), html or "")
+
+
 def render(page, html: str, out_path: Path) -> None:
-    """The tab's page as a PDF, rendered inertly: form controls removed and
-    forms unwrapped (unwrap_forms), then scripts and frames stripped, in a
-    fresh context with JavaScript off, no cookies and no network. The
-    account holder's own words stay in the PDF, which is the document; they
-    never reach a log."""
-    receipt_pdf.print_html_inert_to_pdf(page, unwrap_forms(html), Path(out_path), base=BASE + "/")
+    """The tab's page as a PDF, rendered inertly. Form controls are removed
+    and forms unwrapped (unwrap_forms), every link's address is taken out
+    (drop_links), then scripts and frames are stripped, in a fresh context
+    with JavaScript off, no cookies and no network. The account holder's
+    own words stay in the PDF, which is the document, and never reach a
+    log."""
+    receipt_pdf.print_html_inert_to_pdf(page, drop_links(unwrap_forms(html)), Path(out_path),
+                                        base=BASE + "/")
 
 
 # What a saved snapshot's own text must name: its page's heading.
