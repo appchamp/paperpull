@@ -146,12 +146,41 @@ def test_a_controls_label_keeps_only_the_words_on_the_list():
     assert step["locator"]["name"] == "Statement for aaaaaaaaaaa"
 
 
-def test_a_dropdowns_option_keeps_only_the_words_on_the_list():
+def test_a_dropdowns_option_keeps_only_the_words_a_name_may_keep():
+    """An account picker's option is an account, and Checking is on the
+    list, so the list alone kept it. An option keeps only KINDS (#103)."""
     rec, page = recording()
     page.fire({"action": "select", "label": "Account", "at": 1,
                "locator": {"how": "role", "role": "combobox", "name": "Account"},
                "option": "Checking %s" % MERCHANT})
-    assert rec.stop()["steps"][0]["option"] == "Checking aa9aaaaaa9aaa"
+    assert rec.stop()["steps"][0]["option"] == "aaaaaaaa aa9aaaaaa9aaa"
+
+
+def test_an_account_pickers_option_named_in_words_on_the_list_leaves_as_its_shape():
+    rec, page = recording()
+    page.fire({"action": "select", "label": "Account", "at": 1,
+               "locator": {"how": "role", "role": "combobox", "name": "Account"},
+               "option": "Custom Cash Card - 1234"})
+    assert rec.stop()["steps"][0]["option"] == "aaaaaa aaaa aaaa - 9999"
+
+
+def test_a_card_tile_clicked_leaves_no_word_of_its_name():
+    """A card's tile is a control, and its name is spelled in words on the
+    list. A control's name keeps only KINDS (#103)."""
+    rec, page = recording()
+    click(page, "Custom Cash Card - 1234",
+          {"how": "role", "role": "link", "name": "Custom Cash Card - 1234"})
+    step = rec.stop()["steps"][0]
+    assert step["label"] == "aaaaaa aaaa aaaa - 9999"
+    assert step["locator"]["name"] == "aaaaaa aaaa aaaa - 9999"
+
+
+def test_a_statement_pickers_option_keeps_its_month():
+    rec, page = recording()
+    page.fire({"action": "select", "label": "Statement", "at": 1,
+               "locator": {"how": "role", "role": "combobox", "name": "Statement"},
+               "option": "October 2026 statement"})
+    assert rec.stop()["steps"][0]["option"] == "October 9999 statement"
 
 
 def test_a_test_id_an_id_and_a_name_attribute_are_shaped():

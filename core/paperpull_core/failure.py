@@ -637,7 +637,7 @@ def write_failure(diagnostics_dir, command: str, step: str, reason: str = "",
         # a request's path, a key in an answer or a word an app handed over
         # leaves as itself only when it is on the word list.
         atomic_write_text(out, json.dumps(
-            shape_tree(report, words_for(provider)), indent=2))
+            shape_tree(report, words_for(provider), full_list=True), indent=2))
     except Exception:
         return None
     try:
@@ -672,7 +672,13 @@ def _only_safe(value, depth: int = 0):
     if isinstance(value, dict):
         out = {}
         for k, v in list(value.items())[:20]:
-            key = re.sub(r"[^a-z0-9_]+", "_", str(k).lower())[:40]
+            raw = str(k)
+            if not re.fullmatch(r"[a-z][a-z0-9_ ]*", raw):
+                # Not a key of ours, so perhaps a page's, "Custom Cash",
+                # which snake case would make look like one (#103).
+                from .words import shape_label
+                raw = shape_label(raw)
+            key = re.sub(r"[^a-z0-9_]+", "_", raw.lower())[:40]
             # Kept as null rather than dropped, so a reader can see that
             # a field was offered and refused instead of wondering where
             # it went.

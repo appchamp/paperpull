@@ -773,12 +773,12 @@ def test_the_tester_is_told_what_to_look_at_without_a_maintainer_tool(tmp_path):
     class Site:
         is_safe_url = staticmethod(safe)
 
-    # A name made of words on the list is the one kind the list lets
+    # A name made of words a name may keep is the one kind the list lets
     # through, and pointing at it is what this check is still for.
     def click_then_stop():
-        page.fire({"action": "click", "at": 1, "label": "June Price",
+        page.fire({"action": "click", "at": 1, "label": "June Field",
                    "locator": {"how": "role", "role": "button",
-                               "name": "June Price"}})
+                               "name": "June Field"}})
         (tmp_path / ".stop-recording").write_text("stop", encoding="utf-8")
 
     threading.Timer(0.05, click_then_stop).start()
@@ -787,7 +787,7 @@ def test_the_tester_is_told_what_to_look_at_without_a_maintainer_tool(tmp_path):
 
     printed = " ".join(said)
     assert "Before this file goes anywhere" in printed
-    assert "June Price" in printed
+    assert "June Field" in printed
     assert json.loads(Path(out).read_text(encoding="utf-8"))["steps"]
 
 

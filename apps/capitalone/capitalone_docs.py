@@ -29,7 +29,7 @@ from paperpull_core.keys import told_apart as _told_apart
 from paperpull_core.keys import places as _places
 from paperpull_core.keys import twins as _twins
 from paperpull_core.keys import migrate_account_keys as _migrate_account_keys
-from paperpull_core.words import shape, shape_tree, words_for, write_shaped
+from paperpull_core.words import shape_label, shape_tree, words_for, write_shaped
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
                      atomic_write_text, build_pdf_filename, load_config,
                      now_iso, sanitize_component, unique_path)
@@ -930,7 +930,7 @@ class App:
         print(f"Rendered: headings={shape_tree(r.get('headings'), words)} "
               f"rows on screen={shape_tree(r.get('rows_on_screen'), words)}")
         if info.get("error"):
-            print(f"Error: {shape(info['error'], words)}")
+            print(f"Error: {shape_label(info['error'], words)}")
 
 
     def cmd_record(self):

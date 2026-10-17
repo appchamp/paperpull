@@ -46,7 +46,7 @@ from paperpull_core.models import State
 from paperpull_core.storage import refile
 from paperpull_core.keys import account_component as _account_component
 from paperpull_core.keys import migrate_account_keys as _migrate_account_keys
-from paperpull_core.words import Fixed, shape, shape_tree, shape_url, words_for, write_shaped
+from paperpull_core.words import Fixed, shape_label, shape_tree, shape_url, words_for, write_shaped
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
                      atomic_write_text, build_pdf_filename, load_config,
                      now_iso, sanitize_component, unique_path)
@@ -1108,11 +1108,11 @@ class App:
         if refused:
             print(f"Dropdowns refused by the control guard: {len(refused)}")
             for s in refused[:4]:
-                print(f"  refused: {shape(s['identity'][:70], words)}")
+                print(f"  refused: {shape_label(s['identity'][:70], words)}")
         if info.get("account_options"):
             print(f"Account picker:  {len(info['account_options'])} options")
         if info.get("year_options"):
-            print(f"Year picker:     {', '.join(shape(o, words) for o in info['year_options'])}")
+            print(f"Year picker:     {', '.join(shape_label(o, words) for o in info['year_options'])}")
         api = info.get("api_candidates")
         if isinstance(api, list) and api:
             print(f"JSON endpoints seen ({len(api)}):")
@@ -1123,14 +1123,14 @@ class App:
             print(f"\nStatement records captured: {shape_tree(sapi.get('total_records'), words)}")
             print("Fields present on those records:")
             for k, v in (sapi.get("fields") or {}).items():
-                print(f"  {shape(k, words):16} present={shape_tree(v['present'], words)!s:>4} "
+                print(f"  {shape_label(k, words):16} present={shape_tree(v['present'], words)!s:>4} "
                       f"empty={shape_tree(v['empty'], words)!s:>4}  e.g. "
-                      f"{shape(', '.join(str(x) for x in v['distinct_sample'][:3])[:60], words)}")
+                      f"{shape_label(', '.join(str(x) for x in v['distinct_sample'][:3])[:60], words)}")
             print(f"Dates carrying more than one statement: "
                   f"{shape_tree(sapi.get('dates_with_more_than_one_statement'), words)}")
         for s in info.get("samples", [])[:5]:
-            print(shape(f"  [{s['category']}] {s['date']}  {s['summary']}  <- {s['title'][:50]}",
-                        words, collapse=False))
+            print(shape_label(f"  [{s['category']}] {s['date']}  {s['summary']}  <- {s['title'][:50]}",
+                              words, collapse=False))
 
     # -- summary -----------------------------------------------------------
 

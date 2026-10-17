@@ -158,7 +158,12 @@ each letter and 9 for each digit, so a link reading "Statement for Zorvex
 0400" comes out as "Statement for aaaaaa 9999". That goes for the names of
 buttons and links, the options in a dropdown, the name of a file that
 downloaded, the addresses the page went to and the field names in the data
-the site loaded. Email addresses and dollar amounts are written as `<email>`
+the site loaded. The name of a control you click and an option you pick in a
+dropdown are stricter still. They keep only the words that say what kind of
+document it is, when, and what part of the page, like Statements, Download or
+a month, because a card's tile or an account picker's option is your account
+and a card's name is made of ordinary words, so "Custom Cash Card" comes out
+as "aaaaaa aaaa aaaa". Email addresses and dollar amounts are written as `<email>`
 and `<amount>`, and the account holder's name, where the app knows it, is
 shaped even when it is also an ordinary word. Each step also carries a
 `structure` block. It is long, and it holds only element kinds like `div`
@@ -308,9 +313,11 @@ the list below. "The link called Statement for Zorvex 0400" is recorded as
 
 **It records**
 
-- Each control you click, named the way you read it on the page, through the
-  word list. "The link called Bill and payment history."
-- Which option you picked in a dropdown, through the word list.
+- Each control you click, named the way you read it on the page, keeping only
+  the words that say what kind of document and what part of the page. "The
+  link called Bill and payment history."
+- Which option you picked in a dropdown, keeping only the words that say what
+  kind of document and when, so an account picker never names your account.
 - Whether a checkbox ended up ticked.
 - That the page moved, and where to, every part of the address through the
   word list.

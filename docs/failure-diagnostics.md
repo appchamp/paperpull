@@ -190,6 +190,19 @@ digit, so the detailed file can be attached too. A screenshot, which
 half the apps take, cannot be built from a list and stays on the
 tester's machine.
 
+The list alone was not enough for a name. A card's product name is
+spelled in ordinary words, and a Citi Diagnose file posted publicly kept
+"Custom Cash" in its samples because both words are on the list (#103).
+So a string a page wrote in that file, a sample's title or row, a
+control, a heading, an option, an error, keeps only the words that say
+what kind of document it is, when, and what part of the page, the list
+`KINDS` in `paperpull_core.words`. Every other word leaves as its shape
+even when it is on the fixed list. Only an address and the field names
+of an answer the site sent keep the whole list, since a repair is read
+from those and a page does not write its names there. The same holds
+for the name of a control clicked and an option picked during Record,
+since a card's tile and an account picker's options are the accounts.
+
 ## What this would have cost Costco
 
 Round one, the scaffold, fails. The failure file carries the census and

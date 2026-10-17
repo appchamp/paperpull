@@ -1095,8 +1095,10 @@ def test_diagnose_finds_each_bill_again_by_its_account_part(billing_site, tmp_pa
     app = app_on(s.page, tmp_path)
     app.cmd_diagnose()
     info = json.loads((tmp_path / "out" / "Diagnostics" / "diagnose-documents.json").read_text(encoding="utf-8"))
+    # A card's words are its policy's, held to the words a name may keep
+    # (#103), so Auto and Renters are told apart by their shapes.
     links = {b["card"].split(" ")[0]: b["statement_links"] for b in info["bills"]}
-    assert links == {"Auto": len(DATES["A"]), "Renters": len(DATES["D"])}
+    assert links == {"aaaa": len(DATES["A"]), "aaaaaaa": len(DATES["D"])}
     assert tabs_left(s.page) == []
 
 
