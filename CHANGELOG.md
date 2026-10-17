@@ -7,6 +7,19 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **U.S. Bank finds each statement it listed (#106).** The list read a
+  statement's date from its Download button's label one way, and the
+  download looked for that row again with a pattern that wanted the exact
+  day, so on a page whose labels name only the month, or write the day as
+  15th, every statement listed was then not found and a Pilot stopped on
+  the first one before pressing anything. Both now read a row the same
+  way, a day written 15th is read as that day rather than the end of its
+  year, and two rows that read as one date are left alone. Thanks to
+  appchamp for the failure files.
+
 ## [0.55.0] - 2026-10-17
 
 Invest529 downloads your 529 college-savings statements and 1099-Q tax

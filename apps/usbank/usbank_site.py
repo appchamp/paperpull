@@ -993,8 +993,7 @@ def read_rows(page, account: str = "") -> List[dict]:
         if not is_safe_row_control(aria):
             log.info("row control %r did not clear the guard", aria[:70])
             continue
-        m = ROW_DOWNLOAD_ARIA_RE.match(aria)
-        date, _period = parse_period_date(m.group(1))
+        date = row_date(aria)
         if not date:
             log.info("no date in row control %r", aria[:70])
             continue
@@ -1157,21 +1156,52 @@ def _row_download_button(row):
     return None, ""
 
 
+_ORDINAL_RE = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)\b", re.I)
+
+
+def row_date(aria: str) -> str:
+    """The date a row's Download label names, read one way for the list and
+    for the download (#106). A day written as an ordinal, "September 15th,
+    2031", is read as that day, where before it matched no date and fell
+    to the year alone, the last day of December for every such row. A month
+    and a year alone is that month's last day. "" for a label naming none."""
+    m = ROW_DOWNLOAD_ARIA_RE.match(aria or "")
+    if not m:
+        return ""
+    return parse_period_date(_ORDINAL_RE.sub(r"\1", m.group(1)))[0] or ""
+
+
 def find_row_control(page, date: str, account: str = ""):
+    """The Download button of the statement of `date`, read the way the
+    list read it (read_rows), or (None, "").
 
-
-    rx = row_label_re(date)
+    The download used to look for the row again with a pattern of its own
+    that wanted the exact day, while the list took a statement's date from
+    its button's label with parse_period_date, which also reads a month and
+    a year alone, and files that statement on the month's last day. On a
+    page whose labels name only the month, or write the day another way,
+    every statement listed was then not found, and a Pilot stopped on the
+    first one before any press, with every part of the list on the page
+    (#106). Now a row is this statement's when its label reads to this very
+    date the same way (row_date). Two rows reading to one date cannot be told apart,
+    so neither is pressed."""
+    found = []
     for row, heading in _statement_rows(page):
         if account and account_in_heading(heading) not in ("", account):
             continue
         button, aria = _row_download_button(row)
-        if button is None or not rx.search(aria):
+        if button is None:
+            continue
+        if row_date(aria) != date:
             continue
         if not is_safe_row_control(aria):
             log.info("row control %r did not clear the guard", aria[:70])
             continue
-        return button, aria
-    return None, ""
+        found.append((button, aria))
+    if len(found) > 1:
+        log.info("%d rows read as the statement of %s, so none is pressed", len(found), date)
+        return None, ""
+    return found[0] if found else (None, "")
 
 
 def _click_row_and_capture(page, ctx, account: str, date: str,
