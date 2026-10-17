@@ -383,6 +383,257 @@ def press_something(page):
         ("press_something", "get_by_role('button') with no name")]
 
 
+# -- a guard an app defines is a guard its run asks ---------------------------
+
+# Best Buy and M&T each defined is_safe_control() and never called it. Best
+# Buy pressed its year menu with no guard at all and M&T its year headings
+# after the blocklist alone, and SECURITY.md's audit for 0.54.0 found it by
+# reading every app. The reachability test above passed both, because it
+# only looks at the calls there are. Here every guard an app defines must be
+# asked on a path a run takes. A use only in a survey, a page summary or the
+# Diagnose command does not count, and nor does one in a function only those
+# call, since none of them is a run.
+
+# Functions that are surveys, summaries or Diagnose, run by hand to repair a
+# provider rather than to fetch anything.
+_DIAGNOSTIC_FN = re.compile(r"(?:^|_)(?:survey|summary|diagnose)(?:_|$)")
+# Names that hold a control to a list of labels. FORBIDDEN_CONTROL_RE alone
+# is a blocklist, which lets anything it does not name through, so it is not
+# one of them, and is_safe_url guards where a fetch goes, not a press.
+_ALLOWLIST_NAMES = {"is_safe_control", "SAFE_DOC_CONTROL_RE", "SAFE_DOC_CONTROL_RES"}
+
+# Apps that define a guard and click nothing during a run, SECURITY.md's
+# third list. Amazon defines no guard, so it is not here, and Gap only its
+# document allowlist.
+CLICK_NOTHING = {
+    "affirm", "anthem", "apple", "citi", "ezpassva", "fedex", "fidelity", "gap", "github",
+    "homedepot", "irs", "kroger", "lowes", "myecp", "mypay", "netbenefits", "optum",
+    "paylocity", "sdge", "stripe", "tsp", "uber", "ukg", "ups",
+}
+# Apps that press only controls they find by a selector or by words written
+# in the app, and keep is_safe_control() for Diagnose, SECURITY.md's second
+# list. Target and Walmart define no guard. This list may only shrink.
+GUARD_FOR_DIAGNOSE_ONLY = {
+    "amex", "capitalone", "navyfederal", "robinhood", "schwab", "usaa", "verizon",
+    "wealthfront",
+}
+
+
+def _functions(source: str):
+    """{name: the names its body refers to} for every function in `source`,
+    nested ones under their own name as well as inside the one around them."""
+    import ast
+    out = {}
+    for fn in ast.walk(ast.parse(source)):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            seen = out.setdefault(fn.name, set())
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Name):
+                    seen.add(node.id)
+                elif isinstance(node, ast.Attribute):
+                    seen.add(node.attr)
+    return out
+
+
+def _press_guards(site_source: str) -> set:
+    """The guards a site module defines. is_safe_control, every member of
+    PRESS_GUARDS, the document allowlist itself, and every is_ function that
+    asks one of those or the blocklist, directly or through a helper, such
+    as Bilt's is_view_statements or Venmo's is_show_more."""
+    import ast
+    tree = ast.parse(site_source)
+    fns = _functions(site_source)
+    guards = {n for n in _ALLOWLIST_NAMES if n in fns or re.search(r"^%s\s*=" % n, site_source, re.M)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "PRESS_GUARDS" for t in node.targets):
+            guards.update(e.id for e in ast.walk(node.value) if isinstance(e, ast.Name))
+    refusing = {"FORBIDDEN_CONTROL_RE"} | guards
+    while True:
+        more = {name for name, refs in fns.items() if refs & refusing} - refusing
+        if not more:
+            break
+        refusing |= more
+    guards.update(name for name in refusing
+                  if name.startswith("is_") and name != "is_safe_url" and name in fns)
+    return guards
+
+
+def _modules(app) -> dict:
+    return {py.stem: py.read_text(encoding="utf-8-sig")
+            for py in sorted(app.glob("*.py")) if "test" not in py.name}
+
+
+def _by_hand(modules: dict):
+    """({stem: {function: names}}, the functions only run by hand)."""
+    modules = {stem: _functions(source) for stem, source in modules.items()}
+    refs = {}
+    for fns in modules.values():
+        for name, seen in fns.items():
+            refs.setdefault(name, set()).update(seen)
+    callers = {}
+    for name, seen in refs.items():
+        for other in seen - {name}:
+            callers.setdefault(other, set()).add(name)
+    # Diagnostic, and anything that only diagnostic functions call.
+    by_hand = {name for name in refs if _DIAGNOSTIC_FN.search(name)}
+    while True:
+        more = {name for name in refs if name not in by_hand and callers.get(name)
+                and callers[name] <= by_hand}
+        if not more:
+            break
+        by_hand |= more
+    return modules, by_hand
+
+
+def guards_asked_in_a_run(app) -> list:
+    """["module:function", ...] for each function of `app` that asks one of
+    its site module's guards on a path a run can take. Empty for an app that
+    defines no guard."""
+    sources = _modules(app)
+    guards = _press_guards(sources["%s_site" % app.name])
+    if not guards:
+        return []
+    modules, by_hand = _by_hand(sources)
+    return sorted("%s:%s" % (stem, name) for stem, fns in modules.items()
+                  for name, seen in fns.items()
+                  if name not in by_hand and name not in guards and seen & guards)
+
+
+def _defines_a_guard(app) -> bool:
+    return bool(_press_guards((app / ("%s_site.py" % app.name)).read_text(encoding="utf-8-sig")))
+
+
+@pytest.mark.parametrize("app", APPS, ids=lambda d: d.name)
+def test_a_guard_an_app_defines_is_asked_in_its_run(app):
+    if not _defines_a_guard(app):
+        return
+    asked = guards_asked_in_a_run(app)
+    if app.name in CLICK_NOTHING or app.name in GUARD_FOR_DIAGNOSE_ONLY:
+        assert not asked, (
+            "%s asks a guard in a run now (%s), so take it off its list here and move it "
+            "to the right list in SECURITY.md" % (app.name, ", ".join(asked[:4])))
+        return
+    assert asked, (
+        "%s defines a guard and asks it only in a survey or Diagnose, if at all, so "
+        "whatever its run presses is held to no allowlist" % app.name)
+
+
+# Playwright's presses, the core's, and a press run inside the page.
+_PRESS_CALLS = {"click", "dblclick", "tap", "check", "set_checked", "select_option",
+                "dispatch_event", "press", "press_once"}
+
+
+def presses_in_a_run(app) -> list:
+    """["function:what", ...] for each press `app` makes outside a survey or
+    Diagnose."""
+    import ast
+    sources = _modules(app)
+    _, by_hand = _by_hand(sources)
+    out = set()
+    for source in sources.values():
+        for fn in ast.walk(ast.parse(source)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name in by_hand:
+                continue
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in _PRESS_CALLS):
+                    out.add("%s:%s" % (fn.name, node.func.attr))
+                elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                      and ".click()" in node.value):
+                    out.add("%s:click in the page" % fn.name)
+    return sorted(out)
+
+
+@pytest.mark.parametrize("app", sorted(CLICK_NOTHING | {"amazon"}))
+def test_an_app_said_to_click_nothing_presses_nothing_in_its_run(app):
+    """The third list is what lets an app go without a guard in its run,
+    so an app on it that starts to press something has to leave it."""
+    found = presses_in_a_run(REPO / "apps" / app)
+    assert not found, "%s presses in a run: %s" % (app, found[:6])
+
+
+def test_the_press_census_sees_a_press(tmp_path):
+    """A press in a run is seen, one made inside the page too, and one in a
+    survey is not. If this stops firing, the test above is decoration."""
+    app = tmp_path / "shop"
+    app.mkdir()
+    (app / "shop_site.py").write_text('''
+def survey(page):
+    page.locator("a").first.click()
+
+def pick_year(page, year):
+    page.locator("#menu").click()
+
+def show_all(page):
+    page.evaluate("() => document.querySelector('#more').click()")
+''', encoding="utf-8")
+    assert presses_in_a_run(app) == ["pick_year:click", "show_all:click in the page"]
+
+
+def test_every_app_on_the_lists_here_is_an_app_with_a_guard():
+    """A name that is no app, or an app without a guard, would hold nothing."""
+    with_guard = {a.name for a in APPS if _defines_a_guard(a)}
+    assert not (CLICK_NOTHING | GUARD_FOR_DIAGNOSE_ONLY) - with_guard
+    assert not CLICK_NOTHING & GUARD_FOR_DIAGNOSE_ONLY
+
+
+def test_the_run_guard_census_catches_a_guard_asked_only_by_hand(tmp_path):
+    """The shape Best Buy and M&T had, a guard defined, asked by a survey
+    and by Diagnose, and a run that presses without it. If this stops
+    firing, the census above is decoration."""
+    app = tmp_path / "shop"
+    app.mkdir()
+    (app / "shop_site.py").write_text('''
+import re
+FORBIDDEN_CONTROL_RE = re.compile("pay")
+SAFE_DOC_CONTROL_RE = re.compile("year")
+
+def is_safe_control(name):
+    return not FORBIDDEN_CONTROL_RE.search(name) and bool(SAFE_DOC_CONTROL_RE.search(name))
+
+def _verdicts(labels):
+    return [is_safe_control(l) for l in labels]
+
+def survey(page):
+    return _verdicts(["a", "b"])
+
+def pick_year(page, year):
+    page.locator("#menu").click()
+''', encoding="utf-8")
+    (app / "shop_docs.py").write_text('''
+import shop_site as site
+
+def cmd_diagnose(page):
+    return site.is_safe_control("x")
+
+def cmd_run(page):
+    site.pick_year(page, "2025")
+''', encoding="utf-8")
+    assert guards_asked_in_a_run(app) == []
+
+    # The same press, asked of the guard first, is a run that asks it.
+    site = (app / "shop_site.py").read_text(encoding="utf-8")
+    (app / "shop_site.py").write_text(site.replace(
+        '    page.locator("#menu").click()',
+        '    if is_safe_control(page.locator("#menu").inner_text()):\n'
+        '        page.locator("#menu").click()'), encoding="utf-8")
+    assert guards_asked_in_a_run(app) == ["shop_site:pick_year"]
+
+    # A guard of its own for the one control counts the same way.
+    (app / "shop_site.py").write_text(site.replace(
+        '    page.locator("#menu").click()',
+        '    if is_year_menu(page.locator("#menu").inner_text()):\n'
+        '        page.locator("#menu").click()') + '''
+def _refused(name):
+    return bool(FORBIDDEN_CONTROL_RE.search(name))
+
+def is_year_menu(name):
+    return not _refused(name) and name == "Past 3 Years"
+''', encoding="utf-8")
+    assert guards_asked_in_a_run(app) == ["shop_site:pick_year"]
+
+
 # -- a real browser saves its own downloads ----------------------------------
 
 REAL_BROWSER_APPS = [d for d in APPS if any(
