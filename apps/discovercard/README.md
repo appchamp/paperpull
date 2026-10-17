@@ -76,7 +76,7 @@ is correspondingly small.
   template, so a change to the query string cannot silently fetch the wrong
   period. Before fetching, the stored URL is re-checked and must still name the
   requested date. Bytes must start with `%PDF-` before anything is written.
-- **Nothing is clicked**, which also keeps the app clear of the neighboring
+- **No statement control is clicked**, which also keeps the app clear of the neighboring
   **Download** control: that opens a *modal dialog* (a transactions export, not
   the statement PDF), and answering a dialog is what this project never does.
   "Print" opens a popup and is likewise unused.

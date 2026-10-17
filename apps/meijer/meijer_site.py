@@ -30,7 +30,9 @@ showed.
   details page, or a receipt link on it, is the document.
 * Capture (GUESS at which applies): a link that points at a PDF is
   fetched from inside the signed-in page and saved. A details page is
-  opened and its receipt block printed to PDF. Nothing is clicked.
+  opened and its receipt block printed to PDF. An in-store row's receipt
+  icon is pressed (press_row_receipt), since it opens a window rather
+  than a link.
 * meijer.com sits behind bot protection, so the app drives the browser
   already on the machine.
 
@@ -41,7 +43,10 @@ SAFETY (this is a shopping account with a card on file):
   pages, reads the lists, and saves what Meijer already rendered. It must
   NEVER add to a cart, reorder, clip a coupon, redeem mPerks rewards,
   refill a prescription, cancel or modify an order, or edit any setting.
-  FORBIDDEN_CONTROL_RE is the guard, and nothing is clicked at all.
+  FORBIDDEN_CONTROL_RE is the guard. Nothing is clicked but the two tabs,
+  each by the whole name it shows (open_tab), and an in-store row's own
+  receipt control, which must read as the receipt (is_receipt_control) and
+  pass is_safe_control.
 """
 from __future__ import annotations
 

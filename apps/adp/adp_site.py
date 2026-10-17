@@ -58,7 +58,7 @@ signed-in employee account (a former employer's, still open):
   from two employers came down after one, verified 2026-09-22).
 
 Discovery is those two calls. Capture is a fetch of each statement's own
-PDF from inside the page. Nothing is clicked, and only my.adp.com and
+PDF from inside the page. Nothing else is clicked, and only my.adp.com and
 workforcenow.adp.com are ever asked.
 
 SAFETY (this is a payroll account that holds direct-deposit and tax
@@ -67,9 +67,11 @@ withholding settings):
   PDFs ADP already generated. It must NEVER activate any control that
   changes direct deposit, tax withholding or a W-4, requests time off,
   edits a timecard, enrolls in a benefit, changes an address or a
-  beneficiary, or edits any setting. FORBIDDEN_CONTROL_RE is the guard
-  for the diagnostics and the repo-wide tests. There is no code here that
-  clicks, submits a form or confirms a dialog.
+  beneficiary, or edits any setting. The one control a run presses is the
+  Tax Statements card's "View statement" (open_tax_statement_check), and
+  only once is_safe_control (FORBIDDEN_CONTROL_RE, the shared blocklists
+  and the document allowlist) has passed it. There is no code here that submits a form or
+  confirms a dialog.
 
 Site layer verified working against the live site: 2026-09-21
 """
