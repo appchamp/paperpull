@@ -7,6 +7,22 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Security
+- **A Diagnose file no longer names your cards or accounts.** The detailed
+  file Diagnose writes kept a word whenever it was on PaperPull's fixed
+  list, and a card's product name is made of ordinary words, so Citi's
+  file kept "Custom Cash" in its sample lines with only the digits
+  shaped. Now a title, a row, a control, a heading, an option or an error
+  read off the page keeps only the words that say what kind of document
+  it is, when, and what part of the page, and every other word is written
+  as its shape even when it is on the list. Web addresses and the field
+  names of the site's answers still keep the whole list. The same rule
+  covers what Diagnose prints in every app, the file a failed download
+  writes, and the controls clicked and options picked during Record.
+  Thanks to appchamp for spotting it (#103).
+
 ## [0.55.0] - 2026-10-17
 
 Invest529 downloads your 529 college-savings statements and 1099-Q tax

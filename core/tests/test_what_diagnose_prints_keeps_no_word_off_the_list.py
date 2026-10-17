@@ -49,7 +49,7 @@ from paperpull_core.redact import set_private_words  # noqa: E402
 CANARY = "Zorvex4821Quillam"
 PARTS = ("zorvex", "4821", "quillam")
 
-SHAPERS = ("shape", "shape_url", "shape_name", "shape_tree")
+SHAPERS = ("shape", "shape_label", "shape_url", "shape_name", "shape_tree")
 CONSOLE = ("print", "sys.stdout.write", "sys.stderr.write")
 # Every app logs at INFO to the console, which the panel shows.
 LOGS = ("info", "warning", "warn", "error", "exception", "critical", "log")

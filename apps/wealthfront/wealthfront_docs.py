@@ -42,7 +42,7 @@ from paperpull_core import doc_types, receipt_pdf, scope
 from paperpull_core import browser as browser_launcher
 import wealthfront_site as site
 from paperpull_core.models import State
-from paperpull_core.words import shape, shape_tree, words_for, write_shaped
+from paperpull_core.words import shape_label, shape_tree, words_for, write_shaped
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
                      atomic_write_text, build_pdf_filename, load_config,
                      now_iso, sanitize_component, unique_path)
@@ -972,8 +972,8 @@ class App:
         print("  on this machine.")
         print(f"Rows collected: {shape_tree(info.get('collected', '?'), words)}")
         for s in info.get("samples", [])[:5]:
-            print(shape(f"  [{s['category']}] {s['date']}  {s['summary']}  <- {s['title'][:50]}",
-                        words, collapse=False))
+            print(shape_label(f"  [{s['category']}] {s['date']}  {s['summary']}  <- {s['title'][:50]}",
+                              words, collapse=False))
 
     # -- summary -----------------------------------------------------------
 

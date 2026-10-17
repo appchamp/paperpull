@@ -203,7 +203,9 @@ def test_a_file_is_rebuilt_from_what_may_leave():
     for canary in (SURNAME, MERCHANT, "1204"):
         assert canary.lower() not in text.lower(), canary
     assert out["title"] == "Statements for aaaaaaaaaaa"
-    assert out["aa9aaaaaa9aaa"] == {"nested": ["aaaaaaaaaaa holdings"]}
+    # holdings is on the list, and a string a page wrote keeps only the
+    # words a name may keep, which it is not (#103).
+    assert out["aa9aaaaaa9aaa"] == {"nested": ["aaaaaaaaaaa aaaaaaaa"]}
     assert out["rows"] == [{"title": "February aa9aaaaaa9aaa", "amount": None}]
     assert (out["count"], out["total"], out["amount"]) == (3, 100000, None)
     assert out["found"] is True and out["none"] is None

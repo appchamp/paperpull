@@ -48,7 +48,7 @@ import redcard_site as site
 from paperpull_core.models import State
 from paperpull_core.keys import account_component as _account_component
 from paperpull_core.keys import migrate_account_keys as _migrate_account_keys
-from paperpull_core.words import shape, shape_tree, words_for, write_shaped
+from paperpull_core.words import shape_label, shape_tree, words_for, write_shaped
 from storage import (PROJECT_DIR, CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore,
                      Paths, atomic_write_text, build_pdf_filename, ensure_owner,
                      load_config, now_iso, sanitize_component, set_filename_owner,
@@ -960,8 +960,8 @@ class App:
         print("  on this machine.")
         print(f"Rows collected: {shape_tree(info.get('collected', '?'), words)}")
         for s in info.get("samples", [])[:5]:
-            print(shape(f"  [{s['category']}] {s['date']}  {s['summary']}  <- {s['title'][:50]}",
-                        words, collapse=False))
+            print(shape_label(f"  [{s['category']}] {s['date']}  {s['summary']}  <- {s['title'][:50]}",
+                              words, collapse=False))
 
     # -- summary -----------------------------------------------------------
 

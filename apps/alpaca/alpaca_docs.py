@@ -1135,7 +1135,7 @@ class App:
             # The documents drawn now, by date and type only. The rows name
             # no account.
             docs = site.collect_documents(page)
-            info["documents_recognized"] = [{"date": d.date_text, "kind": d.kind, "shape": d.text}
+            info["documents_recognized"] = [{"date": d.date_text, "kind": d.kind, "row": d.text}
                                             for d in docs[:40]]
             info["rows_collected"] = len(docs)
         except Exception as e:

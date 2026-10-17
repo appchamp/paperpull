@@ -45,7 +45,7 @@ from paperpull_core import tabs
 from paperpull_core.journal import Journal
 from paperpull_core.api_census import Requests
 from paperpull_core.run_reporting import report_run_result
-from paperpull_core.words import shape, shape_tree, shape_url, words_for, write_shaped
+from paperpull_core.words import shape_label, shape_tree, shape_url, words_for, write_shaped
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
                      atomic_write_text, build_pdf_filename, load_config,
                      now_iso, sanitize_component, unique_path)
@@ -768,7 +768,7 @@ class App:
         page = self.page()
         found = site.goto_documents(page)
         print(f"Current URL: {shape_url(page.url, words)}")
-        print(f"Page title: {shape(page.title(), words)}")
+        print(f"Page title: {shape_label(page.title(), words)}")
 
         info = {
             "url": page.url,
@@ -844,8 +844,8 @@ class App:
         if controls:
             print("Found clickable controls:")
             for c in controls[:10]:
-                print(f"  [{'SAFE' if c['safe'] else 'BLOCK'}] {shape(c['role'], words)}: "
-                      f"{shape(c['text'], words)}")
+                print(f"  [{'SAFE' if c['safe'] else 'BLOCK'}] {shape_label(c['role'], words)}: "
+                      f"{shape_label(c['text'], words)}")
 
     # -- summary -----------------------------------------------------------
 

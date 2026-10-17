@@ -45,7 +45,7 @@ import discovercard_site as site
 from paperpull_core.models import State
 from paperpull_core.keys import account_component as _account_component
 from paperpull_core.keys import migrate_account_keys as _migrate_account_keys
-from paperpull_core.words import Fixed, shape, shape_tree, shape_url, words_for, write_shaped
+from paperpull_core.words import Fixed, shape_label, shape_tree, shape_url, words_for, write_shaped
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
                      atomic_write_text, build_pdf_filename, load_config,
                      now_iso, sanitize_component, unique_path)
@@ -1014,13 +1014,13 @@ class App:
         if refused:
             print(f"Dropdowns refused by the control guard: {len(refused)}")
             for s in refused[:4]:
-                print(f"  refused: {shape(s['identity'][:70], words)}")
+                print(f"  refused: {shape_label(s['identity'][:70], words)}")
         if info.get("account_options"):
             print(f"Account picker:  {len(info['account_options'])} options")
         if "statement_links" in info:
             print(f"Statement links: {shape_tree(info['statement_links'], words)}")
         if info.get("year_options"):
-            print(f"Period <select>: {', '.join(shape(o, words) for o in info['year_options'])}")
+            print(f"Period <select>: {', '.join(shape_label(o, words) for o in info['year_options'])}")
         api = info.get("api_candidates")
         if isinstance(api, list) and api:
             print(f"JSON endpoints seen ({len(api)}):")
@@ -1034,7 +1034,7 @@ class App:
                 print(f"Range: {shape_tree(sapi.get('oldest'), words)} .. "
                       f"{shape_tree(sapi.get('newest'), words)}")
             for lbl in sapi.get("period_labels_sample") or []:
-                print(f"  period label: {shape(lbl, words)}")
+                print(f"  period label: {shape_label(lbl, words)}")
             if sapi.get("href_shape"):
                 print(f"  href shape:   {shape_url(sapi['href_shape'], words)}")
         if info.get("samples"):
@@ -1044,8 +1044,8 @@ class App:
             # fallback's guesses, not what gets filed.
             print("\nGeneric row scraper (fallback only - not used for filing):")
             for s in info.get("samples", [])[:5]:
-                print(shape(f"  [{s['category']}] {s['date']}  {s['summary']}"
-                            f"  <- {s['title'][:50]}", words, collapse=False))
+                print(shape_label(f"  [{s['category']}] {s['date']}  {s['summary']}"
+                                  f"  <- {s['title'][:50]}", words, collapse=False))
 
     # -- summary -----------------------------------------------------------
 

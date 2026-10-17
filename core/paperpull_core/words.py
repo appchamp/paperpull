@@ -16,10 +16,10 @@ reading "Statement for Zorvex 0400" comes out as "Statement for aaaaaa
 9999". A maintainer still sees which control it was, how long the rest
 was and where its numbers sat, and nothing that was only the account's.
 
-    from paperpull_core.words import shape, words_for, write_shaped
+    from paperpull_core.words import shape, shape_label, words_for, write_shaped
 
     words = words_for(provider="Example Bank", site=site)
-    label = shape(text, words)
+    label = shape_label(text, words)
     write_shaped(path, info, words)
 
 WHAT MAY LEAVE
@@ -30,6 +30,14 @@ WHAT MAY LEAVE
     punctuation                one character at a time, as it was
     a fixed string             Fixed, for a sentence or a time we wrote
     a count or a yes or no     bounded, in shape_tree
+
+A card's product name is spelled in words of the list too, "Citi Custom
+Cash", and the list alone kept it (#103). So a string a page wrote that
+can name something, a title, a row, a control, an option, keeps only
+KINDS, the words that say what kind of document, when, and what part of
+the page. shape_label does that for one string, and shape_tree does it
+for every string of a file except beneath a key of MACHINERY, an address
+or the field names of an answer, where the whole list stays.
 
 The account holder's own name, as the app was given it, is never kept,
 even when a part of it is a word on the list. A greeting's name, an
@@ -338,6 +346,101 @@ pdf csv tsv txt zip gz xls xlsx xlsm ods doc docx odt rtf html htm xml json ofx 
 qbo qif png jpg jpeg gif tif tiff bmp webp heic eml msg ics
 """.split())
 
+# ---------------------------------------------------------------------------
+# The words a name may keep
+# ---------------------------------------------------------------------------
+# The list above is the words a site writes for every customer, and a card's
+# product name is made of those too. "Citi Custom Cash" kept Custom and Cash,
+# and a Diagnose file posted publicly said which cards its owner held (#103).
+# No list of single words can tell an ordinary word from one standing in a
+# name, so a string that can name something, a document's title, a row, a
+# control, an account picker's option, a heading, keeps only these. They say
+# what kind of document it is, when, and what part of the page, and none is
+# a word a product, a merchant, a person or an account is named with. The
+# app's own name is kept with them.
+#
+# A word goes here only when it is already on KNOWN, and never one that
+# names a kind of account (checking, savings, credit, card, loan, brokerage)
+# or that a product is named with (cash, custom, double, rewards, preferred,
+# select, plus, one, gold, travel, business, premium, home, go). A word left
+# off makes a maintainer read a shape. A word that should not be here puts
+# somebody's cards in a public issue.
+
+_LABEL_DOCUMENTS = """
+document documents doc docs edoc edocs statement statements stmt stmts estatement
+estatements ebill ebills bill bills billing invoice invoices receipt receipts
+ereceipt ereceipts letter letters notice notices correspondence report reports form
+forms tax taxes taxform taxforms confirmation confirmations agreement agreements
+disclosure disclosures declaration declarations claim claims eob eobs explanation
+benefit benefits paperless electronic archive archived archives history record
+records file files pdf pdfs copy copies yearend summary supplement supplemental
+amended corrected correction composite
+escrow earnings wage wages paystub paystubs stub stubs payslip payslips
+contribution contributions distribution distributions withholding coverage policy
+policies insurance account accounts activity transaction transactions payment
+payments pay due
+"""
+
+_LABEL_PAGE = """
+page pages download downloads downloaded view views print printable preview save
+show hide more less next prev previous back close expand expanded collapse
+collapsed search filter sort apply cancel continue menu link links button buttons
+tab tabs row rows table tables list item items column columns cell cells heading
+headings header footer dialog modal frame control controls option options picker
+pickers dropdown section sections panel panels label labels title titles text
+field fields sign signed signin signout login logout session expired timeout found
+not none no yes unread unknown error errors failed refused read could be number
+numbers id url urls http https www com online html htm json api application octet
+stream email amount div span ul ol li nav main aside article iframe img svg input
+textarea tr td th thead tbody alert region presentation settings profile
+overview support messages inbox notifications preferences status shown showed never
+covered pressed clicked opened closed empty missing skipped stopped ready pending done
+kept turned off on type types kind kinds relative absolute
+"""
+
+# Words of the grammar and of time a name could be spelled with, or a payee
+# named, and the short names of days, "Sun" among them.
+_NOT_IN_A_LABEL = frozenset("""
+one go goes going gone way ways well own up upon together beyond near nearly very
+everyone everything anybody anyone nobody someone something whoever whatever
+mon tue tues wed thu thur thurs fri sat sun season seasonal future
+anywhere more everywhere somewhere
+""".split())
+
+KINDS = frozenset(
+    w for w in " ".join((_GRAMMAR, _TIME, _LABEL_DOCUMENTS, _LABEL_PAGE)).lower().split()
+    if len(w) >= 2 and w not in _NOT_IN_A_LABEL) & KNOWN
+
+# Where a file holds the provider's own machinery, a web address, the field
+# names of an answer, the method and status of a request, or a sentence of
+# ours, every word on KNOWN stays, since a repair is read from those words
+# and a page does not write its names there. Everywhere else in a file built
+# by shape_tree, a page's string keeps only KINDS. A key added tomorrow is
+# held to KINDS until somebody puts it here.
+MACHINERY = frozenset("""
+url urls landed_on landed href hrefs path paths endpoint query documents_route
+href_shape origins shape shapes fields top_keys
+key_shape post_keys request_keys row_keys item_fields headers headers_kept
+variables method status accept note notes row_counts selectors step reason why verdict
+state stop address addresses
+""".split())
+
+# What an answer held, rather than its fields, under a key of MACHINERY, a
+# sample of a field's values or a record read whole. Back to KINDS, since
+# a nickname or a product is one of those values.
+VALUES = frozenset("""
+distinct_sample sample samples sample_records records values example examples
+example_clusters option_sample
+""".split())
+
+# A key written the way a program names a field, lowercase with underscores,
+# is one of ours or a field of an answer. A key with a space or a capital is
+# how a page writes a name, "Custom Cash ...1234", and is held to KINDS like
+# any other string a page wrote. Inside the machinery a key in camel case,
+# statementsByYear, is an answer's field too.
+_OUR_KEY = re.compile(r"[a-z][a-z0-9_]*")
+_FIELD_KEY = re.compile(r"[a-z][A-Za-z0-9_]*")
+
 # Everything that is neither a letter nor a digit nor a space, and is
 # written as itself. A character outside these leaves as "?".
 _MARKS = frozenset(string.punctuation) | frozenset(chr(c) for c in (
@@ -432,9 +535,9 @@ def words_for(provider: str = "", site=None) -> frozenset:
 
 
 @functools.lru_cache(maxsize=64)
-def _vocabulary(words: frozenset, private: tuple) -> frozenset:
+def _vocabulary(words: frozenset, private: tuple, base: frozenset = KNOWN) -> frozenset:
     """The list, the app's own words, and never the owner's."""
-    return (KNOWN | words) - frozenset(private)
+    return (base | words) - frozenset(private)
 
 
 def _private() -> tuple:
@@ -536,7 +639,8 @@ def _greeted(text: str) -> list:
     return [(m.end(1), m.end()) for m in _GREETING_RE.finditer(text)]
 
 
-def _shape(text: str, words: frozenset, collapse: bool, private: tuple) -> str:
+def _shape(text: str, words: frozenset, collapse: bool, private: tuple,
+           base: frozenset = KNOWN) -> str:
     # One letter and nothing else is kept. It says nothing about anyone,
     # and it is what an element's tag (p, b, i) and a step's own key are.
     # Inside a longer string a letter alone is an initial, and is shaped.
@@ -544,7 +648,7 @@ def _shape(text: str, words: frozenset, collapse: bool, private: tuple) -> str:
         return text.strip() if collapse else text
     text = _EMAIL_RE.sub(EMAIL, text)
     text = _MONEY_RE.sub(AMOUNT, text)
-    vocab = _vocabulary(words, private)
+    vocab = _vocabulary(words, private, base)
     greeted = _greeted(text)
     out = []
     before = ""        # the token before this one, as the page wrote it
@@ -580,8 +684,9 @@ def _shape(text: str, words: frozenset, collapse: bool, private: tuple) -> str:
 
 
 @functools.lru_cache(maxsize=65536)
-def _shape_cached(text: str, words: frozenset, collapse: bool, private: tuple) -> str:
-    return _shape(text, words, collapse, private)
+def _shape_cached(text: str, words: frozenset, collapse: bool, private: tuple,
+                  base: frozenset = KNOWN) -> str:
+    return _shape(text, words, collapse, private, base)
 
 
 def shape(text, words: Iterable = (), *, collapse: bool = True) -> str:
@@ -591,6 +696,18 @@ def shape(text, words: Iterable = (), *, collapse: bool = True) -> str:
     if not text:
         return ""
     return _shape_cached(text, frozenset(words), collapse, _private())
+
+
+def shape_label(text, words: Iterable = (), *, collapse: bool = True) -> str:
+    """A string a page wrote that can name something, a document's title, a
+    row, a control, an option, a heading. Only a word of KINDS and the app's
+    own words stay, and every other is its shape, so "Citi Custom Cash
+    statement October 9, 2025" leaves as "Citi aaaaaa aaaa statement
+    October 9, 9999" although Custom and Cash are on the list."""
+    text = "" if text is None else str(text)
+    if not text:
+        return ""
+    return _shape_cached(text, frozenset(words), collapse, _private(), KINDS)
 
 
 def shape_name(name, words: Iterable = ()) -> str:
@@ -672,7 +789,13 @@ _MAX_ITEMS = 1000
 _MAX_TEXT = 500
 
 
-def shape_tree(value, words: Iterable = (), depth: int = 0):
+# How shape_tree reads a string. FULL keeps every word on KNOWN, for a file
+# built from fixed fields alone. LABEL keeps only KINDS, for a string a page
+# wrote. MACHINERY keeps KNOWN again, beneath a key of MACHINERY.
+FULL, LABEL, _MACHINE = "full", "label", "machinery"
+
+
+def shape_tree(value, words: Iterable = (), depth: int = 0, *, full_list: bool = False):
     """Everything an app put in a file, rebuilt from what may leave.
 
     A string is shaped, a key too. A Fixed string stays as it is. A whole
@@ -680,8 +803,27 @@ def shape_tree(value, words: Iterable = (), depth: int = 0):
     number is dropped, since an amount is one, and a yes or no stays. A
     structure deeper or longer than any of ours is cut, and anything else
     is shaped from its text. Nothing an app hands this can come out as it
-    went in unless it is on the list."""
-    words = frozenset(words)
+    went in unless it is on the list.
+
+    A string keeps only the words of KINDS, as shape_label does, since a
+    title, a row, a control or an option can name a card or an account in
+    words that are all on the list. Beneath a key of MACHINERY, an address
+    or the fields of an answer, every word on the list stays. full_list is
+    for a file whose every field is built from fixed lists already, a
+    failure file or a recording, where the list is the rule throughout."""
+    return _tree(value, frozenset(words), depth, FULL if full_list else LABEL)
+
+
+def _key(k, words: frozenset, mode: str) -> str:
+    if isinstance(k, Fixed):
+        return k
+    k = str(k)
+    if mode == FULL or (_OUR_KEY.fullmatch(k) if mode == LABEL else _FIELD_KEY.fullmatch(k)):
+        return shape(k, words)[:80]
+    return shape_label(k, words)[:80]
+
+
+def _tree(value, words: frozenset, depth: int, mode: str):
     if depth > _MAX_DEPTH:
         return "..."
     if value is None or isinstance(value, bool):
@@ -697,29 +839,35 @@ def shape_tree(value, words: Iterable = (), depth: int = 0):
             return None
         return max(0, min(int(value), _MAX_COUNT)) if value.is_integer() else None
     if isinstance(value, str):
-        return shape(value, words)[:_MAX_TEXT]
+        return (shape_label(value, words) if mode == LABEL else shape(value, words))[:_MAX_TEXT]
     if isinstance(value, dict):
         out = {}
         for k, v in list(value.items())[:_MAX_ITEMS]:
-            key = k if isinstance(k, Fixed) else shape(str(k), words)[:80]
+            key = _key(k, words, mode)
             while key in out:
                 key += "+"
-            out[key] = shape_tree(v, words, depth + 1)
+            inner = mode
+            if mode == LABEL and isinstance(k, str) and k in MACHINERY:
+                inner = _MACHINE
+            elif mode == _MACHINE and isinstance(k, str) and k in VALUES:
+                inner = LABEL
+            out[key] = _tree(v, words, depth + 1, inner)
         return out
     if isinstance(value, (list, tuple, set, frozenset)):
         items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
-        return [shape_tree(v, words, depth + 1) for v in list(items)[:_MAX_ITEMS]]
+        return [_tree(v, words, depth + 1, mode) for v in list(items)[:_MAX_ITEMS]]
     import dataclasses
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return shape_tree(dataclasses.asdict(value), words, depth + 1)
-    return shape(str(value), words)[:_MAX_TEXT]
+        return _tree(dataclasses.asdict(value), words, depth + 1, mode)
+    text = str(value)
+    return (shape_label(text, words) if mode == LABEL else shape(text, words))[:_MAX_TEXT]
 
 
-def write_shaped(path, value, words: Iterable = ()) -> None:
+def write_shaped(path, value, words: Iterable = (), *, full_list: bool = False) -> None:
     """The one way a file a tester may post is written. Whatever the app
     gathered goes through shape_tree on the way to the disk."""
     from .storage import atomic_write_text
-    atomic_write_text(path, json.dumps(shape_tree(value, words), indent=2))
+    atomic_write_text(path, json.dumps(shape_tree(value, words, full_list=full_list), indent=2))
 
 
 # ---------------------------------------------------------------------------

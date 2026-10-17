@@ -28,7 +28,7 @@ from paperpull_core import tabs
 from paperpull_core.journal import Journal
 from paperpull_core.api_census import Requests
 from paperpull_core.run_reporting import report_run_result
-from paperpull_core.words import shape, shape_tree, words_for, write_shaped
+from paperpull_core.words import shape_label, shape_tree, words_for, write_shaped
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
                      atomic_write_text, build_pdf_filename, load_config,
                      now_iso, sanitize_component, unique_path)
@@ -960,7 +960,7 @@ class App:
               f"chips={shape_tree([(c or {}).get('text') for c in (r.get('chips') or [])], words)} "
               f"rows on screen={shape_tree(r.get('rows_on_screen'), words)}")
         if info.get("error"):
-            print(f"Error: {shape(info['error'], words)}")
+            print(f"Error: {shape_label(info['error'], words)}")
 
 
     def cmd_record(self):

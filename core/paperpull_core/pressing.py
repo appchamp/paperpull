@@ -96,7 +96,7 @@ import re
 import secrets
 from typing import Callable, Iterable, NamedTuple, Optional
 
-from .words import shape
+from .words import shape, shape_label
 
 log = logging.getLogger("paperpull.pressing")
 
@@ -999,12 +999,14 @@ def look(page, locator, css: str, labels: bool = False, off: bool = False, frame
 
 def described(seen: dict, words) -> dict:
     """What covered a control, every word of the page's written through
-    the word list, so only words on it stay and any other is its shape."""
+    the word list, so only words on it stay and any other is its shape. Its
+    label keeps only the words a name may keep, since an offer over the
+    page can name a card in words that are all on the list (#103)."""
     out = {}
     for part in ("widget", "top"):
         raw = seen.get(part) if isinstance(seen.get(part), dict) else {}
-        out[part] = {key: shape(str(raw.get(key) or "")[:80], words)
-                     for key in ("tag", "role", "label")}
+        out[part] = {key: (shape_label if key == "label" else shape)(
+            str(raw.get(key) or "")[:80], words) for key in ("tag", "role", "label")}
     out["pinned"] = bool(seen.get("pinned"))
     out["same"] = bool(seen.get("same"))
     return out

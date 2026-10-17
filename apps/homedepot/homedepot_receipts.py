@@ -42,7 +42,7 @@ from paperpull_core import classification, receipt_pdf
 from paperpull_core import browser as browser_launcher
 import homedepot_site as site
 from paperpull_core.models import (IN_STORE, ONLINE, Item, Purchase, State)
-from paperpull_core.words import shape, shape_tree, words_for, write_shaped
+from paperpull_core.words import shape_label, shape_tree, words_for, write_shaped
 
 from storage import (CsvFile, JsonStore, ORDER_HISTORY_COLUMNS, Paths,
                      RECEIPT_INDEX_COLUMNS, atomic_write_text, build_pdf_filename, load_config, now_iso, unique_path)
@@ -1190,7 +1190,7 @@ class App:
                   f"card(s) collected, {shape_tree(after.get('became_purchases'), words)} "
                   f"became purchases.")
         except Exception as e:
-            print(f"  Could not survey the purchase history: {shape(str(e), words)}")
+            print(f"  Could not survey the purchase history: {shape_label(str(e), words)}")
 
         for ptype in [IN_STORE, ONLINE]:
             candidates = self._select_purchases(ptype, limit=1)
@@ -1202,7 +1202,7 @@ class App:
                 print(f"No {ptype} purchase available to diagnose.")
                 continue
             p = candidates[0]
-            print(f"\nDiagnosing {ptype} purchase #{shape(p.order_number, words)} ...")
+            print(f"\nDiagnosing {ptype} purchase #{shape_label(p.order_number, words)} ...")
             info = {"purchase": p.key, "timestamp": now_iso()}
             try:
                 site.goto_details(page, p)

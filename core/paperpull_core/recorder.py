@@ -79,7 +79,7 @@ from .browser import can_ask
 from .characters import whole_json
 from .failure import SAFE_TAGS as _SAFE_TAGS
 from .failure import _count
-from .words import (Fixed, shape, shape_name, shape_query, shape_tree,
+from .words import (Fixed, shape, shape_label, shape_name, shape_query, shape_tree,
                     shape_url, words_for)
 
 # The only thing a typed value is ever recorded as.
@@ -813,11 +813,18 @@ class Recorder:
             "i": len(self.steps),
             "action": action,
             "locator": self._clean_locator(loc),
-            "label": shape(label, self.words)[:120],
+            # A control's name keeps only the words a name may keep. A card's
+            # tile, "Custom Cash Card - 1234", is a control a person clicks,
+            # and its words are all on the list (#103).
+            "label": shape_label(label, self.words)[:120],
             "at": _timestamp(record.get("at")),
         }
         if action == "select":
-            step["option"] = shape(str(record.get("option") or ""), self.words)[:60]
+            # An option is held to the words a name may keep. A statement
+            # picker's options are dates, which stay, and an account
+            # picker's are the accounts, "Custom Cash ...1234", whose words
+            # are all on the list (#103).
+            step["option"] = shape_label(str(record.get("option") or ""), self.words)[:60]
         if action == "select" and not step["option"]:
             step["option"] = ""
         if action == "check":
@@ -899,7 +906,11 @@ class Recorder:
         for key in ("name", "value"):
             value = loc.get(key)
             if value not in (None, "", [], {}):
-                out[key] = shape(str(value), self.words)[:80]
+                # A name is what the page shows, and keeps only the words a
+                # name may keep (#103). A test id or an id is the site's
+                # markup, read by the whole list like an address.
+                shaper = shape_label if key == "name" else shape
+                out[key] = shaper(str(value), self.words)[:80]
         tag = loc.get("tag")
         if tag not in (None, "", [], {}):
             tag = str(tag).strip().lower()
@@ -1149,7 +1160,7 @@ class Recorder:
                 "page's shape around the control, element kinds, attribute "
                 "names and counts, and never any text or attribute value. "
                 "Read this through before attaching it anywhere."),
-        }, self.words)
+        }, self.words, full_list=True)
 
     def summary(self) -> str:
         """One line for the console and the panel."""
@@ -1488,7 +1499,7 @@ def record_session(page, site, diagnostics_dir, provider: str = "",
             pass
 
     out = Path(diagnostics_dir) / "recording.json"
-    write_shaped(out, report, words)
+    write_shaped(out, report, words, full_list=True)
     say("")
     say("Wrote %s" % out)
     say("  %s" % rec.summary())
