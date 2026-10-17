@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from paperpull_core.sheets import (csv_value, keep_text, read_stored, read_stored_row,
-                                   starts_a_formula, store_value, xlsx_value)
+                                   starts_a_formula, store_value, whole_characters, xlsx_value)
 
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
 
@@ -156,12 +156,36 @@ def _xml_can_hold(n: int) -> bool:
 CANNOT_HOLD = [chr(n) for n in range(0x110000) if not _xml_can_hold(n)]
 # The six of them Python counts as blank space, which stand between words.
 BLANK = [c for c in CANNOT_HOLD if c.isspace()]
+# The surrogates, each half of a character UTF-16 writes as two, and the
+# mark the browser shows for one on its own (HALF OF A CHARACTER in sheets).
+HALVES = frozenset(chr(n) for n in range(0xD800, 0xE000))
+MARK = chr(0xFFFD)
+HIGH, LOW = chr(0xD83D), chr(0xDE00)          # the two halves of U+1F600
+
+
+def _made_whole(text: str) -> str:
+    """The text read as UTF-16 reads it, written out from the Unicode
+    Standard's definition of a surrogate pair, not from Python's codec. A
+    high half followed by a low one is the character the two make, and a
+    half on its own is U+FFFD."""
+    out, i = [], 0
+    while i < len(text):
+        n = ord(text[i])
+        after = ord(text[i + 1]) if i + 1 < len(text) else 0
+        if 0xD800 <= n <= 0xDBFF and 0xDC00 <= after <= 0xDFFF:
+            out.append(chr(0x10000 + ((n - 0xD800) << 10) + (after - 0xDC00)))
+            i += 2
+            continue
+        out.append(MARK if 0xD800 <= n <= 0xDFFF else text[i])
+        i += 1
+    return "".join(out)
 
 
 def _held(text: str) -> str:
-    """The text as a cell holds it, each character an xlsx cannot hold left
-    out, a space for one that is blank space."""
-    return "".join(c if _xml_can_hold(ord(c)) else " " if c.isspace() else "" for c in text)
+    """The text as a cell holds it, made whole, then each character an xlsx
+    cannot hold left out, a space for one that is blank space."""
+    return "".join(c if _xml_can_hold(ord(c)) else " " if c.isspace() else ""
+                   for c in _made_whole(text))
 
 
 def _excel_reads(text: str) -> str:
@@ -180,12 +204,12 @@ def test_what_an_xlsx_cannot_hold_takes_in_all_openpyxl_refuses():
     assert not ILLEGAL_CHARACTERS_RE.search(_held("".join(map(chr, range(0x110000)))))
 
 
-def test_every_character_an_xlsx_cannot_hold_is_dropped_or_a_space_and_no_other():
+def test_every_character_an_xlsx_cannot_hold_is_dropped_a_space_or_the_mark_and_no_other():
     assert BLANK == [chr(0x0B), chr(0x0C), chr(0x1C), chr(0x1D), chr(0x1E), chr(0x1F)]
     every = "".join(map(chr, range(0x110000)))
     assert xlsx_value(every) == _held(every)
     for c in CANNOT_HOLD:
-        between = " " if c in BLANK else ""
+        between = " " if c in BLANK else MARK if c in HALVES else ""
         assert xlsx_value("Kettle" + c + "Lid") == "Kettle" + between + "Lid", ascii(c)
         assert xlsx_value(c * 3) == between * 3
     assert xlsx_value(-12.34) == -12.34 and xlsx_value(7) == 7 and xlsx_value(None) is None
@@ -197,7 +221,9 @@ def test_a_character_taken_out_from_in_front_hides_no_formula_and_the_workbook_o
     """openpyxl refused each of these as the row went in, and wrote U+FFFE,
     U+FFFF and a surrogate into a workbook neither it nor Excel would open.
     Taken out, each leaves the text around it, and what is left gets the
-    quote prefix when it starts like a formula."""
+    quote prefix when it starts like a formula. A half becomes U+FFFD,
+    which Excel showed in front of =1+1 and @SUM(1,1) as text, on opening
+    and after an edit (measured 2026-10-16), so that needs no prefix."""
     openpyxl = pytest.importorskip("openpyxl")
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -212,9 +238,10 @@ def test_a_character_taken_out_from_in_front_hides_no_formula_and_the_workbook_o
     rows = [[(c.value, c.data_type, c.quotePrefix) for c in row] for row in back.iter_rows()]
     assert len(rows) == len(CANNOT_HOLD)
     for c, row in zip(CANNOT_HOLD, rows):
-        s = " " if c in BLANK else ""
-        assert row == [(s + "=1+1", "s", True), ("=" + s + "1+1", "s", True),
-                       (" " + s + "@SUM(1,1)", "s", True), ("Kettle" + s + "lid", "s", False),
+        s = " " if c in BLANK else MARK if c in HALVES else ""
+        front = s != MARK
+        assert row == [(s + "=1+1", "s", front), ("=" + s + "1+1", "s", True),
+                       (" " + s + "@SUM(1,1)", "s", front), ("Kettle" + s + "lid", "s", False),
                        (s + "-12.34", "s", False)], ascii(c)
 
 
@@ -232,6 +259,8 @@ ESCAPED = [
     # A character dropped from inside the run comes out before the run is seen.
     ("_x" + chr(0) + "003D_1+1", "_x005F_x003D_1+1"),
     ("_" + chr(0xFFFF) + "x003D_1+1", "_x005F_x003D_1+1"),
+    # A half there is the mark, which joins nothing up.
+    ("_x" + chr(0xD800) + "003D_1+1", "_x" + chr(0xFFFD) + "003D_1+1"),
 ]
 
 
@@ -250,7 +279,7 @@ def test_excel_shows_every_text_as_it_came_and_quoted_where_what_it_shows_is_a_f
     Excel shows starts like a formula."""
     openpyxl = pytest.importorskip("openpyxl")
     pieces = ["_", "x", "X", "0", "3", "D", "d", "5", "F", "=", "1", "+", "@", " ", "a",
-              "\x00", "\x01", "\x0b", "\x1f", chr(0xFFFF), chr(0xD800),
+              "\x00", "\x01", "\x0b", "\x1f", chr(0xFFFF), chr(0xD800), HIGH, LOW, MARK,
               "_x003D_", "_x005F_", "_x00", "_x0040_"]
     rng = random.Random(20261016)
     ws = openpyxl.Workbook().active
@@ -262,6 +291,100 @@ def test_excel_shows_every_text_as_it_came_and_quoted_where_what_it_shows_is_a_f
         shown = _excel_reads(cell.value)
         assert shown == _held(text), ascii(text)
         assert cell.quotePrefix is starts_a_formula(shown), ascii(text)
+
+
+# -- half of a character -------------------------------------------------------------
+
+def test_a_half_on_its_own_is_the_mark_and_two_side_by_side_are_one_character():
+    """Chromium showed a lone half as U+FFFD and printed it into the PDF as
+    U+FFFD, and showed a high half then a low one as the character the two
+    make (measured 2026-10-16)."""
+    for c in HALVES:
+        assert whole_characters("SHOP " + c + "NAME") == "SHOP " + MARK + "NAME", ascii(c)
+        assert whole_characters(c * 3) == MARK * 3, ascii(c)
+    for high in (0xD800, 0xD83D, 0xDBFF):
+        for low in (0xDC00, 0xDE00, 0xDFFF):
+            pair = chr(high) + chr(low)
+            assert whole_characters(pair) == _made_whole(pair) and len(_made_whole(pair)) == 1
+    assert whole_characters(HIGH + LOW) == chr(0x1F600)
+    assert whole_characters(LOW + HIGH) == MARK * 2
+    assert whole_characters(HIGH + HIGH + LOW) == MARK + chr(0x1F600)
+    assert whole_characters("Great gift " + chr(0xD83C)) == "Great gift " + MARK
+
+
+def test_every_text_is_made_whole_as_utf16_reads_it():
+    """Against the definition written out in _made_whole, over every
+    character in one text and 20,000 made-up texts of halves and what
+    stands around them. What comes out always goes into UTF-8."""
+    every = "".join(map(chr, range(0x110000)))
+    assert whole_characters(every) == _made_whole(every)
+    pieces = [HIGH, LOW, chr(0xD800), chr(0xDBFF), chr(0xDC00), chr(0xDFFF), "a", "=", " ",
+              ";", "'", MARK, chr(0x1F600), "\x00"]
+    rng = random.Random(20261016)
+    for _ in range(20000):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(0, 8)))
+        made = whole_characters(text)
+        assert made == _made_whole(text), ascii(text)
+        made.encode("utf-8")
+
+
+def test_text_with_no_half_in_it_is_given_back_as_it_is():
+    for value in itertools.chain(every_short_value(), longer_values(), FORMULAS, TEXT):
+        assert whole_characters(value) is value
+
+
+def _halved(value: str):
+    """value with half of a character put in at each place, the high half
+    and the low one, and with a pair that came apart at its end."""
+    for i in range(len(value) + 1):
+        for half in (HIGH, LOW):
+            yield value[:i] + half + value[i:]
+    yield value + HIGH + LOW
+
+
+def test_every_writer_makes_a_half_whole_before_its_rule():
+    """A provider's JSON read by Python's json module, and a statement's
+    text read by pdfplumber, can hold half of a character, which UTF-8
+    cannot write. Every writer gives for such a text exactly what it gives
+    for the text made whole, nothing it gives holds a half, and the apps'
+    own files read it back made whole."""
+    checked = 0
+    for value in itertools.chain(FORMULAS, TEXT, PLAIN_NEGATIVE, [p for p, _ in PIECES]):
+        for text in _halved(value):
+            made = _made_whole(text)
+            assert csv_value(text) == csv_value(made), ascii(text)
+            assert store_value(text) == store_value(made), ascii(text)
+            assert xlsx_value(text) == xlsx_value(made), ascii(text)
+            assert read_stored(store_value(text)) == made, ascii(text)
+            for written in (csv_value(text), store_value(text)):
+                written.encode("utf-8")
+                assert not live_anywhere(written), ascii(text)
+            xlsx_value(text).encode("utf-8")
+            checked += 1
+    assert checked > 1000
+
+
+# A value holding half a character, and what one of the apps' own files
+# holds for it, U+FFFD where the half was. Both tools write the same.
+HALF_STORED = [
+    ("SHOP " + HIGH + "NAME", "SHOP " + MARK + "NAME"),
+    ("Great gift " + chr(0xD83C), "Great gift " + MARK),
+    (HIGH + LOW + " Kettle", chr(0x1F600) + " Kettle"),
+    (HIGH + "=1+1", MARK + "=1+1"),
+    ("=1+1" + HIGH, "'=1+1" + MARK),
+    ("x;" + HIGH + "=1+1", "x;" + MARK + "=1+1"),
+    ("x;=1+1" + LOW, "x;'=1+1" + MARK),
+    ("'" + HIGH + "=1+1", "'" + MARK + "=1+1"),
+    ("=3+3 Gift " + chr(0xD83C) + ".pdf", "'=3+3 Gift " + MARK + ".pdf"),
+]
+
+
+@pytest.mark.parametrize("value, held", HALF_STORED)
+def test_what_the_file_holds_for_half_a_character_and_what_reads_back(value, held):
+    assert store_value(value) == held and csv_value(value) == held
+    assert read_stored(held) == _made_whole(value)
+    held.encode("utf-8")
+    assert not live_anywhere(held)
 
 
 # -- the census -------------------------------------------------------------------
