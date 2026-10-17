@@ -153,9 +153,13 @@ the character they make, as the browser shows them. A half is replaced,
 not dropped. Unicode's security report (UTR #36, 3.1.2) warns that
 deleting what cannot be read joins the text on either side into something
 no check before it saw, and U+FFFD starts no formula and joins nothing. A
-value with no half in it is written exactly as before, and on 2026-10-16
-no value in the real installs held a half or U+FFFD, among 179,703 values
-in 52 files, 2,644 PDF names and 2,368 cached descriptions.
+value with no half in it is written exactly as before. Counted again for
+this on 2026-10-16, the real installs held no half and no U+FFFD among
+179,703 values in 52 order histories and indexes found outside Backups
+folders, 2,644 PDF names and 2,368 cached descriptions.
+
+An app run is not yet past a half. Its record in progress.json is written
+as JSON in UTF-8 before its CSV row, and that write stops at a half too.
 
 THE APPS' OWN CSV FILES
 
@@ -300,7 +304,8 @@ def csv_value(value):
 # What an xlsx cannot hold (WHAT AN XLSX CELL CANNOT HOLD, above). The
 # control characters are the 29 openpyxl refuses, its ILLEGAL_CHARACTERS_RE,
 # with the six of them Python counts as blank space kept apart, since those
-# become a space. No surrogate reaches it, since whole_characters goes first.
+# become a space. No surrogate reaches it, since whole_characters goes first,
+# and the range stays as a backstop.
 _NOT_IN_AN_XLSX = re.compile(r"[\x00-\x08\x0e-\x1b\ud800-\udfff\ufffe\uffff]")
 _BLANK_NOT_IN_AN_XLSX = re.compile(r"[\x0b\x0c\x1c-\x1f]")
 # The _ in front of a run Excel reads as its escape for one character.

@@ -538,10 +538,12 @@ def test_both_writers_make_whole_a_half_no_history_could_hold(tmp_path):
 
 
 def test_a_half_the_app_held_as_the_mark_reads_into_both_spreadsheets_as_it(tmp_path):
-    """A receipt app wrote nothing for an order whose item name carried half
-    of an emoji, since its history's write stopped there. Its CsvFile holds
+    """Core storage's CsvFile, which a receipt app writes its history
+    through, stopped at an item name carrying half of an emoji. It holds
     the half as U+FFFD now, and a pair that came apart as the character it
-    makes, and both spreadsheets show what the history holds."""
+    makes, and both spreadsheets show what the history holds. An app run
+    still stops before this, at its progress.json (sheets, HALF OF A
+    CHARACTER)."""
     rows = [dict(FORMULA_ROW, **{"Order or Receipt Number": "H-1",
                                  "Item Name": "SHOP " + HIGH + "NAME", "Notes": HIGH + "=1+1"}),
             dict(FORMULA_ROW, **{"Order or Receipt Number": "H-2",

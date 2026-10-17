@@ -10,22 +10,23 @@ All notable changes to PaperPull are recorded here. Versioning follows
 ## [Unreleased]
 
 ### Fixed
-- **A spreadsheet export no longer stops at half of an emoji.** A web page
-  now and then cuts text short in the middle of an emoji, and a provider's
-  own data can carry the half that is left to PaperPull. A statement's
-  text can carry one too, from a font that names its characters in an
-  unusual way. A CSV has no way to write half a character, so the CSV
-  export of purchases or transactions stopped at the first one, and so did
-  the writer of the apps' own order history, receipt index and document
-  index. Each half is now written as U+FFFD, the replacement character
-  shown as a question mark in a diamond, which is how the browser shows
-  the half on the page and prints it into the PDF, and two halves side by
-  side become the emoji they make. The .xlsx exports, which left the half
-  out in 0.54.0, do the same, so the two formats agree. Excel reads what
-  follows the mark as text, so =1+1 there stays text, on opening and after
-  an edit. Measured on real archives, 179,703 values, 2,644 file names and
-  2,368 statement descriptions, none held such a half or the mark, so
-  nothing already written changes.
+- **The transactions export no longer stops at half of an emoji.** A
+  statement's text can carry half of an emoji, from a font that names its
+  characters in an unusual way, and a CSV has no way to write half a
+  character, so the CSV export of transactions stopped at the first one.
+  Each half is now written as U+FFFD, the replacement character shown as
+  a question mark in a diamond, which is how a browser shows such a half
+  on a page and prints it into a PDF, and two halves side by side become
+  the emoji they make. Every spreadsheet PaperPull writes does the same,
+  the .xlsx exports among them, which left the half out in 0.54.0, so the
+  two formats agree. Excel reads what follows the mark as text, so =1+1
+  there stays text, on opening and after an edit. The apps' own order
+  history, receipt index and document index take the same mark when they
+  are written, though an app run that meets such a half in a provider's
+  data still stops at its progress file, which is a fix still to come.
+  Measured on real archives, 179,703 values, 2,644 file names and 2,368
+  statement descriptions, none held such a half or the mark, so nothing
+  already written changes.
 
 ## [0.54.0] - 2026-10-16
 
