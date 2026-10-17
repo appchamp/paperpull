@@ -177,6 +177,7 @@ from paperpull_core.dates import full_year as _full_year
 # re-exported: the docs module calls it as site.set_download_dir
 from paperpull_core.capture import set_download_dir  # noqa: F401
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_characters, whole_json
 
 log = logging.getLogger("spectrum_docs.site")
 
@@ -875,7 +876,7 @@ class Watch:
         except Exception:
             self.statuses.append(0)
         try:
-            body = json.loads(request.post_data or "")
+            body = whole_json(json.loads(request.post_data or ""))
         except (TypeError, ValueError):
             return
         if not isinstance(body, dict) or body.get("operationName") != self.operation:
@@ -899,7 +900,7 @@ class Watch:
             if status == 401:
                 raise SessionExpired("Spectrum's session check answered 401")
             try:
-                answer = response.json()
+                answer = whole_json(response.json())
             except Exception:
                 continue
             if isinstance(answer, dict) and answer.get("isValidSession") is False:
@@ -934,7 +935,7 @@ def answer_of(response) -> dict:
     if status != 200:
         raise ListStopped("Spectrum's API answered %d" % status)
     try:
-        answer = response.json()
+        answer = whole_json(response.json())
     except Exception:
         raise ListStopped("Spectrum's API answer is not JSON")
     if not isinstance(answer, dict):
@@ -1610,7 +1611,7 @@ def pdf_text(data: bytes, pages: int = 5) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
-        return "\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)])
+        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)]))
     except Exception:
         return ""
 
@@ -2077,7 +2078,7 @@ class MobileWatch(Watch):
             request = response.request
             if request.url != GRAPH_URL or request.method != "POST":
                 return
-            body = json.loads(request.post_data or "")
+            body = whole_json(json.loads(request.post_data or ""))
         except Exception:
             body = None
         op = body.get("operationName") if isinstance(body, dict) else None
@@ -2092,7 +2093,7 @@ class MobileWatch(Watch):
         if status != 200:
             return "came back %d" % status
         try:
-            answer = response.json()
+            answer = whole_json(response.json())
         except Exception:
             return "is not JSON"
         if not isinstance(answer, dict) or answer.get("errors"):

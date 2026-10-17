@@ -497,9 +497,16 @@ def test_a_history_holding_a_character_an_xlsx_cannot_hold_still_makes_both_spre
         assert (out["C-%02d" % i]["Item"], out["C-%02d" % i]["Notes"]) == ("Kettle" + c + "lid", "a" + c + "b")
 
 
-def test_the_writer_takes_out_a_surrogate_no_history_could_hold(tmp_path):
+HALVES = frozenset(chr(n) for n in range(0xD800, 0xE000))
+HIGH, LOW, MARK = chr(0xD83D), chr(0xDE00), chr(0xFFFD)
+
+
+def test_both_writers_make_whole_a_half_no_history_could_hold(tmp_path):
     """A UTF-8 file cannot hold half of a surrogate pair, so this goes to the
-    writer directly, with every character an xlsx cannot hold."""
+    writers directly, with every character an xlsx cannot hold. The CSV
+    writer stopped at the first half with UnicodeEncodeError. Both give a
+    half as U+FFFD now, which starts no formula, so =1+1 behind one takes
+    no quote."""
     purchases = []
     for i, c in enumerate(CANNOT_HOLD):
         p = {col: "" for col, _ in xp.COLUMNS}
@@ -511,9 +518,45 @@ def test_the_writer_takes_out_a_surrogate_no_history_could_hold(tmp_path):
     xp.write_xlsx(tmp_path / "p.xlsx", purchases, orders, xp.summary_from(orders))
     wb = _no_cell_holds_what_an_xlsx_cannot(tmp_path / "p.xlsx")
     ws = wb["Purchases"]
-    spaces = [" " if c in BLANK else "" for c in CANNOT_HOLD]
-    assert [c.value for c in _column(ws, "Item")] == ["Kettle" + s + "lid" for s in spaces]
-    assert [(c.value, c.quotePrefix) for c in _column(ws, "Account")] == [(s + "=1+1", True) for s in spaces]
+    between = [" " if c in BLANK else MARK if c in HALVES else "" for c in CANNOT_HOLD]
+    assert [c.value for c in _column(ws, "Item")] == ["Kettle" + s + "lid" for s in between]
+    assert [(c.value, c.quotePrefix) for c in _column(ws, "Account")] == \
+        [(s + "=1+1", s != MARK) for s in between]
     assert all((c.value, c.data_type) == (-1.5, "n") for c in _column(ws, "Line Total"))
     assert [(r[0].value, r[2].value) for r in wb["Summary"].iter_rows(min_row=2)] == \
         [("Shop", len(CANNOT_HOLD))]
+    xp.write_csv(tmp_path / "p.csv", purchases)
+    with open(tmp_path / "p.csv", encoding="utf-8-sig", newline="") as fh:
+        out = {x["Order Number"]: x for x in csv.DictReader(fh)}
+    assert len(out) == len(CANNOT_HOLD)
+    for i, c in enumerate(CANNOT_HOLD):
+        line = out["S-%04d" % i]
+        if c in HALVES:
+            assert (line["Item"], line["Account"]) == ("Kettle" + MARK + "lid", MARK + "=1+1"), i
+        else:
+            assert line["Item"] == "Kettle" + c + "lid", i
+
+
+def test_a_half_the_app_held_as_the_mark_reads_into_both_spreadsheets_as_it(tmp_path):
+    """Core storage's CsvFile, which a receipt app writes its history
+    through, stopped at an item name carrying half of an emoji. It holds
+    the half as U+FFFD now, and a pair that came apart as the character it
+    makes, and both spreadsheets show what the history holds. An app run
+    still stops before this, at its progress.json (sheets, HALF OF A
+    CHARACTER)."""
+    rows = [dict(FORMULA_ROW, **{"Order or Receipt Number": "H-1",
+                                 "Item Name": "SHOP " + HIGH + "NAME", "Notes": HIGH + "=1+1"}),
+            dict(FORMULA_ROW, **{"Order or Receipt Number": "H-2",
+                                 "Item Name": HIGH + LOW + " Kettle", "Notes": "=1+1" + LOW})]
+    held = _written_by_the_app(tmp_path / "Shop Receipts", "Shop", rows)
+    assert held.read_bytes().decode("utf-8-sig").count(MARK) == 3
+    want = {"H-1": ("SHOP " + MARK + "NAME", MARK + "=1+1"),
+            "H-2": (chr(0x1F600) + " Kettle", "=1+1" + MARK)}
+    with open(xp.export(tmp_path, as_csv=True)["path"], encoding="utf-8-sig", newline="") as fh:
+        out = {x["Order Number"]: (x["Item"], x["Notes"]) for x in csv.DictReader(fh)}
+    assert out == {k: (item, ("'" if note.startswith("=") else "") + note)
+                   for k, (item, note) in want.items()}
+    ws = _no_cell_holds_what_an_xlsx_cannot(xp.export(tmp_path)["path"])["Purchases"]
+    shown = {o.value: (i.value, n.value, n.quotePrefix) for o, i, n in
+             zip(_column(ws, "Order Number"), _column(ws, "Item"), _column(ws, "Notes"))}
+    assert shown == {k: (item, note, note.startswith("=")) for k, (item, note) in want.items()}

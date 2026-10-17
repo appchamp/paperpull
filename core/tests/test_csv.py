@@ -175,3 +175,61 @@ def test_a_value_that_is_not_text_is_written_as_its_text(tmp_path):
     row = f.read_all()[0]
     assert (row["Order or Receipt Number"], row["Order Total"], row["Notes"],
             row["Receipt Status"]) == ("-42", "-12.5", "", "True")
+
+
+# -- half of a character -----------------------------------------------------------------
+
+# Python's json module keeps half of an emoji that a provider's JSON carries
+# as an escape, and UTF-8 has no way to write it (sheets, HALF OF A
+# CHARACTER). The browser shows such a half as U+FFFD.
+HIGH, LOW, MARK = chr(0xD83D), chr(0xDE00), chr(0xFFFD)
+HALVED = [
+    {"Item Name": "Before"},
+    {"Item Name": "SHOP " + HIGH + "NAME", "Notes": HIGH + "=1+1",
+     "PDF Filename": "=3+3 Gift " + chr(0xD83C) + ".pdf"},
+    {"Item Name": HIGH + LOW + " Kettle", "Purchase Summary": "x;=1+1" + LOW},
+    {"Item Name": "After"},
+]
+MADE_WHOLE = [
+    {"Item Name": "Before"},
+    {"Item Name": "SHOP " + MARK + "NAME", "Notes": MARK + "=1+1",
+     "PDF Filename": "=3+3 Gift " + MARK + ".pdf"},
+    {"Item Name": chr(0x1F600) + " Kettle", "Purchase Summary": "x;=1+1" + MARK},
+    {"Item Name": "After"},
+]
+
+
+def _as_read(rows):
+    return [{c: r.get(c, "") for c in ORDER_HISTORY_COLUMNS} for r in rows]
+
+
+def test_a_row_holding_half_a_character_is_written_with_the_rows_around_it(tmp_path):
+    """The row holding a half stopped the append with UnicodeEncodeError,
+    and it and every row after it in the same call were lost. Each half is
+    U+FFFD now, a pair that came apart is the character it makes, and text
+    like a formula is held quoted as ever."""
+    path = tmp_path / "t.csv"
+    f = CsvFile(path, ORDER_HISTORY_COLUMNS)
+    f.append_rows(HALVED)
+    assert f.read_all() == _as_read(MADE_WHOLE)
+    path.read_bytes().decode("utf-8")
+    header, rows = _raw_rows(path)
+    held = dict(zip(header, rows[1]))
+    assert (held["Notes"], held["PDF Filename"]) == (MARK + "=1+1", "'=3+3 Gift " + MARK + ".pdf")
+    assert dict(zip(header, rows[2]))["Purchase Summary"] == "x;'=1+1" + MARK
+    _nothing_live(path)
+
+
+def test_a_rewrite_holding_half_a_character_replaces_the_file(tmp_path):
+    """Rename, Verify and reparse write every row back. A half among them
+    stopped the rewrite, and the file kept what it held before."""
+    backups = tmp_path / "Backups"
+    f = CsvFile(tmp_path / "t.csv", ORDER_HISTORY_COLUMNS, backups)
+    f.append_rows([{"Item Name": "Old"}])
+    f.rewrite(HALVED)
+    assert f.read_all() == _as_read(MADE_WHOLE)
+    assert len(list(backups.glob("t.*.bak"))) == 1
+    first = (tmp_path / "t.csv").read_bytes()
+    first.decode("utf-8")
+    f.rewrite(f.read_all())
+    assert (tmp_path / "t.csv").read_bytes() == first

@@ -95,16 +95,18 @@ cell exists to sweep, so one item name with a NUL in it from a provider's
 JSON stopped the whole export. U+FFFE, U+FFFF and a lone surrogate it
 writes anyway, and Excel then would not open the workbook at all. So
 xlsx_value takes every one of those characters out on the way into a
-cell.
+cell, once each surrogate has been made whole (HALF OF A CHARACTER,
+below), which leaves none.
 
-Dropped, not replaced with a mark. None of them prints, so the text reads
-as it did on the provider's page, where a mark like U+FFFD would show a
-character the page never had. Excel itself drops a NUL from a CSV it
-opens, and its CLEAN function, made for tidying text brought in from
-elsewhere, removes all of the first 32 codes. Kept by Excel's own escape
-instead, a NUL came back from the xlsx and cut the cell short at that
-point when it was edited. From a CSV Excel kept the other 28 in the cell
-and read none of them as the start of a formula, so a CSV keeps them.
+The rest are dropped, not replaced with a mark. None of them prints, so
+the text reads as it did on the provider's page, where a mark like U+FFFD
+would show a character the page never had. Excel itself drops a NUL from
+a CSV it opens, and its CLEAN function, made for tidying text brought in
+from elsewhere, removes all of the first 32 codes. Kept by Excel's own
+escape instead, a NUL came back from the xlsx and cut the cell short at
+that point when it was edited. From a CSV Excel kept the other 28 in the
+cell and read none of them as the start of a formula, so a CSV keeps
+them.
 
 Six of the control characters stand between words, the vertical tab
 Word uses for a line break, the form feed and the four separators from
@@ -121,6 +123,44 @@ working formula. xlsx_value writes the _ in front of such a run as
 _x005F_, the escape for _ itself, and Excel shows the text as it came.
 That comes after the drop, since dropping a character from inside such a
 run joins it up, and Excel would then read it. A space never makes one.
+
+HALF OF A CHARACTER (measured 2026-10-16, Playwright's Chromium 153 and
+pdfplumber 0.11.10)
+
+JavaScript holds text as UTF-16, where a character past U+FFFF, most often
+an emoji, is two halves called a surrogate pair. A string cut between the
+two keeps one half, JSON writes that half as an escape, and Python's json
+module reads it back as the half itself. pdfplumber gave one too, for a
+PDF whose font maps a character to the number 55357 in a ToUnicode range.
+UTF-8 has no way to write half a character, so every CSV writer here
+stopped at one with UnicodeEncodeError, both tools' exports and an app's
+own CsvFile alike, and openpyxl wrote one into a workbook Excel would not
+open.
+
+The browser had already settled what a half is. Chromium showed a lone
+half as U+FFFD, the replacement character, printed U+FFFD into the PDF it
+made of the page, and gave Python U+FFFD for it from evaluate, from the
+page's text, from an in-page fetch and from the DevTools protocol itself.
+JavaScript's own toWellFormed gives the same. Only text Python read for
+itself carried the half, a provider's JSON through the json module and a
+statement's text through pdfplumber.
+
+So whole_characters, which every writer here runs first, makes each lone
+half U+FFFD, the way the page showed it and the PDF beside the row prints
+it, and the same words read from the page and from the provider's JSON
+come out the same. Two halves side by side, high then low, are joined into
+the character they make, as the browser shows them. A half is replaced,
+not dropped. Unicode's security report (UTR #36, 3.1.2) warns that
+deleting what cannot be read joins the text on either side into something
+no check before it saw, and U+FFFD starts no formula and joins nothing. A
+value with no half in it is written exactly as before. Counted again for
+this on 2026-10-16, the real installs held no half and no U+FFFD among
+179,703 values in 52 order histories and indexes found outside Backups
+folders, 2,644 PDF names and 2,368 cached descriptions.
+
+An app run gets past a half as well. Every app makes a provider's text
+whole where it reads it, and progress.json, file names and every check
+that compares them with these files keep it the same way (characters.py).
 
 THE APPS' OWN CSV FILES
 
@@ -143,7 +183,9 @@ in front. read_stored takes one quote off a piece, and then off the whole
 value, only where that test passes, and a quote in front never changes
 its answer. So '=1+1 as a real name is written ''=1+1 and read
 back as '=1+1, =1+1 is written '=1+1 and read back as =1+1, and every
-value reads back exactly as it was written.
+value reads back exactly as it was written. A value holding half a
+character reads back as whole_characters made it, since no file can hold
+the half.
 
 That test is part of the files' format. read_stored takes a quote off only
 where today's test would put one, so a test that quotes less than an
@@ -227,15 +269,31 @@ def _piece_gets_a_quote(piece: str) -> bool:
     return _gets_a_quote(piece) or _as_sign(lead[:1]) in _SIGNS
 
 
+# Half of a character JavaScript holds as two (HALF OF A CHARACTER, above).
+_HALF = re.compile("[%s-%s]" % (chr(0xD800), chr(0xDFFF)))
+
+
+def whole_characters(text: str) -> str:
+    """text with every surrogate made whole. A high half followed by a low
+    one becomes the character the two make, and a half on its own becomes
+    U+FFFD, the way the browser shows it. Text with no half in it is given
+    back as it is."""
+    if not _HALF.search(text):
+        return text
+    return text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+
+
 def csv_value(value):
     """What a CSV cell is given for value. None is an empty cell and a
-    number is written as it is. Text that could start a formula gets a
-    single quote in front, and so does each piece of it after a ; or a line
-    break that could, quotes and blank space in front of it set aside."""
+    number is written as it is. Text is made whole (whole_characters), and
+    then text that could start a formula gets a single quote in front, and
+    so does each piece of it after a ; or a line break that could, quotes
+    and blank space in front of it set aside."""
     if value is None:
         return ""
     if not isinstance(value, str):
         return value
+    value = whole_characters(value)
     parts = _BREAKS.split(value)
     for i in range(2, len(parts), 2):
         if _piece_gets_a_quote(parts[i]):
@@ -247,7 +305,8 @@ def csv_value(value):
 # What an xlsx cannot hold (WHAT AN XLSX CELL CANNOT HOLD, above). The
 # control characters are the 29 openpyxl refuses, its ILLEGAL_CHARACTERS_RE,
 # with the six of them Python counts as blank space kept apart, since those
-# become a space.
+# become a space. No surrogate reaches it, since whole_characters goes first,
+# and the range stays as a backstop.
 _NOT_IN_AN_XLSX = re.compile(r"[\x00-\x08\x0e-\x1b\ud800-\udfff\ufffe\uffff]")
 _BLANK_NOT_IN_AN_XLSX = re.compile(r"[\x0b\x0c\x1c-\x1f]")
 # The _ in front of a run Excel reads as its escape for one character.
@@ -256,14 +315,15 @@ _EXCEL_ESCAPE = re.compile(r"_(?=x[0-9A-Fa-f]{4}_)")
 
 def xlsx_value(value):
     """What an xlsx cell is given for value. A number or None is given as it
-    is. Text loses every character an xlsx cannot hold, a space standing in
-    for each of the six that are blank space, and then the _ in front of a
-    run Excel reads as its escape for a character, _x003D_ for =, becomes
-    _x005F_, the escape for _ itself, so Excel shows the text as it came.
-    keep_text then tests the text the cell holds."""
+    is. Text is made whole (whole_characters), then loses every character
+    an xlsx cannot hold, a space standing in for each of the six that are
+    blank space, and then the _ in front of a run Excel reads as its escape
+    for a character, _x003D_ for =, becomes _x005F_, the escape for _
+    itself, so Excel shows the text as it came. keep_text then tests the
+    text the cell holds."""
     if not isinstance(value, str):
         return value
-    text = _BLANK_NOT_IN_AN_XLSX.sub(" ", _NOT_IN_AN_XLSX.sub("", value))
+    text = _BLANK_NOT_IN_AN_XLSX.sub(" ", _NOT_IN_AN_XLSX.sub("", whole_characters(value)))
     return _EXCEL_ESCAPE.sub("_x005F_", text)
 
 
@@ -285,13 +345,14 @@ def keep_text(cell) -> None:
 
 def store_value(value) -> str:
     """What one of the apps' own CSV files is given for value. None is an
-    empty cell, and anything else is written as its text. Text that starts
-    like a formula, once any quotes in front of it are set aside, gets one
-    more quote in front, and so does each piece after a ; or a line break
-    that does (_gets_a_quote). read_stored gives back exactly what came in."""
+    empty cell, and anything else is written as its text, made whole
+    (whole_characters). Text that starts like a formula, once any quotes in
+    front of it are set aside, gets one more quote in front, and so does
+    each piece after a ; or a line break that does (_gets_a_quote).
+    read_stored gives back exactly what came in, made whole."""
     if value is None:
         return ""
-    text = value if isinstance(value, str) else str(value)
+    text = whole_characters(value if isinstance(value, str) else str(value))
     parts = _BREAKS.split(text)
     for i in range(2, len(parts), 2):
         if _piece_gets_a_quote(parts[i]):

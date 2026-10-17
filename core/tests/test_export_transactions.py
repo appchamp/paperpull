@@ -1132,23 +1132,136 @@ def test_an_index_and_a_statement_holding_a_character_an_xlsx_cannot_hold_make_b
         assert d.value == _held(written[balance]), balance
 
 
-def test_a_statement_holding_a_surrogate_makes_the_xlsx_from_the_pdf_and_from_the_cache(
+# The surrogates, each half of a character UTF-16 writes as two, and the
+# mark a browser shows for one on its own (sheets, HALF OF A CHARACTER).
+HALVES = frozenset(chr(n) for n in range(0xD800, 0xE000))
+HIGH, LOW, MARK = chr(0xD83D), chr(0xDE00), chr(0xFFFD)
+
+
+def _descriptions(r: dict) -> dict:
+    """Each transaction's description by its balance, from the CSV read
+    strictly as UTF-8, or from the workbook's Transactions sheet."""
+    if r["format"] == "csv":
+        with open(r["path"], encoding="utf-8-sig", newline="") as fh:
+            return {float(x["Balance"]): x["Description"] for x in csv.DictReader(fh)}
+    txns = _no_cell_holds_what_an_xlsx_cannot(r["path"])["Transactions"]
+    assert all(c.data_type == "n" for c in _column(txns, "Amount"))
+    return {b.value: d.value for b, d in zip(_column(txns, "Balance"), _column(txns, "Description"))}
+
+
+def test_a_statement_holding_a_surrogate_makes_both_spreadsheets_from_the_pdf_and_from_the_cache(
         tmp_path, monkeypatch):
     """A statement's text reaches the export from the PDF, and on a later
     export from the cache, which is JSON and holds half of a surrogate pair
     as an escape. So every character an xlsx cannot hold is tried here, the
-    2,048 surrogates too, both ways."""
+    2,048 surrogates too, both ways and into both spreadsheets. The CSV
+    stopped at the first half with UnicodeEncodeError. Each half is U+FFFD
+    in both now, as a browser shows it."""
     pytest.importorskip("pdfplumber")
     _bank_folder(tmp_path, "Jane", "Checking")
     lines, last = _bank_with_every_character(CANNOT_HOLD)
-    monkeypatch.setattr(xt, "pdf_lines", lambda p: lines)
-    for way in ("from the PDF", "from the cache"):
-        r = xt.export(tmp_path, log=lambda *_: None)
-        assert (r["transactions"], r["reconciled"]) == (len(CANNOT_HOLD) + 1, 1), way
-        txns = _no_cell_holds_what_an_xlsx_cannot(r["path"])["Transactions"]
-        shown = {b.value: d.value for b, d in zip(_column(txns, "Balance"), _column(txns, "Description"))}
-        assert _excel_reads(shown.pop(last)) == "_x003D_1+1", way
-        assert set(shown.values()) == {"SHOP NAME"} and len(shown) == len(CANNOT_HOLD), way
-        assert all(c.data_type == "n" for c in _column(txns, "Amount")), way
-        monkeypatch.setattr(xt, "pdf_lines", lambda p: pytest.fail("read the PDF again"))
-    assert chr(92) + "ud800" in (tmp_path / xt.CACHE_NAME).read_text(encoding="utf-8")
+    halves = {1000.0 + len(CANNOT_HOLD) - i - 1 for i, c in enumerate(CANNOT_HOLD) if c in HALVES}
+    assert len(halves) == 2048
+    for as_csv in (False, True):
+        (tmp_path / xt.CACHE_NAME).unlink(missing_ok=True)
+        monkeypatch.setattr(xt, "pdf_lines", lambda p: lines)
+        for way in ("from the PDF", "from the cache"):
+            r = xt.export(tmp_path, as_csv=as_csv, log=lambda *_: None)
+            assert (r["transactions"], r["reconciled"]) == (len(CANNOT_HOLD) + 1, 1), way
+            shown = _descriptions(r)
+            escaped = shown.pop(last)
+            assert (escaped if as_csv else _excel_reads(escaped)) == "_x003D_1+1", way
+            assert len(shown) == len(CANNOT_HOLD), way
+            assert {shown[b] for b in halves} == {"SHOP " + MARK + "NAME"}, way
+            if not as_csv:
+                assert {d for b, d in shown.items() if b not in halves} == {"SHOP NAME"}, way
+            monkeypatch.setattr(xt, "pdf_lines", lambda p: pytest.fail("read the PDF again"))
+        assert chr(92) + "ud800" in (tmp_path / xt.CACHE_NAME).read_text(encoding="utf-8")
+
+
+def _statement_pdf(lines) -> bytes:
+    """A one-page PDF of these lines in Helvetica, whose ToUnicode map gives
+    the codes of { | } ~ by number, as a high half, a low half, a low half
+    and a high half. pdfplumber takes a number there for the character it
+    names, so { and | read as the two halves of U+1F600."""
+    def literal(text):
+        return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    content = ("BT /F1 10 Tf 14 TL 40 750 Td "
+               + " ".join("(%s) Tj T*" % literal(line) for line in lines) + " ET").encode("ascii")
+    cmap = ("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+            "/CMapName /Halves def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
+            "1 beginbfrange\n<7B> <7E> [55357 56832 56832 55357]\nendbfrange\n"
+            "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n").encode("ascii")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(cmap), cmap),
+    ]
+    out, offsets = bytearray(b"%PDF-1.4\n"), []
+    for n, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (n, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)
+
+
+HALF_LINES = ["Statement Period: 06/01/2026to 06/30/2026",
+              "Beginning Balance $1,000.00",
+              "Ending Balance $996.00",
+              "Date Description Debits Credits Balance",
+              "06/01 Beginning Balance 0 0 $1,000.00",
+              "06/02 SHOP ~NAME $1.00 0 $999.00",
+              "06/03 {| CAFE $1.00 0 $998.00",
+              "06/04 ~=1+1 $1.00 0 $997.00",
+              "06/05 =1+1} $1.00 0 $996.00",
+              "06/30 Ending Balance - - $996.00"]
+
+
+def test_a_statement_whose_font_gives_half_a_character_makes_both_spreadsheets(tmp_path):
+    """pdfplumber gives half of a surrogate pair for a font whose ToUnicode
+    map names a character by number (measured 2026-10-16, pdfplumber
+    0.11.10), and the CSV export stopped at it with UnicodeEncodeError. The
+    PDF here is read by pdfplumber itself. pdf_lines makes the text whole as
+    it reads it (paperpull_core.characters), so both spreadsheets, from the
+    PDF and then from the cache, show a half as U+FFFD, as a browser shows
+    it, and two halves side by side as the character they make, and the
+    cache holds U+FFFD too."""
+    pdfplumber = pytest.importorskip("pdfplumber")
+    pytest.importorskip("openpyxl")
+    index = _bank_folder(tmp_path, "Jane", "Checking")
+    pdf = index.parent / "June Statement.pdf"
+    pdf.write_bytes(_statement_pdf(HALF_LINES))
+    with pdfplumber.open(str(pdf)) as opened:
+        given = opened.pages[0].extract_text() or ""
+    assert "SHOP " + HIGH + "NAME" in given, ascii(given)
+    read = xt.pdf_lines(pdf)
+    assert "06/02 SHOP " + MARK + "NAME $1.00 0 $999.00" in read, [ascii(line) for line in read]
+    assert not any(HIGH in line or LOW in line for line in read), [ascii(line) for line in read]
+    want = {999.0: "SHOP " + MARK + "NAME", 998.0: chr(0x1F600) + " CAFE",
+            997.0: MARK + "=1+1", 996.0: "=1+1" + MARK}
+    for as_csv in (True, False):
+        (tmp_path / xt.CACHE_NAME).unlink(missing_ok=True)
+        for way in ("from the PDF", "from the cache"):
+            r = xt.export(tmp_path, as_csv=as_csv, log=lambda *_: None)
+            assert (r["transactions"], r["reconciled"], r["read"]) == \
+                (4, 1, int(way == "from the PDF")), way
+            quoted = {**want, 996.0: "'=1+1" + MARK} if as_csv else want
+            assert _descriptions(r) == quoted, way
+        # The emoji the two halves make is written as two escapes, which
+        # read back as the one character, so the cache is read to tell.
+        cached = json.dumps(json.loads((tmp_path / xt.CACHE_NAME).read_text(encoding="utf-8")),
+                            ensure_ascii=False)
+        assert MARK in cached and chr(0x1F600) in cached
+        assert not any(c in HALVES for c in cached)
+    import openpyxl
+    txns = openpyxl.load_workbook(r["path"])["Transactions"]
+    prefixed = {b.value: d.quotePrefix for b, d in zip(_column(txns, "Balance"),
+                                                         _column(txns, "Description"))}
+    assert prefixed == {999.0: False, 998.0: False, 997.0: False, 996.0: True}

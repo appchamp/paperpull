@@ -36,6 +36,7 @@ from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import human_date as _human_date
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.controls import click_next_page as _click_next_page
+from paperpull_core.characters import whole_characters
 
 log = logging.getLogger("dominion_docs.site")
 
@@ -587,7 +588,7 @@ def is_unavailable_bill(out_path) -> bool:
     months. Detect it so those are marked unavailable, not saved as junk."""
     try:
         import pypdf
-        text = (pypdf.PdfReader(str(out_path)).pages[0].extract_text() or "")
+        text = whole_characters(pypdf.PdfReader(str(out_path)).pages[0].extract_text() or "")
         return bool(_UNAVAILABLE_RE.search(text))
     except Exception:
         return False

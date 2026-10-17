@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Iterable, NamedTuple, Optional
 
 from . import browser as _launcher
+from .characters import whole_characters
 from .identity import MIN_TEXT, amount_variants, date_variants, on_its_own
 from .models import ValidationResult
 
@@ -1078,7 +1079,7 @@ def pdf_text(path: Path) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(str(path))
-        return "\n".join((pg.extract_text() or "") for pg in reader.pages)
+        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages))
     except Exception:
         return ""
 
@@ -1145,7 +1146,7 @@ def validate_pdf(path: Path, min_bytes: int = 3000,
         try:
             text = ""
             for pg in reader.pages[:5]:
-                text += pg.extract_text() or ""
+                text += whole_characters(pg.extract_text() or "")
             text_lower = text.lower()
             # POS receipts render with per-letter spacing ("T a r g e t"),
             # so also match against whitespace-squashed text.

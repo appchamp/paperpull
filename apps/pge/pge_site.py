@@ -140,6 +140,7 @@ from paperpull_core.ready import (count_reaches, count_settles, network_idle,
                                   new_source, ready, sources_of)
 from paperpull_core import pressing
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("pge_docs.site")
 
@@ -1766,7 +1767,7 @@ def _pdf_from_value(value, depth: int = 0) -> Optional[bytes]:
         if text[:1] in ("{", "[") and len(text) > 200:
             try:
                 import json as _json
-                inner = _json.loads(text)
+                inner = whole_json(_json.loads(text))
             except Exception:
                 return None
             return _pdf_from_value(inner, depth + 1)
@@ -1824,7 +1825,7 @@ def _pdf_in_aura(res) -> Optional[bytes]:
         if start < 0:
             return None
         import json as _json
-        body = _json.loads(text[start:])
+        body = whole_json(_json.loads(text[start:]))
     except Exception:
         return None
     actions = body.get("actions") if isinstance(body, dict) else None

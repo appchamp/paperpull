@@ -130,6 +130,7 @@ from paperpull_core.capture import take_download as _take_download
 from paperpull_core.capture import clear_copies as _clear_copies
 from paperpull_core.capture import arrived as _arrived
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_characters, whole_json
 
 log = logging.getLogger("simmons_docs.site")
 
@@ -835,7 +836,7 @@ def _json_of(page, response, what: str, ask_again: bool = False):
     if _status(response) != 200:
         raise ListStopped("the %s answer was not 200" % what)
     try:
-        return json.loads(body.decode("utf-8"))
+        return whole_json(json.loads(body.decode("utf-8")))
     except (ValueError, UnicodeDecodeError):
         raise ListStopped("the %s answer was not JSON" % what)
 
@@ -1089,7 +1090,7 @@ def _available_until(page, answers: list, account_id: str) -> str:
         if body is None or _status(response) != 200:
             return ""
         try:
-            got = json.loads(body.decode("utf-8"))
+            got = whole_json(json.loads(body.decode("utf-8")))
         except (ValueError, UnicodeDecodeError):
             return ""
         accounts = got.get("accounts") if isinstance(got, dict) else None
@@ -1132,7 +1133,7 @@ def _start_is_the_banks(page, answers: list, user: str, start: str) -> None:
         if body is None:
             continue
         try:
-            read = json.loads(body.decode("utf-8"))
+            read = whole_json(json.loads(body.decode("utf-8")))
         except (ValueError, UnicodeDecodeError):
             continue
         said_by.add(json.dumps(read, sort_keys=True))
@@ -1696,7 +1697,7 @@ def pdf_text(data: bytes, pages: int = 5) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
-        return "\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)])
+        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)]))
     except Exception:
         return ""
 

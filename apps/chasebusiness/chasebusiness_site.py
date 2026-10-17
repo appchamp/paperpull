@@ -121,6 +121,7 @@ from paperpull_core.capture import take_download as _take_download
 from paperpull_core.capture import clear_copies as _clear_copies
 from paperpull_core.words import words_for as _words_for
 from paperpull_core.receipt_pdf import pdf_text as _pdf_text
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("chasebusiness_docs.site")
 
@@ -1050,7 +1051,7 @@ def read_answer(response, run: Run, year: int) -> List[Item]:
     if status != 200:
         raise ListStopped("the list answered with status %d" % status)
     try:
-        data = response.json()
+        data = whole_json(response.json())
     except Exception:
         raise ListStopped("the list answer is not JSON")
     if not isinstance(data, dict):

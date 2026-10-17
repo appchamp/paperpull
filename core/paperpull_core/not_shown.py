@@ -42,6 +42,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
+from .characters import whole_characters
 from .models import State
 
 # Word for word what each receipt app noted with No Receipt Available, up to
@@ -107,12 +108,17 @@ def let_go_on_save(app, purchase, state, rec: dict) -> None:
 
 def written_down(app, purchase) -> bool:
     """Whether the order history already has rows for this purchase. One
-    that cannot be read is taken as not, and writing to it says why."""
+    that cannot be read is taken as not, and writing to it says why. The
+    history holds half of a character as U+FFFD (characters.py), so the
+    order number is asked for that way too."""
     try:
         rows = app.order_csv.read_all()
     except Exception:
         return False
-    return any(r.get("Order or Receipt Number") == purchase.order_number
+    number = purchase.order_number
+    if isinstance(number, str):
+        number = whole_characters(number)
+    return any(r.get("Order or Receipt Number") == number
                and r.get("Purchase Type", purchase.purchase_type) == purchase.purchase_type
                for r in rows)
 

@@ -21,6 +21,7 @@ from pathlib import Path, PurePath
 from typing import Dict, Iterable, List, Optional
 
 from . import shared_folder
+from .characters import json_escaped, whole_characters, whole_json
 from .sheets import read_stored_row, store_value
 from .spec import INFRASTRUCTURE_FOLDERS, RECEIPT
 
@@ -647,9 +648,11 @@ def sanitize_component(name: str, max_len: int = 120) -> str:
 
     Removes forbidden characters, control characters, trailing spaces and
     periods, guards against reserved device names and empty names.
-    Apostrophes (e.g. Children's Clothing) are preserved.
+    Apostrophes (e.g. Children's Clothing) are preserved. Half of a
+    character is made whole first (characters.py), as the index writes it,
+    since a Mac refuses a file name holding one.
     """
-    name = _INVALID_CHARS.sub("", name or "")
+    name = _INVALID_CHARS.sub("", whole_characters(name or ""))
     name = re.sub(r"\s+", " ", name).strip()
     name = name.rstrip(" .")
     if not name:
@@ -1168,8 +1171,16 @@ def free_to_write(path: Path, say=print) -> bool:
 
 def atomic_write_json(path: Path, data, **how) -> None:
     """`how` is passed on to atomic_write_text only when given, so a test's
-    stand-in for it that takes no `tries` serves every other save as before."""
-    atomic_write_text(Path(path), json.dumps(data, indent=2, ensure_ascii=False), **how)
+    stand-in for it that takes no `tries` serves every other save as before.
+    Half of a character is written as its escape (characters.json_escaped),
+    so the file is always written and reads back as it was written."""
+    atomic_write_text(Path(path), json_text(data), **how)
+
+
+def json_text(data, indent=2) -> str:
+    """data as the JSON text atomic_write_json writes, which UTF-8 can always
+    hold. For a JSON file written another way, Export history's say."""
+    return json_escaped(json.dumps(data, indent=indent, ensure_ascii=False))
 
 
 def backup_file(path: Path, backups_dir: Path) -> Optional[Path]:
@@ -1260,9 +1271,49 @@ class CsvFile:
 # Progress / discovery stores
 # ---------------------------------------------------------------------------
 
+def _whole_key(key):
+    return whole_characters(key) if isinstance(key, str) else key
+
+
+def _whole_records(raw: dict) -> dict:
+    """A store's records as its file holds them, with their text whole. Two
+    keys that come out the same, one written with a half and one with
+    U+FFFD in its place, say, are one record then, which keeps the fields
+    of both, a later key's over an earlier one's, so nothing either held is
+    lost."""
+    made = whole_json(raw)
+    if made is raw or len(made) == len(raw):
+        return made
+    out = {}
+    for key, rec in raw.items():
+        key, rec = _whole_key(key), whole_json(rec)
+        if isinstance(out.get(key), dict) and isinstance(rec, dict):
+            out[key] = {**out[key], **rec}
+        else:
+            out[key] = rec
+    return out
+
+
 class JsonStore:
     """A dict-of-records JSON file with atomic writes, backups, and
-    corrupt-file recovery."""
+    corrupt-file recovery.
+
+    It holds text whole, as the CSV files beside it do (characters.py). Half
+    of a character in a record or a key is U+FFFD here, read or written, and
+    a record is asked for by its key made whole the same way, so a key
+    holding a half finds its record, and a CSV row naming it finds the same
+    one. Up to now a half stopped the save with UnicodeEncodeError, and
+    nothing was written down. Kept exactly instead, as its escape, the
+    record and the row beside it disagreed, and Rename, which finds a
+    receipt's record by the order number its row holds, left every such
+    file as it was.
+
+    So two keys that differ only by a half, or by a half and U+FFFD, are
+    one record, as they are one row in a CSV. A name a disk gave Python,
+    which Linux gives with a half for each byte it cannot read as UTF-8,
+    is kept with U+FFFD there too and names no file, where the save used to
+    stop. PaperPull makes no such name, since every name it makes is made
+    whole (sanitize_component)."""
 
     def __init__(self, path: Path, backups_dir: Optional[Path] = None):
         self.path = Path(path)
@@ -1284,7 +1335,7 @@ class JsonStore:
                 with shared_folder.open_to_read(self.path, "r", encoding="utf-8") as f:
                     raw = json.load(f)
                 if isinstance(raw, dict):
-                    self.data = raw
+                    self.data = _whole_records(raw)
                     self._as_written = self._canonical()
                 else:
                     # Valid JSON of the wrong shape, a list or a bare null.
@@ -1319,7 +1370,7 @@ class JsonStore:
                 with open(c, "r", encoding="utf-8") as f:
                     raw = json.load(f)
                 if isinstance(raw, dict):
-                    return raw
+                    return _whole_records(raw)
             except (json.JSONDecodeError, OSError):
                 continue
         return None
@@ -1362,13 +1413,28 @@ class JsonStore:
     def get(self, key: str) -> Optional[dict]:
         if not self._loaded:
             self.load()
-        return self.data.get(key)
+        made = _whole_key(key)
+        found = self.data.get(made)
+        if found is None and made is not key:
+            # Put into data straight under the key as given, not by update.
+            found = self.data.get(key)
+        return found
 
     def update(self, key: str, record: dict, save: bool = True) -> None:
         if not self._loaded:
             self.load()
-        existing = self.data.get(key, {})
-        existing.update(record)
+        made = _whole_key(key)
+        existing = self.data.get(made, {})
+        if made is not key and key in self.data:
+            # A record put into data straight under the key as given, not
+            # by update, joins the one held under the key made whole, which
+            # keeps its own fields over it, so neither is left to be lost
+            # when the file is read whole again.
+            put = whole_json(self.data.pop(key))
+            if isinstance(put, dict) and isinstance(existing, dict):
+                existing = {**put, **existing}
+        key = made
+        existing.update(whole_json(record))
         existing["updated_at"] = datetime.now().isoformat(timespec="seconds")
         self.data[key] = existing
         if save:

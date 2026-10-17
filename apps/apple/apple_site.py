@@ -72,6 +72,7 @@ from paperpull_core.dates import checked as _checked_date
 from paperpull_core.identity import Identity
 from paperpull_core.models import Item, Purchase
 from paperpull_core.urls import is_safe_url as _host_allows
+from paperpull_core.characters import whole_characters, whole_json
 # Only what every app's storage has. The core's census tests import each
 # site module with whichever app's storage was loaded last.
 from storage import now_iso
@@ -923,7 +924,7 @@ _HAS_INIT_DATA_JS = "() => !!document.getElementById('init_data')"
 
 def init_data_from(text) -> Optional[dict]:
     try:
-        data = json.loads(text or "")
+        data = whole_json(json.loads(text or ""))
     except (TypeError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -1182,7 +1183,7 @@ def drop_blank_last_pages(path) -> int:
         total = keep = len(reader.pages)
         while keep > 1:
             page = reader.pages[keep - 1]
-            if (page.extract_text() or "").strip():
+            if whole_characters(page.extract_text() or "").strip():
                 break
             resources = page.get("/Resources") or {}
             try:

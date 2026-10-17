@@ -74,6 +74,7 @@ from paperpull_core.redact import redact, set_private_words  # noqa: F401
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.api_census import shape_of as _shape
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("stripe_docs.site")
 
@@ -311,7 +312,7 @@ def capture_list(page, page_path: str, api_path: str, wait_ms: int = 20000) -> C
         if got.body is not None or not _is_answer(r.url, api_path):
             return
         try:
-            body = r.json()
+            body = whole_json(r.json())
         except Exception:
             body = None
         try:
@@ -560,7 +561,7 @@ def _fetch_file(page, link: str) -> dict:
         raise SessionExpired("Stripe answered %s, which means the session has ended" % resp.status)
     if "json" in ct:
         try:
-            return {"status": resp.status, "ct": ct, "url": resp.url, "json": resp.json()}
+            return {"status": resp.status, "ct": ct, "url": resp.url, "json": whole_json(resp.json())}
         except Exception:
             return {"status": resp.status, "ct": ct, "url": resp.url, "json": None}
     body = resp.body()

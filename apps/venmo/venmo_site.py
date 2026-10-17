@@ -136,6 +136,7 @@ from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.dates import full_year as _full_year
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("venmo_docs.site")
 
@@ -643,7 +644,7 @@ class Heard:
                 finished = getattr(response, "finished", None)
                 if callable(finished):
                     finished()
-                body = response.json()
+                body = whole_json(response.json())
             except Exception as e:
                 # Over CDP the body is often gone before it can be read
                 # (Network.getResponseBody: no resource). The page's own
@@ -720,7 +721,7 @@ def _operation(body: str) -> str:
     """The operationName of a GraphQL request body, or "" when it has none
     this can read. Only the name is read; the variables are private."""
     try:
-        data = json.loads(body)
+        data = whole_json(json.loads(body))
     except (TypeError, ValueError):
         return ""
     if isinstance(data, list):

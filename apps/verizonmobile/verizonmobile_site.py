@@ -79,6 +79,7 @@ from paperpull_core.dates import checked as _checked_date
 from paperpull_core.dates import full_year as _full_year
 from paperpull_core import pressing
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("verizonmobile_docs.site")
 
@@ -893,7 +894,7 @@ def survey(page, dwell_ms: int = 4000, max_follow: int = 6) -> dict:
                 body = res.request.post_data or ""
                 if body.lstrip().startswith("{"):
                     import json as _json
-                    parsed = _json.loads(body)
+                    parsed = whole_json(_json.loads(body))
                     if isinstance(parsed, dict):
                         entry["post_keys"] = sorted(str(k) for k in parsed)[:30]
             except Exception:
@@ -903,7 +904,7 @@ def survey(page, dwell_ms: int = 4000, max_follow: int = 6) -> dict:
                 entry["query"] = q[:240]
             if "json" in ct:
                 try:
-                    entry["shape"] = _shape(res.json())
+                    entry["shape"] = _shape(whole_json(res.json()))
                 except Exception:
                     entry["shape"] = "unreadable"
             seen.append(entry)

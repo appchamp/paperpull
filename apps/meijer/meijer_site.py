@@ -67,6 +67,7 @@ from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.capture import fetch_with_status as _fetch_with_status
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_characters, whole_json
 
 log = logging.getLogger("meijer_receipts.site")
 
@@ -1379,7 +1380,7 @@ def pdf_facts(path) -> dict:
         from pypdf import PdfReader
         reader = PdfReader(str(p))
         facts["pages"] = len(reader.pages)
-        text = "".join((pg.extract_text() or "") for pg in reader.pages[:5]).lower()
+        text = whole_characters("".join((pg.extract_text() or "") for pg in reader.pages[:5])).lower()
         facts["text_characters"] = len(text)
         facts["prints_a_date"] = bool(re.search(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", text))
         facts["prints_an_amount"] = bool(re.search(r"\d+\.\d{2}\b", text))
@@ -1645,7 +1646,7 @@ class JsonSniffer:
                 url = resp.url
                 if "json" not in ctype or not is_safe_url(url) or len(self.seen) >= 40:
                     return
-                body = resp.json()
+                body = whole_json(resp.json())
                 self.seen.append({"url": mask_href(url), "status": resp.status, "shape": json_shape(body)})
             except Exception:
                 pass

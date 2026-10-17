@@ -478,6 +478,41 @@ def test_a_store_order_is_read_from_the_list_and_its_details_page(browser, tmp_p
     assert not app._stopped_sides and not app.failures
 
 
+def test_a_store_order_named_with_half_of_a_character_is_read_whole(browser, tmp_path, capsys):
+    """Half of an emoji in an item's name, as JSON in the page writes it,
+    an escape. The browser hands that text over as it is, and Python's json
+    module read the half itself, which stopped the run with
+    UnicodeEncodeError at the first line printing the name, and nothing
+    was written down. init_data_from makes the text whole
+    (paperpull_core.characters), so the half is U+FFFD, as the page shows
+    it, from the list through the record and the line printed."""
+    half, mark = chr(0xD83D), chr(0xFFFD)
+    listing = json.loads(json.dumps(LISTING))
+    listing["orderList"]["order-W0000000001"]["0000101"]["d"]["productShortName"] = "iPad Air " + half
+    fake = the_store(FakeApple(browser))
+    fake.at(STORE + "/shop/order/list", page_with(listing))
+    fake.at(SECURE + "/shop/order/detail/100001/W0000000001", page_with(store_detail(
+        "W0000000001", "April 28, 2026", "iPad Air Case " + half,
+        {"currentStatus": "DELIVERED"}, True)))
+    page = fake.context.new_page()
+    page.goto(STORE + "/shop/order/list")
+    assert chr(92) + "ud83d" in page.evaluate(site._INIT_DATA_JS)
+    names = [i["name"] for o in site.parse_order_list(site.read_init_data(page))["orders"]
+             for i in o["items"]]
+    assert "iPad Air " + mark in names, [ascii(n) for n in names]
+    page.close()
+
+    app = _app(tmp_path, fake.context)
+    assert app._discover_apple_store() == 2
+    said = capsys.readouterr().out
+    delivered = app.discovery.data["Apple Store:W0000000001"]
+    held = json.dumps(delivered, ensure_ascii=False)
+    assert mark in held and half not in held, ascii(held)
+    app.discovery.save()
+    assert half not in app.paths.discovery_json.read_bytes().decode("utf-8")
+    assert half not in said and not app._stopped_sides and not app.failures
+
+
 # -- Diagnose ------------------------------------------------------------------------
 
 # Everything in the made-up account that is the account's own, which neither

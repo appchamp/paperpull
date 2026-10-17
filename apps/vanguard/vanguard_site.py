@@ -129,6 +129,7 @@ FORBIDDEN_CONTROL_RE = re.compile(
 from paperpull_core.controls import (AUTH_CONTROL_RE, SETTINGS_CONTROL_RE,
                                       is_forbidden_context as _core_forbidden)
 from paperpull_core.controls import escape_for_locator
+from paperpull_core.characters import whole_json
 
 SAFE_DOC_CONTROL_RE = re.compile(
     r"(download|save|print|pdf|statement|document|"
@@ -328,7 +329,7 @@ def collect_statements_json(page, years: Optional[List[str]] = None,
         try:
             if not STATEMENTS_API_RE.search(r.url or ""):
                 return
-            data = _json.loads(r.text())
+            data = whole_json(_json.loads(r.text()))
             if isinstance(data, dict) and isinstance(data.get("statements"), list):
                 batches.append(data)
         except Exception:

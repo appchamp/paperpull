@@ -40,6 +40,7 @@ from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.controls import click_next_page as _click_next_page
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core import receipt_pdf
+from paperpull_core.characters import whole_characters
 from storage import now_iso
 
 log = logging.getLogger("walmart_receipts.site")
@@ -1248,7 +1249,7 @@ def pdf_facts(path, purchase: Purchase, page_url: str = "", counted: int = 0) ->
         facts["kilobytes"] = Path(path).stat().st_size // 1024
         reader = PdfReader(str(path))
         facts["pages"] = len(reader.pages)
-        text = "\n".join((pg.extract_text() or "") for pg in reader.pages[:5])
+        text = whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:5]))
         low = text.lower()
         squashed = re.sub(r"\s+", "", low)
         number = re.sub(r"\D", "", purchase.order_number or "")

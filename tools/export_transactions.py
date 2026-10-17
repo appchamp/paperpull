@@ -56,6 +56,7 @@ _CORE = Path(__file__).resolve().parents[1] / "core"
 if (_CORE / "paperpull_core").is_dir() and str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
 try:
+    from paperpull_core.characters import whole_characters, whole_json  # noqa: E402
     from paperpull_core.sheets import csv_value, keep_text, read_stored_row, xlsx_value  # noqa: E402
 except ImportError as e:
     raise ImportError("export_transactions.py needs PaperPull's core folder beside its tools folder") from e
@@ -817,10 +818,10 @@ def pdf_lines(path: Path) -> List[str]:
     with pdfplumber.open(str(path)) as pdf:
         for page in pdf.pages:
             try:
-                lines.extend(page_lines(page.extract_text_lines(layout=False, strip=True,
-                                                                return_chars=True)))
+                lines.extend(whole_json(page_lines(page.extract_text_lines(
+                    layout=False, strip=True, return_chars=True))))
             except Exception:
-                text = page.extract_text() or ""
+                text = whole_characters(page.extract_text() or "")
                 lines.extend(text.splitlines())
     return [l for l in lines if l.strip()]
 
@@ -902,7 +903,9 @@ class Cache:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             if raw.get("version") == CACHE_VERSION:
-                self.data = raw.get("files", {})
+                # Each file's path is kept exactly as the disk gave it, and
+                # what was read from it is made whole, as pdf_lines reads it.
+                self.data = {k: whole_json(v) for k, v in raw.get("files", {}).items()}
         except Exception:
             self.data = {}
         self.dirty = False

@@ -25,6 +25,7 @@ from paperpull_core.controls import escape_for_locator
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.capture import is_document as _is_document
+from paperpull_core.characters import whole_json
 
 ALLOWED_HOSTS = {'www.usbank.com', 'onlinebanking.usbank.com'}
 
@@ -1289,7 +1290,7 @@ def probe_statements_api(page) -> dict:
                 return
             if "json" not in (r.headers.get("content-type", "") or "").lower():
                 return
-            raw.extend(_doc_records(r.json()))
+            raw.extend(_doc_records(whole_json(r.json())))
         except Exception:
             pass
 
@@ -1359,7 +1360,7 @@ def probe_api(page, seconds: int = 25) -> List[dict]:
             low = body.lower()
             if not any(k in low for k in ("statement", "document", "pdf", "taxform")):
                 return
-            data = json.loads(body)
+            data = whole_json(json.loads(body))
             keys = list(data.keys())[:20] if isinstance(data, dict) else ["<list>"]
             hits.append({"url": r.url.split("?")[0], "status": r.status,
                          "top_keys": keys, "sample": _redact(body[:600])})

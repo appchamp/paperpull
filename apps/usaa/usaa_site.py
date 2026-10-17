@@ -38,6 +38,7 @@ from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.controls import click_next_page as _click_next_page
 from paperpull_core.identity import on_its_own as _on_its_own
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("usaa_docs.site")
 
@@ -492,7 +493,7 @@ def collect_documents_via_api(page) -> Optional[List[dict]]:
                 return
             if "json" not in (r.headers.get("content-type", "") or "").lower():
                 return
-            data = json.loads(r.text())
+            data = whole_json(json.loads(r.text()))
             if isinstance(data, dict) and isinstance(data.get("documents"), list):
                 batches.append(data["documents"])
         except Exception:

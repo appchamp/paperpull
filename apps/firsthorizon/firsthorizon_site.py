@@ -113,6 +113,7 @@ from paperpull_core.capture import snapshot as _snapshot
 from paperpull_core.capture import take_download as _take_download
 from paperpull_core.capture import clear_copies as _clear_copies
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("firsthorizon_docs.site")
 
@@ -737,7 +738,7 @@ def session_alive(page, run: Run) -> bool:
     if resp.status != 200:
         raise ListStopped("the session probe was answered %d" % resp.status)
     try:
-        got = json.loads(body.decode("utf-8"))
+        got = whole_json(json.loads(body.decode("utf-8")))
     except (ValueError, UnicodeDecodeError):
         raise SessionExpired("the session probe was not JSON")
     ok = isinstance(got, dict) and isinstance(got.get("profiles"), list)
@@ -845,7 +846,7 @@ def read_links(response) -> Tuple[str, List[Statement]]:
     if int(response.status) != 200:
         raise ListStopped("a documents answer was not 200")
     try:
-        got = json.loads(body.decode("utf-8"))
+        got = whole_json(json.loads(body.decode("utf-8")))
     except (ValueError, UnicodeDecodeError):
         raise SessionExpired("the documents answer was not JSON")
     return account_id, statements_of(got, account_id)

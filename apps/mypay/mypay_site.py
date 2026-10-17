@@ -41,6 +41,7 @@ from typing import List, Optional, Tuple
 
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("mypay_docs.site")
 
@@ -389,7 +390,7 @@ def _documents_from(payload) -> List[dict]:
     jr = body.get("JsonResult")
     if isinstance(jr, str):
         try:
-            jr = _json.loads(jr)
+            jr = whole_json(_json.loads(jr))
         except Exception:
             return []
     if isinstance(jr, list):
