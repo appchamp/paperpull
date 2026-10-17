@@ -217,6 +217,22 @@ def test_the_range_menu_and_details_are_allowed():
         assert site.is_safe_control(name), name
 
 
+def test_the_range_menu_is_pressed_only_when_it_reads_as_one():
+    for label in ("Past 3 Years", "past  3 years", " 2025 ", "2019"):
+        assert site.is_year_menu(label), label
+    for label in ("", "Past 6 Months", "Past 3 Years Pay Your Bill", "Buy Again", "Filter",
+                  "View order details", "2025 Start a Return", "Past 3 Years | Sign out"):
+        assert not site.is_year_menu(label), label
+
+
+def test_a_year_in_the_menu_is_pressed_only_when_it_is_the_year_wanted():
+    assert site.is_year_option("2025", "2025")
+    assert site.is_year_option(" 2025\n", "2025")
+    for label, year in (("2025", ""), ("2024", "2025"), ("Past 3 Years", "Past 3 Years"),
+                        ("2025 Buy Again", "2025 Buy Again"), ("", "")):
+        assert not site.is_year_option(label, year), (label, year)
+
+
 def test_only_best_buy_and_its_subdomains_are_allowed():
     assert site.is_safe_url("https://www.bestbuy.com/purchasehistory/purchases")
     assert not site.is_safe_url("http://www.bestbuy.com/purchasehistory/purchases")

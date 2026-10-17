@@ -36,8 +36,12 @@ How Best Buy works, mapped against a signed-in account on 2026-09-25:
 
 SAFETY (this is a shopping account with a card on file):
   This module is strictly READ-ONLY. Nothing is clicked but the range menu
-  and a year in it. FORBIDDEN_CONTROL_RE refuses Buy Again, returns,
-  cancellations, reviews, credit card and payment controls.
+  and a year in it, and each only when its whole words read as that control
+  ("Past 3 Years" or a year for the menu, the year wanted in it), through
+  is_year_menu and is_year_option. Those hold every word to is_safe_control
+  as well, and every label the control carries to FORBIDDEN_CONTROL_RE,
+  which refuses Buy Again, returns, cancellations, reviews, credit card and
+  payment controls.
 
 Site layer verified working against the live site: 2026-09-25
 """
@@ -177,6 +181,57 @@ def is_safe_control(name: str) -> bool:
     return bool(SAFE_DOC_CONTROL_RE.search(name))
 
 
+# The two controls a run presses, each held to the whole words it shows.
+# The range menu reads the range it shows, "Past 3 Years" as the history
+# opens, or a year once one is chosen. A year in the open menu reads that
+# year and nothing else.
+YEAR_MENU_RE = re.compile(r"past \d+ years|20\d\d", re.I)
+YEAR_OPTION_RE = re.compile(r"20\d\d")
+
+
+def _tidy(label) -> str:
+    return re.sub(r"\s+", " ", str(label or "")).strip()
+
+
+def is_year_menu(label) -> bool:
+    """The purchase history's range menu, by the whole range it shows."""
+    label = _tidy(label)
+    return is_safe_control(label) and bool(YEAR_MENU_RE.fullmatch(label))
+
+
+def is_year_option(label, year: str = "") -> bool:
+    """`year` in the open range menu, that year exactly. Refused with no
+    year given."""
+    label = _tidy(label)
+    return (bool(year) and label == year and is_safe_control(label)
+            and bool(YEAR_OPTION_RE.fullmatch(label)))
+
+
+PRESS_GUARDS = (is_year_menu, is_year_option)
+
+
+class Refused(Exception):
+    """A control did not read as the one the press was for, so nothing was
+    pressed."""
+
+
+def _press(locator, what: str, guard, *args) -> None:
+    """Press the element `locator` finds, once, only when the words it shows
+    pass `guard` and no label it carries, its aria-label or title, is one
+    the blocklist refuses. The words are read from the element that is then
+    pressed. Refused, with nothing pressed, otherwise."""
+    from paperpull_core.controls import control_labels
+    if guard not in PRESS_GUARDS:
+        raise Refused("a press was asked for with no guard of this app's own")
+    el = locator.element_handle(timeout=10000)
+    if el is None:
+        raise Refused("%s is not on the page" % what)
+    shows = _tidy(el.inner_text())
+    if not guard(shows, *args) or any(FORBIDDEN_CONTROL_RE.search(l) for l in control_labels(el)):
+        raise Refused("%s reads %r, so it was not pressed" % (what, shows[:40]))
+    el.click()
+
+
 def hide_survey(page) -> None:
     """The feedback survey takes the page's clicks when it appears. It is
     hidden in the local page and never answered."""
@@ -245,10 +300,11 @@ def challenge_after_a_moment(page, wait_ms: Optional[int] = None) -> Optional[st
 
 def year_choices(page) -> List[str]:
     """The years the range menu offers, newest first. Opening the menu is
-    the only thing done, and it is closed again."""
+    the only thing done, and it is closed again. None are read when the
+    menu does not read as one (is_year_menu), and nothing is pressed."""
     hide_survey(page)
     try:
-        page.locator(YEAR_MENU).first.click()
+        _press(page.locator(YEAR_MENU).first, "the range menu", is_year_menu)
         page.wait_for_timeout(1000)
         texts = page.evaluate(
             "() => [...document.querySelectorAll('body *')]"
@@ -281,12 +337,17 @@ def _snapshot(page):
 def pick_year(page, year: str, reads: int = 3, gap_ms: int = 1200, limit: int = 25) -> bool:
     """Choose one year in the range menu and wait for the list to hold still
     for `reads` looks in a row. A list read mid-redraw once mixed a purchase
-    from the year before into it."""
+    from the year before into it.
+
+    The menu and the year are each pressed only when they read as the menu
+    (is_year_menu) and as `year` (is_year_option). False, with the rest left
+    unpressed, when one does not."""
     hide_survey(page)
     try:
-        page.locator(YEAR_MENU).first.click()
+        _press(page.locator(YEAR_MENU).first, "the range menu", is_year_menu)
         page.wait_for_timeout(1000)
-        page.get_by_text(year, exact=True).last.click()
+        _press(page.get_by_text(year, exact=True).last, "the year %s in the range menu" % year,
+               is_year_option, year)
     except Exception as e:
         log.warning("Could not choose %s: %s", year, e)
         return False
