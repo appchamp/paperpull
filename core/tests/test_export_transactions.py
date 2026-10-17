@@ -1228,16 +1228,22 @@ def test_a_statement_whose_font_gives_half_a_character_makes_both_spreadsheets(t
     """pdfplumber gives half of a surrogate pair for a font whose ToUnicode
     map names a character by number (measured 2026-10-16, pdfplumber
     0.11.10), and the CSV export stopped at it with UnicodeEncodeError. The
-    PDF here is read by pdfplumber itself. Both spreadsheets, from the PDF
-    and then from the cache, show a half as U+FFFD, as a browser shows it,
-    and two halves side by side as the character they make."""
-    pytest.importorskip("pdfplumber")
+    PDF here is read by pdfplumber itself. pdf_lines makes the text whole as
+    it reads it (paperpull_core.characters), so both spreadsheets, from the
+    PDF and then from the cache, show a half as U+FFFD, as a browser shows
+    it, and two halves side by side as the character they make, and the
+    cache holds U+FFFD too."""
+    pdfplumber = pytest.importorskip("pdfplumber")
     pytest.importorskip("openpyxl")
     index = _bank_folder(tmp_path, "Jane", "Checking")
     pdf = index.parent / "June Statement.pdf"
     pdf.write_bytes(_statement_pdf(HALF_LINES))
+    with pdfplumber.open(str(pdf)) as opened:
+        given = opened.pages[0].extract_text() or ""
+    assert "SHOP " + HIGH + "NAME" in given, ascii(given)
     read = xt.pdf_lines(pdf)
-    assert "06/02 SHOP " + HIGH + "NAME $1.00 0 $999.00" in read, [ascii(line) for line in read]
+    assert "06/02 SHOP " + MARK + "NAME $1.00 0 $999.00" in read, [ascii(line) for line in read]
+    assert not any(HIGH in line or LOW in line for line in read), [ascii(line) for line in read]
     want = {999.0: "SHOP " + MARK + "NAME", 998.0: chr(0x1F600) + " CAFE",
             997.0: MARK + "=1+1", 996.0: "=1+1" + MARK}
     for as_csv in (True, False):
@@ -1248,7 +1254,12 @@ def test_a_statement_whose_font_gives_half_a_character_makes_both_spreadsheets(t
                 (4, 1, int(way == "from the PDF")), way
             quoted = {**want, 996.0: "'=1+1" + MARK} if as_csv else want
             assert _descriptions(r) == quoted, way
-        assert chr(92) + "ud83d" in (tmp_path / xt.CACHE_NAME).read_text(encoding="utf-8")
+        # The emoji the two halves make is written as two escapes, which
+        # read back as the one character, so the cache is read to tell.
+        cached = json.dumps(json.loads((tmp_path / xt.CACHE_NAME).read_text(encoding="utf-8")),
+                            ensure_ascii=False)
+        assert MARK in cached and chr(0x1F600) in cached
+        assert not any(c in HALVES for c in cached)
     import openpyxl
     txns = openpyxl.load_workbook(r["path"])["Transactions"]
     prefixed = {b.value: d.quotePrefix for b, d in zip(_column(txns, "Balance"),

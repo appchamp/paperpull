@@ -45,6 +45,7 @@ bank's page is still a record of what somebody was doing.
 """
 from __future__ import annotations
 
+from .characters import whole_json
 from .failure import _count, _enum
 from .words import Fixed, shape
 
@@ -231,7 +232,7 @@ class Requests:
             else:
                 # A round trip to the browser, which is why it is capped.
                 try:
-                    entry["shape"] = shape_of(response.json())
+                    entry["shape"] = shape_of(whole_json(response.json()))
                     self.counts["bodies_read"] += 1
                 except Exception:
                     self.counts["unreadable"] += 1

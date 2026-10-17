@@ -94,6 +94,7 @@ from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.controls import click_next_page as _click_next_page
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("discovercard_docs.site")
 
@@ -1089,7 +1090,7 @@ def probe_api(page, seconds: int = 25) -> List[dict]:
             low = body.lower()
             if not any(k in low for k in ("statement", "document", "pdf", "taxform")):
                 return
-            data = json.loads(body)
+            data = whole_json(json.loads(body))
             keys = list(data.keys())[:20] if isinstance(data, dict) else ["<list>"]
             hits.append({"url": r.url.split("?")[0], "status": r.status,
                          "top_keys": keys, "sample": body[:600]})

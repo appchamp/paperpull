@@ -69,6 +69,7 @@ from paperpull_core.redact import redact, set_private_words  # noqa: F401
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.api_census import shape_of as _shape
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("ups_docs.site")
 
@@ -344,7 +345,7 @@ def capture_list(page, wait_ms: int = 25000) -> Tuple[Optional[list], dict]:
         if "rows" in got or not _is_all_invoices(r.request):
             return
         try:
-            body = r.json()
+            body = whole_json(r.json())
         except Exception:
             body = None
         try:

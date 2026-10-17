@@ -141,6 +141,7 @@ from paperpull_core.capture import snapshot as _snapshot
 from paperpull_core.capture import take_download as _take_download
 from paperpull_core.capture import clear_copies as _clear_copies
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_characters, whole_json
 
 log = logging.getLogger("coinbase_docs.site")
 
@@ -761,7 +762,7 @@ def _get_json(page, url: str):
         log.warning("%s answered %s", redact(url.split("?")[0]), resp.status)
         return None
     try:
-        return resp.json()
+        return whole_json(resp.json())
     except Exception:
         return None
 
@@ -1455,7 +1456,7 @@ def _listen(page) -> Tuple[list, object]:
             # name and variables in the address) and again as a POST with
             # the full query when the server does not know the hash. Live,
             # a repeat visit is answered by the GET alone, so both are heard.
-            sent = res.request.post_data_json if method == "POST" else _sent_in_address(res.url)
+            sent = whole_json(res.request.post_data_json) if method == "POST" else _sent_in_address(res.url)
             if isinstance(sent, dict):
                 entry["op"] = str(sent.get("operationName") or "")
                 variables = sent.get("variables")
@@ -1464,7 +1465,7 @@ def _listen(page) -> Tuple[list, object]:
         except Exception:
             pass
         try:
-            entry["body"] = res.json()
+            entry["body"] = whole_json(res.json())
         except Exception:
             entry["body"] = None
         if method == "GET" and entry["status"] == 200 and _is_hash_miss(entry["body"]):
@@ -1504,7 +1505,7 @@ def _sent_in_address(url) -> Optional[dict]:
     sent: dict = {"operationName": query.get("operationName") or ""}
     if "variables" in query:
         try:
-            variables = json.loads(query["variables"], object_pairs_hook=_no_duplicate_keys)
+            variables = whole_json(json.loads(query["variables"], object_pairs_hook=_no_duplicate_keys))
         except ValueError:
             return None
         sent["variables"] = variables if isinstance(variables, dict) else {}
@@ -1801,7 +1802,7 @@ def _card_pdf_ok(body: bytes, iso: str) -> str:
         import io
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(body))
-        text = "\n".join((pg.extract_text() or "") for pg in reader.pages)
+        text = whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages))
     except Exception:
         text = ""
     flat = re.sub(r"\s+", " ", text)
@@ -2177,7 +2178,7 @@ def survey(page, dwell_ms: int = 4000, max_follow: int = 0) -> dict:
                 pass
             if "json" in ct:
                 try:
-                    entry["shape"] = _shape(res.json())
+                    entry["shape"] = _shape(whole_json(res.json()))
                 except Exception:
                     entry["shape"] = "unreadable"
             seen.append(entry)

@@ -130,7 +130,7 @@ if (_CORE / "paperpull_core").is_dir():
     sys.path.insert(0, str(_CORE))
 from paperpull_core.keys import account_component  # noqa: E402
 from paperpull_core.not_shown import DAYS_KEY, asked_again, set_aside  # noqa: E402
-from paperpull_core.storage import sanitize_component  # noqa: E402
+from paperpull_core.storage import json_text, sanitize_component  # noqa: E402
 
 # The file this writes. Version 1 had one entry per folder and no people or
 # settings, and still imports.
@@ -622,8 +622,8 @@ def build(root: Path, minimal: bool = False, keep=None):
             if not minimal:
                 entry["settings"] = place["settings"]
             manifest["apps"].append(entry)
-            z.writestr(member, json.dumps(recs, indent=2, ensure_ascii=False))
-        z.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+            z.writestr(member, json_text(recs))
+        z.writestr("manifest.json", json_text(manifest))
         z.writestr("README.txt", _READ_ME)
     return buf.getvalue(), manifest
 
@@ -994,7 +994,7 @@ def write_history(where: Path, records: dict, stamp: str, write=None) -> None:
     through a link left in the shared folder)."""
     path = Path(where) / "progress.json"
     Path(where).mkdir(parents=True, exist_ok=True)
-    text = json.dumps(records, indent=2, ensure_ascii=False)
+    text = json_text(records)
     if path.is_file():
         backups = Path(where) / "Backups"
         backups.mkdir(parents=True, exist_ok=True)

@@ -57,6 +57,7 @@ from paperpull_core.redact import redact, set_private_words  # noqa: F401
 from paperpull_core.models import IN_STORE, ONLINE, Item, Purchase
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 from storage import now_iso
 
 log = logging.getLogger("bestbuy_receipts.site")
@@ -313,7 +314,7 @@ def capture_history_query(page, year: str) -> Optional[dict]:
         if urlsplit(req.url).path != "/gateway/graphql":
             return
         try:
-            body = json.loads(req.post_data or "{}")
+            body = whole_json(json.loads(req.post_data or "{}"))
         except ValueError:
             return
         if isinstance(body, dict) and body.get("operationName") == "consolidatedQuery" \
@@ -365,7 +366,7 @@ def fetch_year(page, query: dict, year: int, max_pages: int = 30) -> dict:
     order_offset = purchase_offset = 0
     status, complete, pages, stop, code = "", False, 0, "", 0
     for _ in range(max_pages):
-        body = json.loads(json.dumps(query["body"]))
+        body = whole_json(json.loads(json.dumps(query["body"])))
         body["variables"].update(year=int(year), orderLimit=PAGE_SIZE, purchaseLimit=PAGE_SIZE,
                                  orderOffset=order_offset, purchaseOffset=purchase_offset)
         # The page can reload under a request, which destroys the context it

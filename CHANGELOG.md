@@ -22,11 +22,23 @@ All notable changes to PaperPull are recorded here. Versioning follows
   two formats agree. Excel reads what follows the mark as text, so =1+1
   there stays text, on opening and after an edit. The apps' own order
   history, receipt index and document index take the same mark when they
-  are written, though an app run that meets such a half in a provider's
-  data still stops at its progress file, which is a fix still to come.
-  Measured on real archives, 179,703 values, 2,644 file names and 2,368
-  statement descriptions, none held such a half or the mark, so nothing
-  already written changes.
+  are written. Measured on real archives, 179,703 values, 2,644 file
+  names and 2,368 statement descriptions, none held such a half or the
+  mark, so nothing already written changes.
+- **An app run no longer stops at half of an emoji in a provider's data.**
+  A provider's list or a document's own text can carry half of an emoji,
+  where the provider cut a name short, and the run stopped at the first
+  line it printed with that name, before anything was written down. The
+  progress file could not hold the half either, and a Mac refuses a file
+  name holding one. Every app now reads that text with each half as the
+  replacement character, the way the browser shows it, so the progress
+  file, the order history and index, the file name and what the run
+  prints all say the same. An order number or a file name holding one is
+  found again by the next run, by the check whether a receipt is already
+  written down and by Rename. A half that reaches the progress file some
+  other way takes the replacement character there too, and the file is
+  always written. No real archive held such a half, so nothing already
+  written changes.
 
 ## [0.54.0] - 2026-10-16
 

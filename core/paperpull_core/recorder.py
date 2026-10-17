@@ -76,6 +76,7 @@ from typing import Callable, Optional
 
 from .api_census import kind_of as _kind_of
 from .browser import can_ask
+from .characters import whole_json
 from .failure import SAFE_TAGS as _SAFE_TAGS
 from .failure import _count
 from .words import (Fixed, shape, shape_name, shape_query, shape_tree,
@@ -1064,7 +1065,7 @@ class Recorder:
                 body = response.request.post_data or ""
                 if body.lstrip().startswith("{"):
                     import json as _json
-                    parsed = _json.loads(body)
+                    parsed = whole_json(_json.loads(body))
                     if isinstance(parsed, dict):
                         entry["post_keys"] = sorted(
                             shape(str(k), self.words)[:40] for k in parsed)[:30]
@@ -1080,7 +1081,7 @@ class Recorder:
                     entry["shape"] = "not read, too large"
                 else:
                     try:
-                        entry["shape"] = self._json_shape(response.json())
+                        entry["shape"] = self._json_shape(whole_json(response.json()))
                     except Exception:
                         entry["shape"] = "unreadable"
             self.requests.append(entry)

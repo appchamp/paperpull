@@ -79,6 +79,7 @@ from paperpull_core.dates import last_day as _last_day
 from paperpull_core.capture import fetch_as_b64 as _fetch_as_b64
 from paperpull_core.capture import is_document as _is_document
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("chase_docs.site")
 
@@ -1006,7 +1007,7 @@ def probe_statements_api(page) -> dict:
         try:
             if not DOCREF_API_RE.search(r.url):
                 return
-            refs = (r.json() or {}).get("idaldocRefs")
+            refs = (whole_json(r.json()) or {}).get("idaldocRefs")
             if isinstance(refs, list):
                 raw.extend(x for x in refs if isinstance(x, dict))
         except Exception:
@@ -1069,7 +1070,7 @@ def probe_api(page, seconds: int = 25) -> List[dict]:
             low = body.lower()
             if not any(k in low for k in ("statement", "document", "pdf", "taxform")):
                 return
-            data = json.loads(body)
+            data = whole_json(json.loads(body))
             keys = list(data.keys())[:20] if isinstance(data, dict) else ["<list>"]
             hits.append({"url": r.url.split("?")[0], "status": r.status,
                          "top_keys": keys, "sample": body[:600]})

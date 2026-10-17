@@ -46,6 +46,7 @@ from paperpull_core.models import State
 from paperpull_core.keys import account_component as _account_component
 from paperpull_core.keys import migrate_account_keys as _migrate_account_keys
 from paperpull_core.words import shape, shape_tree, words_for, write_shaped
+from paperpull_core.characters import whole_characters
 from storage import (CsvFile, DOCUMENT_INDEX_COLUMNS, JsonStore, Paths,
                      atomic_write_text, build_pdf_filename, load_config,
                      now_iso, sanitize_component, unique_path)
@@ -622,7 +623,7 @@ class App:
             reader = PdfReader(str(pdf_path))
             text = ""
             for pg in reader.pages[:2]:
-                text += pg.extract_text() or ""
+                text += whole_characters(pg.extract_text() or "")
         except Exception as e:
             return False, f"could not read the PDF back: {e}"
         if want in text:

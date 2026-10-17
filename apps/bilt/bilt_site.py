@@ -147,6 +147,7 @@ from paperpull_core.identity import REFUSED, VERIFIED, Identity, distinguish, ve
 # re-exported: the docs module calls it as site.set_download_dir
 from paperpull_core.capture import set_download_dir  # noqa: F401
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_characters, whole_json
 
 log = logging.getLogger("bilt_docs.site")
 
@@ -782,7 +783,7 @@ def _json_of(response, what: str):
     if _status(response) != 200:
         raise ListStopped("the %s answer was not 200" % what)
     try:
-        return json.loads(body.decode("utf-8"))
+        return whole_json(json.loads(body.decode("utf-8")))
     except (ValueError, UnicodeDecodeError):
         raise ListStopped("the %s answer was not JSON" % what)
 
@@ -1594,7 +1595,7 @@ def pdf_text(data: bytes, pages: int = 5) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
-        return "\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)])
+        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)]))
     except Exception:
         return ""
 

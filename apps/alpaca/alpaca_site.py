@@ -113,6 +113,7 @@ from paperpull_core.capture import snapshot as _snapshot
 from paperpull_core.capture import take_download as _take_download
 from paperpull_core.capture import clear_copies as _clear_copies
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("alpaca_docs.site")
 
@@ -983,7 +984,7 @@ def read_list(response) -> Listed:
     if status != 200:
         raise ListStopped("the documents list answered with status %s" % status)
     try:
-        data = response.json()
+        data = whole_json(response.json())
     except Exception:
         raise SessionExpired("the documents list did not answer with JSON")
     if not isinstance(data, list):
@@ -1454,7 +1455,7 @@ def _link_of(answered: list, document_id: str) -> str:
         raise _stop("Alpaca did not hand over the document's link, so nothing was taken.",
                     "the link was not handed over")
     try:
-        data = resp.json()
+        data = whole_json(resp.json())
     except Exception:
         raise SessionExpired("the document link did not answer with JSON")
     if not isinstance(data, dict):

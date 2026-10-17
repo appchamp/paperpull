@@ -99,6 +99,7 @@ from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.dates import full_year as _full_year
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("irs_docs.site")
 
@@ -631,7 +632,7 @@ def _read_transcript_list(page) -> list:
         _let_go(resp)
         raise ListStopped("the transcript list did not answer as a list")
     try:
-        data = json.loads(resp.body().decode("utf-8"))
+        data = whole_json(json.loads(resp.body().decode("utf-8")))
     except (ValueError, UnicodeDecodeError):
         raise ListStopped("the transcript list did not answer as a list")
     if not isinstance(data, list):

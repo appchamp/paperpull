@@ -35,6 +35,7 @@ from typing import List, Optional, Tuple
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.controls import click_next_page as _click_next_page
+from paperpull_core.characters import whole_characters, whole_json
 
 log = logging.getLogger("robinhood_docs.site")
 
@@ -462,7 +463,7 @@ def collect_documents_via_api(page) -> List[dict]:
                 return
             if "json" not in (r.headers.get("content-type", "") or "").lower():
                 return
-            data = json.loads(r.text())
+            data = whole_json(json.loads(r.text()))
             # Robinhood list endpoints usually return {"results":[...]} or a
             # bare list. Accept either.
             items = None
@@ -1299,7 +1300,7 @@ def _click_and_capture(page, control, title: str, out_path, label: str = ""):
         return False
 
     try:
-        body = _json.loads(got["response"].text() or "{}")
+        body = whole_json(_json.loads(got["response"].text() or "{}"))
     except Exception as e:
         log.info("document response for %r was not JSON: %s", title, e)
         return False
@@ -1456,7 +1457,7 @@ def _first_page_text(path) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(str(path))
-        return (reader.pages[0].extract_text() or "") if reader.pages else ""
+        return whole_characters(reader.pages[0].extract_text() or "") if reader.pages else ""
     except Exception:
         return ""
 

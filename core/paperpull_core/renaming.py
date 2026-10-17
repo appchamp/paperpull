@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
 from . import shared_folder
+from .characters import whole_json
 from .models import State
 from .storage import (FileName, build_pdf_filename, filing_folder, fitted_name,
                       free_to_write, remove_empty, sanitize_component, title_case,
@@ -2150,7 +2151,7 @@ def _panel_answers(raw: str) -> dict:
     number). A blank one keeps its name, so it is left out. A file that
     cannot be read stops the review before anything is renamed."""
     try:
-        data = json.loads(Path(raw).read_text(encoding="utf-8"))
+        data = whole_json(json.loads(Path(raw).read_text(encoding="utf-8")))
     except (OSError, ValueError) as e:
         print("The new names from the control panel could not be read (%s), so nothing "
               "was renamed." % type(e).__name__)

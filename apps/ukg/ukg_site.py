@@ -63,6 +63,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from paperpull_core import redirects
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("ukg_docs.site")
 
@@ -262,7 +263,7 @@ def _get_json(page, path):
     if not resp.ok:
         log.warning("API %s returned %s", path, resp.status)
         return None
-    return resp.json()
+    return whole_json(resp.json())
 
 
 def goto_documents(page) -> bool:

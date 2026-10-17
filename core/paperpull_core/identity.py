@@ -51,6 +51,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
+from .characters import whole_characters
+
 # The outcomes. There are four because collapsing any two of them loses
 # the difference between a wrong document and an unreadable one, and
 # those want opposite responses.
@@ -548,8 +550,8 @@ def _text_of(path, pages: int) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(str(Path(path)))
-        return "\n".join((pg.extract_text() or "")
-                         for pg in reader.pages[:max(1, pages)])
+        return whole_characters("\n".join((pg.extract_text() or "")
+                                                for pg in reader.pages[:max(1, pages)]))
     except Exception:
         return ""
 

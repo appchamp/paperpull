@@ -85,6 +85,7 @@ from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.api_census import shape_of as _shape
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("paypal_docs.site")
 
@@ -1010,7 +1011,7 @@ class _ListAnswers:
             kind = ((response.headers or {}).get("content-type") or "").lower()
             if response.status == 200 and "json" in kind:
                 try:
-                    body = response.json()
+                    body = whole_json(response.json())
                 except Exception:
                     body = None
             self.got.append((response.status, body))

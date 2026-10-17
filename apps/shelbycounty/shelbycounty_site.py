@@ -77,6 +77,7 @@ from paperpull_core.dates import full_year as _full_year
 # re-exported: the docs module calls it as site.set_download_dir
 from paperpull_core.capture import set_download_dir  # noqa: F401
 from paperpull_core.words import words_for as _words_for
+from paperpull_core.characters import whole_characters
 
 log = logging.getLogger("shelbycounty_docs.site")
 
@@ -817,7 +818,7 @@ def pdf_text(data: bytes) -> str:
     try:
         from io import BytesIO
         from pypdf import PdfReader
-        text = "\n".join((p.extract_text() or "") for p in PdfReader(BytesIO(data)).pages)
+        text = whole_characters("\n".join((p.extract_text() or "") for p in PdfReader(BytesIO(data)).pages))
     except Exception as e:
         log.info("the PDF's text could not be read with pypdf (%s)", type(e).__name__)
     return text + "\n" + data.decode("latin-1", "replace")

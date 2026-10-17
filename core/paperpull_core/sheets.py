@@ -158,8 +158,9 @@ this on 2026-10-16, the real installs held no half and no U+FFFD among
 179,703 values in 52 order histories and indexes found outside Backups
 folders, 2,644 PDF names and 2,368 cached descriptions.
 
-An app run is not yet past a half. Its record in progress.json is written
-as JSON in UTF-8 before its CSV row, and that write stops at a half too.
+An app run gets past a half as well. Every app makes a provider's text
+whole where it reads it, and progress.json, file names and every check
+that compares them with these files keep it the same way (characters.py).
 
 THE APPS' OWN CSV FILES
 

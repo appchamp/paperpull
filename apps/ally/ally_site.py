@@ -89,6 +89,7 @@ from paperpull_core.capture import fetch_as_b64 as _fetch_as_b64
 from paperpull_core.capture import is_document as _is_document
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.identity import on_its_own_pattern as _on_its_own_pattern
+from paperpull_core.characters import whole_characters, whole_json
 
 log = logging.getLogger("ally_docs.site")
 
@@ -959,7 +960,7 @@ def ally_collect_via_api(page, labels: Optional[dict] = None) -> Optional[List[d
                 return
             if "json" not in (r.headers.get("content-type", "") or "").lower():
                 return
-            data = json.loads(r.text())
+            data = whole_json(json.loads(r.text()))
             items = data.get("statements") if isinstance(data, dict) else None
             if isinstance(items, list):
                 heard.append(r.url)
@@ -1465,7 +1466,7 @@ def probe_statements_api(page) -> dict:
                 return
             if "json" not in (r.headers.get("content-type", "") or "").lower():
                 return
-            data = json.loads(r.text())
+            data = whole_json(json.loads(r.text()))
             if isinstance(data, dict) and isinstance(data.get("statements"), list):
                 raw.extend(data["statements"])
         except Exception:
@@ -1535,7 +1536,7 @@ def probe_api(page, seconds: int = 25) -> List[dict]:
             low = body.lower()
             if not any(k in low for k in ("statement", "document", "pdf", "taxform")):
                 return
-            data = json.loads(body)
+            data = whole_json(json.loads(body))
             keys = list(data.keys())[:20] if isinstance(data, dict) else ["<list>"]
             hits.append({"url": r.url.split("?")[0], "status": r.status,
                          "top_keys": keys, "sample": body[:600]})
@@ -1634,9 +1635,9 @@ def read_statement_facts(pdf_path) -> StatementFacts:
         try:
             # layout mode keeps the table's columns apart; without it the
             # header and the first nickname run together
-            text = page.extract_text(extraction_mode="layout") or ""
+            text = whole_characters(page.extract_text(extraction_mode="layout") or "")
         except Exception:
-            text = page.extract_text() or ""
+            text = whole_characters(page.extract_text() or "")
     except Exception as e:
         log.info("could not read %s: %s", pdf_path, e)
         return StatementFacts([])
@@ -1822,7 +1823,7 @@ def ally_collect_tax_via_api(page) -> List[dict]:
             if STATEMENTS_API_RE.search(r.url) and "statements" in r.url.lower() \
                     and "tax" not in r.url.lower():
                 return                     # that is the statements list
-            key, items = _find_doc_list(json.loads(r.text()))
+            key, items = _find_doc_list(whole_json(json.loads(r.text())))
             if items:
                 captured.extend(items)
                 shape = f"{r.url.split('?')[0]} key={key} fields={','.join(sorted(items[0].keys()))}"

@@ -59,6 +59,7 @@ from paperpull_core.redact import redact, set_private_words  # noqa: F401
 from paperpull_core.models import IN_STORE, ONLINE, Item, Purchase
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 from storage import now_iso
 
 log = logging.getLogger("homedepot_receipts.site")
@@ -217,7 +218,7 @@ def goto_orders(page, wait_ms: Optional[int] = None) -> Optional[dict]:
     def on_request(req):
         if "request" not in seen and history_request_ok(req.url or "") and req.method == "POST":
             try:
-                body = json.loads(req.post_data or "{}")
+                body = whole_json(json.loads(req.post_data or "{}"))
             except ValueError:
                 body = {}
             if isinstance(body.get("orderHistoryRequest"), dict):

@@ -102,6 +102,7 @@ from paperpull_core.redact import private_words
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.api_census import shape_of as _shape
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core.characters import whole_json
 
 log = logging.getLogger("netbenefits_docs.site")
 
@@ -1099,7 +1100,7 @@ def survey(page, dwell_ms: int = 4000, max_follow: int = 6) -> dict:
             entry = {"url": redact(url)[:200], "status": res.status, "type": ct[:40]}
             if "json" in ct:
                 try:
-                    body = res.json()
+                    body = whole_json(res.json())
                     entry["shape"] = _shape(body)
                 except Exception:
                     entry["shape"] = "unreadable"
