@@ -54,13 +54,15 @@ COVER = ('<div class="cover" role="dialog" aria-label="Chat with us" onclick="sa
          'Chat with us</div>')
 
 
-def heading(year, open_=False, onclick=None, words=None, ident=True):
-    span = '<span class="%s"%s onclick="%s"></span>' % (
+def heading(year, open_=False, onclick=None, words=None, ident=True, aria=None):
+    """One year's heading, which reads the year alone, as M&T's own do."""
+    span = '<span class="%s"%s%s onclick="%s"></span>' % (
         "close-table" if open_ else "open-table",
         ' id="spViewStatementsElectronic-%s"' % year if ident else "",
+        ' aria-label="%s"' % aria if aria else "",
         onclick or "listYear(this, '%s')" % year)
     rows = STATEMENT % (year, year) if open_ else ""
-    said_words = "%s Statements" % year if words is None else words
+    said_words = str(year) if words is None else words
     return '<h2>%s %s</h2><table id="t%s"><tr><td>%s</td></tr></table>' % (
         said_words, span, year, rows)
 
@@ -208,14 +210,15 @@ DRAWS_ANEW = ("said('press-2025'); const l = document.getElementById('list');"
               " l.innerHTML = l.innerHTML; listYear(document.getElementById('x2024'), '2024')")
 
 
-@pytest.mark.parametrize("how", ["same element", "drawn anew", "no words or id"])
+@pytest.mark.parametrize("how", ["same element", "drawn anew", "no id"])
 def test_a_heading_pressed_once_is_never_pressed_again(show, how):
     """The heading of 2025 is still collapsed after its press, and the
     count of collapsed years fell all the same. It is not pressed again,
     whether it is the same element, a new one with its words and its id, or
-    the same element with no words and no id to know it by."""
-    if how == "no words or id":
-        first = heading(2025, onclick=OPENS_ANOTHER, words="", ident=False)
+    the same element with no id to know it by, so its words and id are no
+    key to it."""
+    if how == "no id":
+        first = heading(2025, onclick=OPENS_ANOTHER, ident=False)
     else:
         first = heading(2025, onclick=OPENS_ANOTHER if how == "same element" else DRAWS_ANEW)
     second = heading(2024).replace('id="spViewStatementsElectronic-2024"', 'id="x2024"')
@@ -230,12 +233,12 @@ def test_a_heading_pressed_once_is_never_pressed_again(show, how):
 
 @pytest.mark.parametrize("shared", ["id", "words"])
 def test_years_that_share_an_id_or_words_are_each_opened(show, shared):
-    """Two years can share a heading's id, or its words when the year is
-    written somewhere else. Each heading is still a heading of its own, and
-    every year is opened and read."""
+    """Two years can share a heading's id, or its words, should the page
+    ever write one year twice. Each heading is still a heading of its own,
+    and every year is opened and read."""
     years_ = [heading(2026, open_=True)]
     for year in (2025, 2024, 2023):
-        h = heading(year, words="Statements" if shared == "words" else None)
+        h = heading(year, words="2025" if shared == "words" else None)
         if shared == "id":
             h = h.replace("spViewStatementsElectronic-%s" % year, "spViewStatementsElectronic-7")
         years_.append(h)
@@ -246,12 +249,33 @@ def test_years_that_share_an_id_or_words_are_each_opened(show, shared):
     assert listed_years(rows) == ["2023", "2024", "2025", "2026"]
 
 
-def test_a_heading_whose_words_are_refused_is_not_pressed(show):
-    page = show(heading(2026, open_=True)
-                + heading(2025, words="Change paperless options for 2025"))
+@pytest.mark.parametrize("words", [
+    "Change paperless options for 2025", "Make a payment", "2025 Make a payment",
+    "2025 Statements", "Statements", ""])
+def test_a_heading_that_does_not_read_as_a_year_alone_is_not_pressed(show, words):
+    """Nor is any heading after it. The run reads the year on screen."""
+    page = show(heading(2026, open_=True) + heading(2025, words=words) + heading(2024))
+    frame = page.frame(name="statements")
+    rows = site.collect_statement_rows(page)
+    assert said(frame) == []
+    assert listed_years(rows) == ["2026"]
+
+
+def test_a_heading_carrying_a_refused_label_is_not_pressed(show):
+    """It reads 2025, and its own aria-label asks for a payment."""
+    page = show(heading(2026, open_=True) + heading(2025, aria="Pay my mortgage"))
     frame = page.frame(name="statements")
     site.collect_statement_rows(page)
     assert said(frame) == []
+
+
+def test_a_year_alone_is_a_year_heading():
+    for label in ("2025", " 2019 ", "2025\n"):
+        assert site.is_year_heading(label), label
+    for label in ("", "25", "20255", "2025 Statements", "Statements", "Pay 2025",
+                  "2025 | Make a payment", None):
+        assert not site.is_year_heading(label), label
+    assert site.PRESS_GUARDS == (site.is_year_heading,)
 
 
 def test_headings_in_the_page_itself_are_opened_too(show):

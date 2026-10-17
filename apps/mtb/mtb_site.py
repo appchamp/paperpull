@@ -25,9 +25,13 @@ SAFETY (this is a BANK, and a mortgage can move real money):
   and downloads PDFs M&T already generated. It must NEVER activate a control
   that pays the mortgage, sets up or edits autopay, moves money, transfers,
   sends a wire or Zelle, changes escrow, applies for anything, or changes a
-  setting. A control must clear FORBIDDEN_CONTROL_RE *and* match
-  SAFE_DOC_CONTROL_RE, and every URL requested must be on an M&T host. There
-  is deliberately no code here that submits a form or confirms a dialog.
+  setting. The one control it presses, a collapsed year's heading on the
+  statements list, must read the year alone and clear FORBIDDEN_CONTROL_RE
+  and the shared core blocklists (is_year_heading). Any other control would
+  have to clear FORBIDDEN_CONTROL_RE *and* match SAFE_DOC_CONTROL_RE
+  (is_safe_control), and none is pressed. Every URL requested must be on an
+  M&T host. There is deliberately no code here that submits a form or
+  confirms a dialog.
 
 Documents are genuine PDF downloads, captured via the Playwright download
 event -> download.save_as(), until diagnose shows otherwise.
@@ -42,6 +46,7 @@ from typing import List, Optional, Tuple
 
 from paperpull_core import pressing
 from paperpull_core import redirects
+from paperpull_core.controls import AUTH_CONTROL_RE, SETTINGS_CONTROL_RE, control_labels
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.words import words_for as _words_for
@@ -424,6 +429,26 @@ _ONE_OF_JS = r"""(s, pressed) => pressed.some((p) => p === s)"""
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
 
+# A collapsed year's heading reads the year and nothing else, "2025".
+YEAR_HEADING_RE = re.compile(r"(?:19|20)\d{2}")
+
+
+def _refused(label: str) -> bool:
+    return bool(FORBIDDEN_CONTROL_RE.search(label) or SETTINGS_CONTROL_RE.search(label)
+                or AUTH_CONTROL_RE.search(label))
+
+
+def is_year_heading(label) -> bool:
+    """The heading of one collapsed year on the statements list, by its
+    whole words, the year alone. is_safe_control would refuse a year, since
+    a year is no document word, so the one press has a guard of its own."""
+    label = re.sub(r"\s+", " ", str(label or "")).strip()
+    return bool(label) and not _refused(label) and bool(YEAR_HEADING_RE.fullmatch(label))
+
+
+PRESS_GUARDS = (is_year_heading,)
+
+
 def _words():
     """This app's own words for paperpull_core.words, from what its source
     calls it, for saying what covered a control."""
@@ -442,7 +467,10 @@ def _open_years(fr) -> None:
     and its id, is never pressed again, and the loop ends the moment the
     count of collapsed years stops falling. Words or an id alone do not tell
     a heading, since two years can share either one, and taking them for
-    one heading would leave a year unread."""
+    one heading would leave a year unread. A heading is pressed only when
+    its words are a year alone and no label it carries is refused
+    (is_year_heading), and the first that is not ends the opening with
+    nothing more pressed."""
     page = fr.page
     pressed = []
     known = set()
@@ -454,8 +482,10 @@ def _open_years(fr) -> None:
         if heading is None:
             break
         label = heading.evaluate(_HEADING_WORDS_JS) or ""
-        if FORBIDDEN_CONTROL_RE.search(label):
-            log.warning("refusing to expand a section labeled %r", label[:40])
+        if not is_year_heading(label) or any(_refused(own) for own in control_labels(heading)):
+            log.warning("refusing to expand a section labeled %r, since a year heading reads "
+                        "the year alone, so the run reads what is on screen. Expand the years "
+                        "yourself and re-run if statements look short.", label[:40])
             break
         key = (heading.get_attribute("id") or "", label)
         if (all(key) and key in known) or heading.evaluate(_ONE_OF_JS, pressed):
