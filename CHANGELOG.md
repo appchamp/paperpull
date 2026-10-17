@@ -9,6 +9,37 @@ All notable changes to PaperPull are recorded here. Versioning follows
 
 ## [Unreleased]
 
+### Fixed
+- **The transactions export no longer stops at half of an emoji.** A
+  statement's text can carry half of an emoji, from a font that names its
+  characters in an unusual way, and a CSV has no way to write half a
+  character, so the CSV export of transactions stopped at the first one.
+  Each half is now written as U+FFFD, the replacement character shown as
+  a question mark in a diamond, which is how a browser shows such a half
+  on a page and prints it into a PDF, and two halves side by side become
+  the emoji they make. Every spreadsheet PaperPull writes does the same,
+  the .xlsx exports among them, which left the half out in 0.54.0, so the
+  two formats agree. Excel reads what follows the mark as text, so =1+1
+  there stays text, on opening and after an edit. The apps' own order
+  history, receipt index and document index take the same mark when they
+  are written. Measured on real archives, 179,703 values, 2,644 file
+  names and 2,368 statement descriptions, none held such a half or the
+  mark, so nothing already written changes.
+- **An app run no longer stops at half of an emoji in a provider's data.**
+  A provider's list or a document's own text can carry half of an emoji,
+  where the provider cut a name short, and the run stopped at the first
+  line it printed with that name, before anything was written down. The
+  progress file could not hold the half either, and a Mac refuses a file
+  name holding one. Every app now reads that text with each half as the
+  replacement character, the way the browser shows it, so the progress
+  file, the order history and index, the file name and what the run
+  prints all say the same. An order number or a file name holding one is
+  found again by the next run, by the check whether a receipt is already
+  written down and by Rename. A half that reaches the progress file some
+  other way takes the replacement character there too, and the file is
+  always written. No real archive held such a half, so nothing already
+  written changes.
+
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed
   file Diagnose writes kept a word whenever it was on PaperPull's fixed
@@ -57,38 +88,6 @@ its container.
   lines to turn on, SERVER.md a Graphics section, and a sign-in, the
   self-test and every failure and Diagnose file say when the window has no
   graphics. Measured on a UGREEN NAS with Intel graphics.
-## [Unreleased]
-
-### Fixed
-- **The transactions export no longer stops at half of an emoji.** A
-  statement's text can carry half of an emoji, from a font that names its
-  characters in an unusual way, and a CSV has no way to write half a
-  character, so the CSV export of transactions stopped at the first one.
-  Each half is now written as U+FFFD, the replacement character shown as
-  a question mark in a diamond, which is how a browser shows such a half
-  on a page and prints it into a PDF, and two halves side by side become
-  the emoji they make. Every spreadsheet PaperPull writes does the same,
-  the .xlsx exports among them, which left the half out in 0.54.0, so the
-  two formats agree. Excel reads what follows the mark as text, so =1+1
-  there stays text, on opening and after an edit. The apps' own order
-  history, receipt index and document index take the same mark when they
-  are written. Measured on real archives, 179,703 values, 2,644 file
-  names and 2,368 statement descriptions, none held such a half or the
-  mark, so nothing already written changes.
-- **An app run no longer stops at half of an emoji in a provider's data.**
-  A provider's list or a document's own text can carry half of an emoji,
-  where the provider cut a name short, and the run stopped at the first
-  line it printed with that name, before anything was written down. The
-  progress file could not hold the half either, and a Mac refuses a file
-  name holding one. Every app now reads that text with each half as the
-  replacement character, the way the browser shows it, so the progress
-  file, the order history and index, the file name and what the run
-  prints all say the same. An order number or a file name holding one is
-  found again by the next run, by the check whether a receipt is already
-  written down and by Rename. A half that reaches the progress file some
-  other way takes the replacement character there too, and the file is
-  always written. No real archive held such a half, so nothing already
-  written changes.
 
 ## [0.54.0] - 2026-10-16
 
