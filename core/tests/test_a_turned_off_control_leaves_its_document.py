@@ -111,6 +111,9 @@ STOPS = {
     ("wellsfargo", "goto_documents", "click", "open the statements page"): (1,
         "the page's own Statements & Documents link reaches the page every document is "
         "taken from, so a turned off link there would leave every document"),
+    ("wellsfargo", "_open_menu", "click", "open the menu"): (1,
+        "the page's Menu button, opened only when no Statements & Documents link shows, "
+        "to show the one it holds, so a turned off menu would leave every document"),
     ("wellsfargo", "open_statements", "click", "open the statements section"): (1,
         "the heading of the section every statement is listed in, pressed only when it "
         "says it is closed, so a turned off heading would leave every statement"),
