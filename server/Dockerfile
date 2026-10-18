@@ -84,9 +84,11 @@ RUN pip install --no-cache-dir --require-hashes --only-binary :all: -r /tmp/requ
 
 # The user everything runs as. Its ids follow PUID and PGID at start, so the
 # files it writes into a shared folder belong to the person's own NAS user.
+# /browser stays root's, and a new volume takes its owner from here, since
+# pp only reads Chrome and chrome.sh, which runs as root, writes it.
 RUN useradd --create-home --uid 1000 pp \
  && mkdir -p /data /profiles /config /browser \
- && chown pp:pp /data /profiles /config /browser
+ && chown pp:pp /data /profiles /config
 
 COPY VERSION LICENSE LICENSE-MIT NOTICE.md TRADEMARK.md TERMS.md paperpull.py /opt/paperpull/
 COPY core /opt/paperpull/core

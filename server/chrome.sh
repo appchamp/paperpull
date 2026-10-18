@@ -41,11 +41,6 @@ SETUID_SANDBOX=0
 if given_sys_admin; then
   if kernel_has_seccomp; then
     SETUID_SANDBOX=1
-    say "The container has SYS_ADMIN, so Chrome's setuid sandbox helper is set up, for a kernel without user namespaces."
-    if awk '$2 == "/browser" {print $4}' /proc/mounts | grep -qw nosuid; then
-      say "But /browser is mounted nosuid, so the kernel ignores the helper's setuid bit, and where"
-      say "the kernel has no user namespaces Chrome will refuse to start. Mount it without nosuid."
-    fi
   else
     say "The container has SYS_ADMIN, but this kernel has no seccomp, so Chrome's setuid sandbox helper"
     say "is not set up, since Chrome would have only half its sandbox. See \"On Synology\" in SERVER.md."
@@ -80,23 +75,94 @@ readable() {
 # needs CAP_SYS_ADMIN to make the sandbox's namespaces. So in a container
 # given SYS_ADMIN with cap_add, on a kernel with seccomp, see "On Synology"
 # in SERVER.md, the helper of the Chrome in use ($1) is made setuid root,
-# and every other copy
-# loses the bit, so taking SYS_ADMIN away again, or an older Chrome kept
-# beside the new one, leaves none behind. The sandbox is on either way, this
-# is never --no-sandbox. Runs after the recursive chmod above, the owner is
-# set before the mode since a change of owner drops the bit, and a link is
-# never followed.
+# once every copy has lost the bit, so taking SYS_ADMIN away again, or an
+# older Chrome kept beside the new one, leaves none behind. The sandbox is
+# on either way, this is never --no-sandbox. Runs after the recursive chmod
+# above, and a link to a helper is never followed.
+#
+# The bit goes only on a helper root alone could have put there, see
+# may_be_setuid, and a file is never given to root to make it so. Code
+# running as pp that could plant a file, or change one, which then became
+# setuid root, would be root itself, holding SYS_ADMIN besides.
 sandbox_helpers() {
   for entry in "$BROWSER"/*; do
     [ -L "$entry" ] && continue
     helper="$entry/opt/google/chrome/chrome-sandbox"
     { [ -f "$helper" ] && [ ! -L "$helper" ]; } || continue
-    if [ "$SETUID_SANDBOX" = 1 ] && [ "$entry" = "$BROWSER/$1" ]; then
-      chown 0:0 "$helper" && chmod 4755 "$helper" || say "Chrome's setuid sandbox helper could not be set up."
-    else
-      chmod 0755 "$helper" 2>/dev/null || true
-    fi
+    chmod u-s,g-s "$helper" 2>/dev/null || true
   done
+  [ "$SETUID_SANDBOX" = 1 ] || return 0
+  if ! why=$(may_be_setuid "$1"); then
+    say "The container has SYS_ADMIN, but Chrome's setuid sandbox helper is not set up, since ${why:-its folders could not be checked}."
+    return 0
+  fi
+  if ! chmod 4755 "$BROWSER/$1/opt/google/chrome/chrome-sandbox"; then
+    say "Chrome's setuid sandbox helper could not be set up."
+    return 0
+  fi
+  say "The container has SYS_ADMIN, so Chrome's setuid sandbox helper is set up, for a kernel without user namespaces."
+  if awk -v dir="$BROWSER" '$2 == dir {print $4}' /proc/mounts | grep -qw nosuid; then
+    say "But $BROWSER is mounted nosuid, so the kernel ignores the helper's setuid bit, and where"
+    say "the kernel has no user namespaces Chrome will refuse to start. Mount it without nosuid."
+  fi
+}
+
+# Whether the helper of the Chrome in $BROWSER/$1 may be made setuid root.
+# It must be a plain file with one name, belonging to root's user and
+# group, and every folder from $BROWSER down to it must be root's alone and
+# no link. A second name for the file, made anywhere on the same file
+# system, would keep the bit after this one is gone. When it may not, says
+# why, for the log.
+may_be_setuid() {
+  file="$BROWSER/$1/opt/google/chrome/chrome-sandbox"
+  for dir in "$BROWSER" "$BROWSER/$1" "$BROWSER/$1/opt" "$BROWSER/$1/opt/google" \
+             "$BROWSER/$1/opt/google/chrome"; do
+    if [ -L "$dir" ] || [ ! -d "$dir" ]; then
+      echo "$dir is a link or not a folder"
+      return 1
+    fi
+    root_alone "$dir" || return 1
+  done
+  if [ -L "$file" ] || [ ! -f "$file" ]; then
+    echo "$file is a link or not a plain file"
+    return 1
+  fi
+  root_alone "$file" || return 1
+  group=$(status_of "$file" %g)
+  if [ "$group" != 0 ]; then
+    echo "$file belongs to group ${group:-unknown}, not to root"
+    return 1
+  fi
+  links=$(status_of "$file" %h)
+  if [ "$links" != 1 ]; then
+    echo "$file has ${links:-an unknown number of} names, where it may have only one"
+    return 1
+  fi
+}
+
+# Whether root alone owns a path, as its owner and with no group and nobody
+# else allowed to write to it, so nothing running as pp could have made it
+# or changed it since. When not, says why.
+root_alone() {
+  owner=$(status_of "$1" %u)
+  mode=$(status_of "$1" %a)
+  case "$owner" in ""|*[!0-9]*) echo "the owner of $1 could not be read"; return 1 ;; esac
+  case "$mode" in ""|*[!0-7]*) echo "the mode of $1 could not be read"; return 1 ;; esac
+  if [ "$owner" != 0 ]; then
+    echo "$1 belongs to user $owner, not to root"
+    return 1
+  fi
+  if [ $(( 0$mode & 022 )) -ne 0 ]; then
+    echo "users other than root may write to $1"
+    return 1
+  fi
+}
+
+# One field of a path's own status, a link never followed, by the letter
+# stat gives it (%u owner, %g group, %a mode in octal, %h number of names),
+# or nothing when it cannot be read. GNU's stat and busybox's both take it.
+status_of() {
+  stat -c "$2" "$1" 2>/dev/null || true
 }
 
 if [ -z "$wanted" ]; then

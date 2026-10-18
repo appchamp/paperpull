@@ -141,20 +141,27 @@ password manager.
   instead, as an opt-in, two commented `cap_add: SYS_ADMIN` lines in the
   compose files, see "On Synology" in [SERVER.md](SERVER.md). With
   them, Chrome's setuid helper in the browser volume is made setuid root at
-  each start, and without them the bit is taken off every copy. That one
-  capability lets this small, long-trusted helper build the sandbox's
-  namespaces and chroot. The helper holds it only while it sets the sandbox
-  up and drops every privilege before the page runs, so the page is still a
-  page with no powers, behind the chroot, the namespaces and the seccomp
-  filter. The capability is the container's, never a page's, and the default
-  setup is given neither it nor the setuid bit. What it costs is that
-  anything that becomes root inside the container holds it as well, and it
-  reaches much further into the host than a container's usual powers, so a
-  break-out of the container would go further. The helper is itself a
-  program that runs as root, so a flaw in it would be one way to that root.
-  Either first takes running code inside the container, past Chrome's
-  sandbox or the panel's password. Do not pair it with
-  `privileged`, which grants far more than the sandbox needs, nor with
+  each start, and without them the bit is taken off every copy. The bit is
+  set only where root alone could have put the helper, a plain file of
+  root's with one name, in folders of root's that nobody else may write to
+  and that are not links, from the volume's top folder down. The volume
+  belongs to root for that reason, so the container's own user, which runs
+  everything else, cannot plant a file there for the bit to land on, and the
+  helper is never given to root to make it so. Where any of that does not
+  hold, the helper is left without the bit and the container's log says
+  why. That one capability lets this small, long-trusted helper build the
+  sandbox's namespaces and chroot. The helper holds it only while it sets
+  the sandbox up and drops every privilege before the page runs, so the
+  page is still a page with no powers, behind the chroot, the namespaces
+  and the seccomp filter. The capability is the container's, never a
+  page's, and the default setup is given neither it nor the setuid bit.
+  What it costs is that anything that becomes root inside the container
+  holds it as well, and it reaches much further into the host than a
+  container's usual powers, so a break-out of the container would go
+  further. The helper is itself a program that runs as root, so a flaw in
+  it would be one way to that root. Either first takes running code inside
+  the container, past Chrome's sandbox or the panel's password. Do not pair
+  it with `privileged`, which grants far more than the sandbox needs, nor with
   `no-new-privileges`, which would turn the setuid bit off. On a kernel
   built without seccomp, as Synology's 4.4 kernels are, the helper is never
   set up, since Chrome would have only half its sandbox there. Nor is

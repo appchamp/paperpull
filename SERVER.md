@@ -252,7 +252,7 @@ cat /proc/sys/user/max_user_namespaces
   and recreate the container with
   `sudo docker compose -f compose.https.yaml up -d`, or from Container
   Manager. The container's log then says Chrome's setuid sandbox helper is
-  set up, and the self-test's `sandbox` line says
+  set up, or why it is not, and the self-test's `sandbox` line says
   `layer 1 SUID, seccomp on`. This has not been seen on a Synology yet, so
   tell us how it goes.
 
@@ -269,11 +269,17 @@ Synology NAS.
 At each start, a container given `SYS_ADMIN` on a kernel with seccomp has
 the helper of the Chrome in use made setuid root, so Chrome never gets half
 its sandbox through it, and any other container has the bit taken off every
-copy, so removing the two lines again undoes it. `SYS_ADMIN` lets the helper
-build the sandbox's own namespaces and chroot. It is given to the container,
-never to the pages, and the helper gives up every privilege before a page
-runs. Never put `privileged` or `--no-sandbox` in its place, which would
-leave no sandbox at all. Leave `no-new-privileges` off this container, since
+copy, so removing the two lines again undoes it. The helper is set up only
+where root alone could have put it, a plain file of root's with one name,
+in folders of root's that nobody else may write to and that are not links,
+from `/browser` down. That is why the `browser` volume belongs to root, and a
+volume made by an older image has its top folder given back to root at the
+start. Where any of that does not hold, the helper is not set up and the
+container's log says why. `SYS_ADMIN` lets the helper build the sandbox's
+own namespaces and chroot. It is given to the container, never to the
+pages, and the helper gives up every privilege before a page runs. Never
+put `privileged` or `--no-sandbox` in its place, which would leave no
+sandbox at all. Leave `no-new-privileges` off this container, since
 it turns the setuid bit off, and for the same reason keep the `browser`
 volume on a file system mounted without `nosuid`, as Docker's own volumes
 are.

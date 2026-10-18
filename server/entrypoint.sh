@@ -4,6 +4,7 @@
 #
 #   - pp takes the person's own NAS ids (PUID, PGID), so the documents it
 #     writes into a shared folder belong to them
+#   - the browser volume is root's, and pp may only read it
 #   - Chrome is downloaded or brought up to date (chrome.sh), since apt
 #     needs root to read Google's package list
 #   - pp joins the group that owns a graphics card passed in, if any
@@ -22,6 +23,16 @@ chmod 700 /profiles /config
 # A shared folder may refuse a change of owner, which is fine as long as pp
 # can write to it.
 chown pp:pp /data 2>/dev/null || true
+# Chrome's folder belongs to root, and pp may only read it, so nothing
+# running as pp can put a folder or a file there for chrome.sh, which runs
+# as root, to take for Chrome's. A volume made from an older image has pp as
+# the owner of its top folder. Only that folder is given back to root, and
+# never what is inside it, so that anything pp put there stays pp's and
+# chrome.sh will not make it setuid. Where it cannot be given back,
+# chrome.sh sets up no setuid helper either.
+if ! { chown 0:0 /browser && chmod 0755 /browser; }; then
+  echo "[chrome] /browser could not be given to root, so no setuid sandbox helper is set up in it." >&2
+fi
 
 if ! /opt/paperpull/server/chrome.sh; then
   echo "PaperPull cannot start without Chrome. See the lines above." >&2

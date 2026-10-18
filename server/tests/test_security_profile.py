@@ -129,9 +129,10 @@ def test_the_synology_fallback_is_offered_but_off_by_default():
 def test_the_setuid_helper_follows_the_capability():
     """chrome.sh makes Chrome's sandbox helper setuid root only in a
     container holding CAP_SYS_ADMIN, bit 21 of CapBnd, the one sign of the
-    opt-in, and takes the bit off every other copy. It sets the owner before
-    the mode, since a change of owner drops the bit. server/smoke.py checks
-    the same in a running container."""
+    opt-in, and takes the bit off every other copy. It never gives the
+    helper to root, and sets the bit only where root alone could have put
+    it, see test_the_setuid_helper_needs_a_path_root_owns.py.
+    server/smoke.py checks the same in a running container."""
     script = (SERVER / "chrome.sh").read_text(encoding="utf-8")
     assert "/^CapBnd:/" in script and ">> 21) & 1" in script
     # Only beside the seccomp-bpf filter, asked of the server's one host
@@ -139,8 +140,9 @@ def test_the_setuid_helper_follows_the_capability():
     gate = script.index("check().seccomp_bpf == 'yes'")
     assert gate < script.index("if kernel_has_seccomp; then") < script.index("SETUID_SANDBOX=1")
     helpers = script[script.index("sandbox_helpers() {"):]
-    assert helpers.index('chown 0:0 "$helper"') < helpers.index('chmod 4755 "$helper"')
-    assert 'chmod 0755 "$helper"' in helpers and '[ ! -L "$helper" ]' in helpers
+    assert helpers.index('chmod u-s,g-s "$helper"') < helpers.index('may_be_setuid "$1"')
+    assert helpers.index('may_be_setuid "$1"') < helpers.index("chmod 4755")
+    assert '[ ! -L "$helper" ]' in helpers and "chown" not in helpers
     # Set after the recursive chmod, in the function every start path calls.
     readable = script[script.index("readable() {"):script.index("sandbox_helpers() {")]
     assert readable.index('chmod -R a+rX') < readable.index('sandbox_helpers "$1"')

@@ -12,8 +12,10 @@ inside the container.
 
 Then it takes the # off the two cap_add lines of compose.yaml, as SERVER.md
 tells a person with a Synology to, and checks that the sandbox helper of the
-Chrome in use is made setuid root and the self-test still holds. With the
-lines put back, no copy of the helper keeps the bit.
+Chrome in use is made setuid root and the self-test still holds. The browser
+volume is root's and pp can put nothing in it, and with the Chrome in use
+given to pp no helper is setuid. With the lines put back, no copy of the
+helper keeps the bit.
 
 Then it moves the same project to compose.https.yaml, as a person moving to
 HTTPS does, and checks what that file promises. The panel answers by HTTPS
@@ -286,6 +288,30 @@ def setuid_helpers() -> list:
     return [line for line in r.stdout.splitlines() if line.strip()]
 
 
+def root_alone_phase() -> None:
+    """The helper is made setuid only where root alone could have put it.
+    The browser volume is root's, so pp can put nothing there, and with the
+    Chrome in use given to pp, as a folder pp put in an older volume would
+    be, chrome.sh leaves no helper setuid and says why."""
+    r = docker("exec", CONTAINER, "stat", "-c", "%u:%g %a", "/browser", timeout=60)
+    report("suid-own", r.stdout.strip() == "0:0 755",
+           "the browser volume is root's, %s" % (r.stdout.strip() or r.stderr.strip()))
+    r = docker("exec", "-u", "pp", CONTAINER, "mkdir", "/browser/planted", timeout=60)
+    report("suid-pp", r.returncode != 0, "pp may not put a folder in the browser volume")
+    in_use = docker("exec", CONTAINER, "readlink", "-f", "/browser/current", timeout=60).stdout.strip()
+    if not report("suid-use", in_use.startswith("/browser/"), "the Chrome in use is %s" % in_use):
+        return
+    docker("exec", CONTAINER, "chown", "pp:pp", in_use, timeout=60)
+    try:
+        r = docker("exec", CONTAINER, "/opt/paperpull/server/chrome.sh", timeout=600)
+        helpers = setuid_helpers()
+        report("suid-ppd", r.returncode == 0 and not helpers
+               and "is not set up, since %s belongs to user" % in_use in r.stdout,
+               "with the Chrome in use pp's no helper is setuid (%s)" % (", ".join(helpers) or "none"))
+    finally:
+        docker("exec", CONTAINER, "chown", "0:0", in_use, timeout=60)
+
+
 def setuid_phase(folder: Path) -> None:
     """The two cap_add lines taken off their #, as SERVER.md tells a person
     with a Synology, make the helper of the Chrome in use setuid root, and
@@ -313,6 +339,7 @@ def setuid_phase(folder: Path) -> None:
                and "setuid sandbox helper is set up" in log(),
                "setuid helpers %s" % (", ".join(helpers) or "none"))
         self_test()
+        root_alone_phase()
         # An older Chrome's folder left with its helper setuid, as a version
         # kept beside a newer one would be after the opt-in.
         docker("exec", CONTAINER, "sh", "-c",

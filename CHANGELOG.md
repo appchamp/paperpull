@@ -27,10 +27,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
   namespaces, and the self-test, the container's log and the panel count
   it as a sandbox. The helper is made setuid only where the kernel has
   seccomp, so Chrome never gets half its sandbox through it, which leaves
-  out Synology's 4.4 kernels, built with neither. Every other installation
-  is unchanged, with no capability added and no setuid helper kept in the
-  browser volume. It has not yet been seen on a real NAS, see "On Synology"
-  in SERVER.md.
+  out Synology's 4.4 kernels, built with neither. It is made setuid only
+  where root alone could have put it, which is why the browser volume now
+  belongs to root in every installation. Every other installation is
+  otherwise unchanged, with no capability added and no setuid helper kept
+  in the browser volume. It has not yet been seen on a real NAS, see "On
+  Synology" in SERVER.md.
 
 ### Fixed
 - **Diagnose always writes its file, and Wells Fargo looks behind the
