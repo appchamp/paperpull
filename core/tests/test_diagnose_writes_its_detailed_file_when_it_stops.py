@@ -40,22 +40,24 @@ APPS = sorted(d for d in (REPO / "apps").iterdir()
               if d.is_dir() and not d.name.startswith(("_", ".")) and entry_of(d)
               and "pressing.stop_run(app, " in entry_of(d).read_text(encoding="utf-8"))
 
-# Apps whose Diagnose catches no stop yet. Their looks go through calls no
-# stop is known to come out of. The list may only shrink, which
-# test_the_apps_left_out_still_catch_no_stop holds it to.
-NO_CATCH_YET = {"adp", "amfam", "applecard", "att", "etrade", "golden1", "meijer", "newrez",
-                "sba", "smud", "statefarm", "treasurydirect", "verizonmobile"}
-# PG&E opens its page before the guard around its walk of the history.
-GOTO_OUTSIDE_THE_GUARD = {"pge"}
-
 # The ones a stop could reach, every one named, so a census that found
 # fewer is not mistaken for one that passed.
 NAMED_GOTO = {"alpaca", "bilt", "chasebusiness", "firsthorizon", "irs", "sdge", "shelbycounty",
-              "simmons", "spectrum", "venmo", "coinbase", "nelnet", "optum", "wellsfargo"}
+              "simmons", "spectrum", "venmo", "coinbase", "nelnet", "optum", "wellsfargo",
+              "adp", "amfam", "applecard", "att", "etrade", "golden1", "newrez", "sba", "smud",
+              "statefarm", "treasurydirect", "verizonmobile", "pge"}
 NAMED_STEPS = {("bestbuy", "capture_history_query"), ("bestbuy", "year_choices"),
                ("bestbuy", "cmd_discover"), ("coinbase", "shown_documents"),
                ("mtb", "collect_statement_rows"), ("nelnet", "collect_download_docs"),
-               ("optum", "collect_download_docs"), ("wellsfargo", "collect_download_docs")}
+               ("optum", "collect_download_docs"), ("wellsfargo", "collect_download_docs"),
+               ("pge", "collect_download_docs"), ("applecard", "goto_section"),
+               ("meijer", "goto_orders"), ("meijer", "open_tab"),
+               ("meijer", "collect_cards")}
+
+# Steps only a row on the page reaches, which a page that holds nothing
+# never shows. A stop out of one is caught around the same look as the
+# steps before it.
+PAST_A_ROW = {("meijer", "row_controls"), ("meijer", "survey_receipt")}
 
 # Steps that press or move the page. None is made once the documents page
 # would not open.
@@ -105,13 +107,11 @@ def discovers(app: Path) -> bool:
 def cases():
     goto, steps = [], []
     for app in APPS:
-        if app.name in NO_CATCH_YET:
-            continue
         calls = page_calls(app)
-        if "goto_documents" in calls and app.name not in GOTO_OUTSIDE_THE_GUARD:
+        if "goto_documents" in calls:
             goto.append(app)
         for name in calls:
-            if name != "goto_documents":
+            if name != "goto_documents" and (app.name, name) not in PAST_A_ROW:
                 steps.append((app, name))
         if discovers(app):
             steps.append((app, "cmd_discover"))
@@ -168,6 +168,12 @@ class EmptyPage:
 
     def is_closed(self):
         return False
+
+    # Meijer listens for the page's JSON answers, and none come.
+    def on(self, *_a, **_k):
+        return None
+
+    remove_listener = on
 
 
 def empty_answer(name: str):
@@ -270,18 +276,20 @@ def test_the_census_is_not_vacuous():
     assert names >= NAMED_GOTO, sorted(NAMED_GOTO - names)
     steps = {(d.name, s) for d, s in STEPS}
     assert steps >= NAMED_STEPS, sorted(NAMED_STEPS - steps)
+    # A step said to sit past a row is still one of that look's calls.
+    calls = {(d.name, s) for d in APPS for s in page_calls(d)}
+    assert PAST_A_ROW <= calls, sorted(PAST_A_ROW - calls)
 
 
-def test_the_apps_left_out_still_catch_no_stop():
-    """An app on NO_CATCH_YET that comes to catch a stop leaves the list,
-    so the census runs it too."""
-    names = {d.name for d in APPS}
-    assert NO_CATCH_YET <= names, sorted(NO_CATCH_YET - names)
-    for app in APPS:
-        if app.name in NO_CATCH_YET:
-            source = ast.unparse(diagnose_of(app))
-            assert "pressing.Stop" not in source, \
-                "%s catches a stop now, so take it off NO_CATCH_YET" % app.name
+def test_every_diagnose_catches_a_stop():
+    """No app is left out. Each Diagnose catches a stop, a new app's too,
+    so a look a stop is first found to reach already writes its file."""
+    assert APPS
+    missing = [d.name for d in APPS
+               if not any(isinstance(n, ast.ExceptHandler) and n.type is not None
+                          and "pressing.Stop" in ast.unparse(n.type)
+                          for n in ast.walk(diagnose_of(d)))]
+    assert not missing, missing
 
 
 @pytest.mark.parametrize("app", GOTO_APPS, ids=lambda d: d.name)

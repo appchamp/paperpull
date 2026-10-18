@@ -1654,7 +1654,7 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send.
 
         Diagnose writes a detailed file for repairing this provider, and
@@ -1672,7 +1672,8 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='Meijer')
+            provider='Meijer',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         """The orders page and what its first receipt link gives,
@@ -1685,6 +1686,7 @@ class App:
         site.set_private_words([self.config.get("owner", "")])
         info = {"timestamp": now_iso(), "app": "meijer", "history": {}, "receipt": {}, "json_answers": []}
         sniffer = site.JsonSniffer(page)
+        stopped = None
         try:
             site.goto_orders(page)
             info["signed_out"] = site.looks_signed_out(page)
@@ -1722,11 +1724,21 @@ class App:
                 info["receipt"] = site.survey_receipt(page, links[0]["href"])
             else:
                 info["receipt"] = {"note": Fixed("no receipt link found on the first rows")}
+        except pressing.Stop as stop:
+            # A press on the orders page it would not make ends the look
+            # there, and the file still says what was seen and why it
+            # stopped.
+            stopped = stop
+            info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
         except Exception as e:
             info["error"] = site.mask_text(str(e))
+        self._diagnose_stopped = stopped
         info["json_answers"] = sniffer.stop()
         out = self.paths.diagnostics / "diagnose-meijer.json"
         write_shaped(out, info, words)
+        if stopped is not None:
+            # The stop's own words, as a run says them (pressing.say).
+            pressing.say(stopped)
         print(f"  Wrote {out}")
         print("  That is the detailed file, for repairing this provider. Any word")
         print("  in it that is not on PaperPull's fixed list is written as its")

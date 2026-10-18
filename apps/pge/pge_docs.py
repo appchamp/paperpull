@@ -741,7 +741,7 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send.
 
         Diagnose writes a detailed file for repairing this provider, and
@@ -759,14 +759,23 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='PG&E')
+            provider='PG&E',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         self.stats["mode"] = "diagnose"
         words = words_for('PG&E', site)
         print("Dumping page structure...")
         page = self.page()
-        found = site.goto_documents(page)
+        stopped, said_stop = None, None
+        try:
+            found = site.goto_documents(page)
+        except pressing.Stop as stop:
+            # The page would not open, and nothing past the stop is
+            # pressed. What the window shows is written all the same.
+            stopped = stop
+            said_stop = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
+            found = False
         print(f"Current URL: {shape_url(page.url, words)}")
         print(f"Page title: {shape_label(page.title(), words)}")
 
@@ -775,10 +784,13 @@ class App:
             "title": page.title(),
             "timestamp": now_iso(),
             "documents_page_found": found,
+            "documents_page_opened": bool(found),
             "signed_out": site.looks_signed_out(page),
             "challenge": site.detect_security_challenge(page),
             "row_counts": {},
         }
+        if said_stop is not None:
+            info["stopped"] = said_stop
         for name, sel in [("doc_row", site.FALLBACK["doc_row"]),
                           ("doc_link", site.FALLBACK["doc_link"]),
                           ("pdf links", "a[href*='.pdf']"),
@@ -793,10 +805,12 @@ class App:
         # option is pressed through paperpull_core.pressing.press_once. A
         # press it would not make ends the walk there, and this file still
         # says what was seen and why it stopped, in our own words and words
-        # from the list.
-        stopped = None
+        # from the list. Once the documents page would not open, the walk
+        # is not begun.
+        docs = []
         try:
-            docs = site.collect_download_docs(page)
+            if stopped is None:
+                docs = site.collect_download_docs(page)
         except pressing.Stop as stop:
             info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
             stopped = stop
@@ -827,6 +841,7 @@ class App:
         except Exception as e:
             info["screenshot_error"] = str(e)
 
+        self._diagnose_stopped = stopped
         out = self.paths.diagnostics / "diagnose-documents.json"
         write_shaped(out, info, words)
         if stopped is not None:
