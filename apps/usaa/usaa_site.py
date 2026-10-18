@@ -23,7 +23,6 @@ repair the FALLBACK entries + goto_documents URLs against Diagnostics/.
 # Site layer verified working against the live site: 2026-08
 from __future__ import annotations
 
-import base64
 import html as _html
 import json
 import logging
@@ -34,6 +33,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.controls import click_next_page as _click_next_page
@@ -456,7 +456,7 @@ _BLOB_FETCH_JS = r"""async () => {
     const f = document.querySelector("iframe[src^='blob:']");
     if (!f || !f.src) return null;
     const r = await fetch(f.src);
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await ppRead(r);
     let s = ''; for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
     return btoa(s);
 }"""
@@ -572,9 +572,9 @@ def download_by_id(page, document_id: str, document_date: str, out_path) -> bool
                   wait_until="domcontentloaded", timeout=60000)
         page.wait_for_selector("iframe[src^='blob:']", timeout=30000)
         page.wait_for_timeout(1500)
-        b64 = page.evaluate(_BLOB_FETCH_JS)
+        b64 = intake.evaluate(page, _BLOB_FETCH_JS)
         if b64:
-            data = base64.b64decode(b64)
+            data = intake.decode(b64)
             if b"%PDF-" in data[:1024]:
                 out_path.write_bytes(data)
                 return True
@@ -653,16 +653,16 @@ def download_document_row(page, title: str, date_text: str, account: str,
         # the inline PDF renders into a blob: iframe once the click resolves
         page.wait_for_selector("iframe[src^='blob:']", timeout=30000)
         page.wait_for_timeout(1800)
-        b64 = page.evaluate(r"""async () => {
+        b64 = intake.evaluate(page, r"""async () => {
             const f = document.querySelector("iframe[src^='blob:']");
             if (!f || !f.src) return null;
             const r = await fetch(f.src);
-            const buf = new Uint8Array(await r.arrayBuffer());
+            const buf = await ppRead(r);
             let s = ''; for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
             return btoa(s);
         }""")
         if b64:
-            data = base64.b64decode(b64)
+            data = intake.decode(b64)
             if b"%PDF-" in data[:1024]:
                 out_path.write_bytes(data)
                 return True

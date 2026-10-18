@@ -62,6 +62,7 @@ from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import List, Optional
 
+from paperpull_core import intake
 from paperpull_core import redirects
 from paperpull_core.characters import whole_json
 
@@ -354,7 +355,10 @@ def download_document(page, pdf_url: str, out_path) -> bool:
     if not resp.ok:
         log.warning("PDF fetch returned %s", resp.status)
         return False
-    body = resp.body()
+    try:
+        body = intake.body(resp)
+    except intake.TooLarge:
+        return False
     if not body.startswith(b"%PDF"):
         log.warning("response was not a PDF")
         return False

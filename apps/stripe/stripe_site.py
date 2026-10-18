@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 
+from paperpull_core import intake
 from paperpull_core import redirects
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 
@@ -352,7 +353,7 @@ _FETCH_JS = r"""async ([url, headers]) => {
     return {status: r.status, ct, url: r.url, json: j};
   }
   if (!ct.includes("pdf") && !ct.includes("octet-stream")) return {status: r.status, ct, url: r.url};
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   let s = "";
   for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
   return {status: r.status, ct, url: r.url, b64: btoa(s)};
@@ -365,7 +366,7 @@ def _get(page, url: str, headers: Optional[dict] = None) -> dict:
     if not on_dashboard(page):
         raise SessionExpired("the Stripe tab is not on a signed-in Dashboard page")
     sent = {k: v for k, v in (headers or {}).items() if _KEEP_HEADERS.match(k)}
-    r = page.evaluate(_FETCH_JS, [url, sent])
+    r = intake.evaluate(page, _FETCH_JS, [url, sent])
     if r.get("status") in (401, 403) or not is_safe_url(r.get("url") or url):
         raise SessionExpired("Stripe answered %s, which means the session has ended" % r.get("status"))
     return r
@@ -564,7 +565,10 @@ def _fetch_file(page, link: str) -> dict:
             return {"status": resp.status, "ct": ct, "url": resp.url, "json": whole_json(resp.json())}
         except Exception:
             return {"status": resp.status, "ct": ct, "url": resp.url, "json": None}
-    body = resp.body()
+    try:
+        body = intake.body(resp)
+    except intake.TooLarge:
+        body = b""
     return {"status": resp.status, "ct": ct, "url": resp.url,
             "b64": base64.b64encode(body).decode() if body[:5] == b"%PDF-" else ""}
 
@@ -596,7 +600,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, href: str = "",
     if not r.get("b64"):
         log.info("no PDF for %s: status %s, %s", iso_date, r.get("status"), r.get("ct"))
         return False
-    data = base64.b64decode(r["b64"])
+    data = intake.decode(r["b64"])
     if data[:5] != b"%PDF-":
         return False
     out_path.write_bytes(data)

@@ -71,7 +71,6 @@ trustName, uploadDate}]}. Notes that cost real debugging:
 # download, per-document verification, tax forms, content-based naming).
 from __future__ import annotations
 
-import base64
 import html as _html
 import json
 import logging
@@ -82,6 +81,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core import controls as _controls
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import last_day as _last_day
@@ -1343,7 +1344,7 @@ def _download_via_row(page, ctx, account: str, date: str, out_path: Path,
             return False
         try:
             b64 = _fetch_as_b64(page, url)
-            if b64 and _write_if_pdf(base64.b64decode(b64), out_path):
+            if b64 and _write_if_pdf(intake.decode(b64), out_path):
                 log.info("captured via direct href")
                 return True
         except Exception as e:
@@ -1355,7 +1356,7 @@ def _download_via_row(page, ctx, account: str, date: str, out_path: Path,
         try:
             with page.expect_download(timeout=20000) as dl:
                 ctrl.click()
-            dl.value.save_as(str(out_path))
+            intake.save_download_as(dl.value, out_path)
             # A tax form that comes as a ZIP holding its PDF is kept for the
             # docs module, which opens it.
             if out_path.exists() and _is_document(out_path.read_bytes()[:5], zip_ok=True):
@@ -1395,7 +1396,7 @@ def _download_via_row(page, ctx, account: str, date: str, out_path: Path,
                 b64 = _fetch_as_b64(page, url) if url.startswith("blob:") else \
                     _fetch_as_b64(new_page, url)
             if b64:
-                ok = _write_if_pdf(base64.b64decode(b64), out_path)
+                ok = _write_if_pdf(intake.decode(b64), out_path)
                 if ok:
                     log.info("captured via new tab (%s)", url[:80])
         except Exception as e:
@@ -1627,17 +1628,10 @@ class StatementFacts:
 def read_statement_facts(pdf_path) -> StatementFacts:
     """Parse an Ally statement PDF's first page. Never raises."""
     try:
-        from pypdf import PdfReader
-    except Exception:
-        return StatementFacts([])
-    try:
-        page = PdfReader(str(pdf_path)).pages[0]
-        try:
-            # layout mode keeps the table's columns apart; without it the
-            # header and the first nickname run together
-            text = whole_characters(page.extract_text(extraction_mode="layout") or "")
-        except Exception:
-            text = whole_characters(page.extract_text() or "")
+        # Layout mode keeps the table's columns apart. Without it the
+        # header and the first nickname run together. A page that will
+        # not read that way is read the plain way.
+        text = whole_characters(pdf_reader.page_texts(pdf_path, 1, layout=True)[0])
     except Exception as e:
         log.info("could not read %s: %s", pdf_path, e)
         return StatementFacts([])

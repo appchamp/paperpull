@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
+from paperpull_core import intake
 from paperpull_core import redirects
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 
@@ -406,7 +407,7 @@ _FETCH_JS = r"""async (url) => {
   const r = await fetch(url, {credentials: "include"});
   const ct = r.headers.get("content-type") || "";
   if (!ct.includes("pdf") && !ct.includes("octet-stream")) return {status: r.status, ct, url: r.url};
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   let s = "";
   for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
   return {status: r.status, ct, url: r.url, b64: btoa(s)};
@@ -419,13 +420,19 @@ def _fetch_file(page, link: str) -> dict:
     if not is_safe_url(link):
         raise ValueError("refusing to fetch off fedex.com: %r" % redact(link))
     try:
-        r = page.evaluate(_FETCH_JS, link)
+        r = intake.evaluate(page, _FETCH_JS, link)
+    except intake.TooLarge:
+        # Larger than a document may be, and not asked for again.
+        return {"status": 0, "ct": "", "url": link}
     except Exception as e:
         log.info("in-page fetch refused (%s), asking through the session", str(e)[:80])
         # Followed by Playwright alone, a redirect would carry the browser's
         # cookies wherever it led, so each hop is checked before it is asked.
         resp = redirects.get(page.context.request, link, is_safe_url, hops=5)
-        body = resp.body()
+        try:
+            body = intake.body(resp)
+        except intake.TooLarge:
+            return {"status": 0, "ct": "", "url": link}
         r = {"status": resp.status, "ct": (resp.headers.get("content-type") or "").lower(),
              "url": resp.url, "b64": base64.b64encode(body).decode() if body[:5] == b"%PDF-" else ""}
     if r.get("status") in (401, 403) or not is_safe_url(r.get("url") or link):
@@ -459,7 +466,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, href: str = "",
     if not r.get("b64"):
         log.info("no PDF for %s: status %s, %s", iso_date, r.get("status"), r.get("ct"))
         return False
-    data = base64.b64decode(r["b64"])
+    data = intake.decode(r["b64"])
     if data[:5] != b"%PDF-":
         return False
     out_path.write_bytes(data)

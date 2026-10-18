@@ -51,7 +51,6 @@ SAFETY (the Billing Center takes payments):
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
 import time
@@ -60,6 +59,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 
 # Everything on its way into a diagnostic file goes through here. It
@@ -418,7 +418,7 @@ _FETCH_JS = r"""async ([url, headers, body]) => {
     try { j = await r.json(); } catch (e) { j = null; }
     return {status: r.status, ct, url: r.url, json: j};
   }
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   let s = "";
   for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
   return {status: r.status, ct, url: r.url, b64: btoa(s)};
@@ -430,7 +430,7 @@ def _post(page, url: str, headers: dict, body: dict) -> dict:
         raise ValueError("refusing to fetch off ups.com: %r" % redact(url))
     if not on_billing(page):
         raise SessionExpired("the UPS tab is not on a signed-in Billing Center page")
-    r = page.evaluate(_FETCH_JS, [url, headers, body])
+    r = intake.evaluate(page, _FETCH_JS, [url, headers, body])
     if r.get("status") in (401, 403) or not is_safe_url(r.get("url") or url):
         raise SessionExpired("UPS answered %s, which means the session has ended" % r.get("status"))
     return r
@@ -468,7 +468,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, href: str = "",
     if not r.get("b64"):
         log.info("no PDF for %s: status %s, %s", iso_date, r.get("status"), r.get("ct"))
         return False
-    data = base64.b64decode(r["b64"])
+    data = intake.decode(r["b64"])
     if data[:5] != b"%PDF-":
         return False
     out_path.write_bytes(data)

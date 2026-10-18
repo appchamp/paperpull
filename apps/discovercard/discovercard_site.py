@@ -88,6 +88,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core import controls as _controls
 from paperpull_core import redirects
 from paperpull_core.urls import is_safe_url as _host_allows
@@ -1018,7 +1019,7 @@ def discovercard_download(page, ctx, account: str, date: str, out_path,
         log.info("statement %s came back as %r, not a PDF", date, ctype[:40])
         return False
     try:
-        data = resp.body()
+        data = intake.body(resp)
     except Exception as e:
         log.info("could not read body for %s: %s", date, e)
         return False

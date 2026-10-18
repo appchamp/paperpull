@@ -46,13 +46,13 @@ SAFETY (this is a 529 college-savings account):
 """
 from __future__ import annotations
 
-import base64 as _b64
 import logging
 import re
 from datetime import date as _date
 from pathlib import Path
 from typing import List, Optional
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import escape_for_locator
 # Everything on its way into a diagnostic file goes through here.
@@ -263,8 +263,7 @@ _FETCH_JS = """async ({url, method, body, want}) => {
   }
   const r = await fetch(url, opts);
   if (want === 'bytes') {
-    const buf = await r.arrayBuffer();
-    const bytes = new Uint8Array(buf);
+    const bytes = await ppRead(r);
     let bin = ''; const CH = 0x8000;
     for (let i = 0; i < bytes.length; i += CH) {
       bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
@@ -272,8 +271,9 @@ _FETCH_JS = """async ({url, method, body, want}) => {
     return {status: r.status, contentType: r.headers.get('content-type') || '',
             b64: btoa(bin)};
   }
+  const raw = await ppRead(r);
   let j = null;
-  try { j = await r.json(); } catch (e) {}
+  try { j = JSON.parse(new TextDecoder().decode(raw)); } catch (e) {}
   return {status: r.status, json: j};
 }"""
 
@@ -282,7 +282,7 @@ def _call(page, url: str, method: str = "GET", body: Optional[dict] = None,
           want: str = "json"):
     if not is_safe_url(url):
         raise ValueError("refusing an off-host request")
-    res = page.evaluate(_FETCH_JS, {"url": url, "method": method,
+    res = intake.evaluate(page, _FETCH_JS, {"url": url, "method": method,
                                     "body": body, "want": want})
     status = res.get("status")
     if status in (401, 403):
@@ -292,7 +292,7 @@ def _call(page, url: str, method: str = "GET", body: Optional[dict] = None,
                            % (status, url.rsplit("/", 1)[-1]))
     if want == "bytes":
         b64 = res.get("b64") or ""
-        return _b64.b64decode(b64) if b64 else b""
+        return intake.decode(b64)
     return res.get("json")
 
 

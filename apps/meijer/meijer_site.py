@@ -45,7 +45,6 @@ SAFETY (this is a shopping account with a card on file):
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import html as _html
 import json
@@ -57,6 +56,8 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urljoin, urlsplit
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core import page_check as _page_check
 from paperpull_core import pressing
 from paperpull_core.models import IN_STORE, ONLINE, Item, Purchase
@@ -1095,7 +1096,7 @@ def fetch_receipt_bytes(page, url: str) -> Optional[bytes]:
         return None
     if not out.get("b64"):
         return None
-    data = base64.b64decode(out["b64"])
+    data = intake.decode(out["b64"])
     if data[:5] == b"%PDF-":
         return data
     return None
@@ -1206,7 +1207,7 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
                 return
             if not is_safe_url(res.url or "") or res.frame.page not in [page] + popups:
                 return
-            body = res.body()
+            body = intake.body(res)
             if body[:5] == b"%PDF-":
                 got["body"] = body
                 got["how"] = ("an answer to the page" if res.frame.page is page
@@ -1295,7 +1296,7 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
                     if u.startswith("blob:"):
                         try:
                             fetched = _fetch_with_status(extra, u)
-                            body = base64.b64decode(fetched["b64"]) if fetched.get("b64") else None
+                            body = intake.decode(fetched.get("b64") or "") or None
                         except Exception:
                             body = None
                     else:
@@ -1344,8 +1345,9 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
         # rather than moved, so nothing is left in the browser's folder
         # half-taken.
         try:
-            import pathlib
-            body = pathlib.Path(finished[id(downloads[0])]).read_bytes()
+            # Measured before it is read, and never read when it is larger
+            # than a document may be.
+            body = intake.read_file(finished[id(downloads[0])])
             if body[:5] == b"%PDF-":
                 got["body"] = body
                 got["how"] = "a download"
@@ -1377,16 +1379,19 @@ def pdf_facts(path) -> dict:
     try:
         p = Path(path)
         facts["bytes"] = p.stat().st_size
-        from pypdf import PdfReader
-        reader = PdfReader(str(p))
-        facts["pages"] = len(reader.pages)
-        text = whole_characters("".join((pg.extract_text() or "") for pg in reader.pages[:5])).lower()
+        got = pdf_reader.read(p, text_pages=5)
+        if not got.opened:
+            raise pdf_reader.Unread(got.over_limit or got.error, got.kind)
+        facts["pages"] = got.pages
+        if got.text_error:
+            raise pdf_reader.Unread(got.text_error, got.kind)
+        text = whole_characters("".join(got.texts)).lower()
         facts["text_characters"] = len(text)
         facts["prints_a_date"] = bool(re.search(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", text))
         facts["prints_an_amount"] = bool(re.search(r"\d+\.\d{2}\b", text))
         facts["words"] = [w for w in RECEIPT_WORDS if w in text]
     except Exception as e:
-        facts["error"] = type(e).__name__
+        facts["error"] = getattr(e, "kind", "") or type(e).__name__
     return facts
 
 
@@ -1716,7 +1721,7 @@ def survey_receipt(page, url: str) -> dict:
         return out
     out["status"] = res.get("status")
     ctype = (res.get("type") or "")[:40]
-    data = base64.b64decode(res["b64"]) if res.get("b64") else b""
+    data = intake.decode(res.get("b64") or "")
     if data[:5] == b"%PDF-":
         out["kind"] = f"pdf, {len(data)} bytes"
         return out

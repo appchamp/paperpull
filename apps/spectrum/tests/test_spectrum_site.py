@@ -17,6 +17,7 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 import spectrum_site as site  # noqa: E402
 import spectrum_docs as docs  # noqa: E402
+from paperpull_core import intake
 from paperpull_core import pressing  # noqa: E402
 
 HOST = "www.spectrum.net"
@@ -381,7 +382,8 @@ class Page:
             return True
         if js == site._COUNT_JS:
             return len(self.blob.get("blobs") or [])
-        if js == site._RESULT_JS:
+        # Run through intake.evaluate, so with the core's reader in front.
+        if js == intake.reading(site._RESULT_JS):
             return self.blob
         raise AssertionError("unexpected script")
 

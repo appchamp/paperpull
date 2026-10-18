@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.redact import redact, set_private_words  # noqa: F401  (re-exported)
 from paperpull_core.urls import is_safe_url as _host_allows
@@ -631,7 +632,10 @@ def _fetch_document(page, path: str, out_path: Path, trace: Optional[list]) -> b
     if trace is not None:
         trace.append({"note": "fetched", "host": "account.optumbank.com", "status": resp.status,
                       "type": (resp.headers.get("content-type") or "")[:30]})
-    body = resp.body() if resp.ok else b""
+    try:
+        body = intake.body(resp) if resp.ok else b""
+    except intake.TooLarge:
+        return False
     if body[:5] != b"%PDF-":
         return False
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -20,6 +20,7 @@ sent to any external service.
 """
 from __future__ import annotations
 
+from paperpull_core import pdf_reader
 from paperpull_core import failure
 from paperpull_core import listing
 from paperpull_core import renaming
@@ -619,11 +620,7 @@ class App:
         if not want:
             return True, "no policy number on the row to check against"
         try:
-            from pypdf import PdfReader
-            reader = PdfReader(str(pdf_path))
-            text = ""
-            for pg in reader.pages[:2]:
-                text += whole_characters(pg.extract_text() or "")
+            text = whole_characters("".join(pdf_reader.page_texts(pdf_path, 2)))
         except Exception as e:
             return False, f"could not read the PDF back: {e}"
         if want in text:

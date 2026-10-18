@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import storage  # noqa: F401  binds this provider's AppSpec
 import uber_site as site
+from paperpull_core import intake  # noqa: E402
 
 TRIP_A = "0a1b2c3d-1111-4222-8333-444455556666"
 TRIP_B = "0a1b2c3d-7777-4888-9999-aaaabbbbcccc"
@@ -186,7 +187,9 @@ class Page:
         self.calls, self.waits, self.loads = [], [], []
 
     def evaluate(self, js, args):
-        if js is site._PDF_JS:
+        # Run through intake.evaluate, so with the core's reader in front,
+        # held to the app's own limit.
+        if js == intake.reading(site._PDF_JS, site.MAX_PDF_BYTES):
             self.calls.append(("pdf", args[0]))
             return self.pdf.pop(0) if isinstance(self.pdf, list) else self.pdf
         path, headers, body = args

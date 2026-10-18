@@ -40,7 +40,6 @@ Site layer verified against the live site (empty account): 2026-09-21
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import html as _html
 import json
@@ -51,6 +50,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from urllib.parse import urljoin, urlsplit
 
+from paperpull_core import intake
 from paperpull_core import page_check as _page_check
 from paperpull_core.models import ONLINE, Item, Purchase
 from storage import now_iso
@@ -433,7 +433,7 @@ def fetch_receipt_bytes(page, url: str) -> Optional[bytes]:
         return None
     if not out.get("b64"):
         return None
-    data = base64.b64decode(out["b64"])
+    data = intake.decode(out["b64"])
     if data[:5] == b"%PDF-":
         return data
     return None
@@ -666,7 +666,7 @@ def survey_receipt(page, url: str) -> dict:
         return out
     out["status"] = res.get("status")
     ctype = (res.get("type") or "")[:40]
-    data = base64.b64decode(res["b64"]) if res.get("b64") else b""
+    data = intake.decode(res.get("b64") or "")
     if data[:5] == b"%PDF-":
         out["kind"] = f"pdf, {len(data)} bytes"
         return out

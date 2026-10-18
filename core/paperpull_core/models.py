@@ -123,6 +123,9 @@ class ValidationResult:
     size_bytes: int = 0
     page_count: int = 0
     text_token_found: bool = False
+    # Why the PDF was refused for a limit on its size, time or memory, the
+    # same words as `reason`, or "" (intake, pdf_reader).
+    over_limit: str = ""
 
 
 @dataclass

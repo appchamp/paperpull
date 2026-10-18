@@ -9,13 +9,13 @@ All requests and navigation must stay on explicitly allowed provider hosts.
 
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from datetime import date as _date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import checked as _checked_date
@@ -286,10 +286,18 @@ def ensure_documents(page) -> bool:
 
 
 def _evaluate_with_retry(page, js: str, arg, attempts: int = 2):
+    return _retrying(page, lambda: page.evaluate(js, arg), attempts)
+
+
+def _retrying(page, call, attempts: int = 2):
+    """call(), tried again after a pause when it raised. An answer refused
+    for its size is not asked for again (intake.TooLarge)."""
     last = None
     for i in range(attempts):
         try:
-            return page.evaluate(js, arg)
+            return call()
+        except intake.TooLarge:
+            raise
         except Exception as e:
             last = e
             log.info("page fetch attempt %d failed: %s", i + 1, e)
@@ -321,9 +329,8 @@ _BYTES_FETCH_JS = """async ({url, headers}) => {
     return {status: r.status, ct: r.headers.get('content-type') || '',
             b64: '', text: text.slice(0, 300)};
   }
-  const buf = await r.arrayBuffer();
   let s = '';
-  const bytes = new Uint8Array(buf);
+  const bytes = await ppRead(r);
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk)
     s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
@@ -339,9 +346,9 @@ def _fetch_json(page, url: str, headers: Dict[str, str],
 
 
 def _fetch_bytes(page, url: str, headers: Dict[str, str]) -> Tuple[int, str, bytes]:
-    res = _evaluate_with_retry(page, _BYTES_FETCH_JS,
-                               {"url": url, "headers": headers}) or {}
-    data = base64.b64decode(res.get("b64") or "")
+    res = _retrying(page, lambda: intake.evaluate(page, _BYTES_FETCH_JS,
+                                                   {"url": url, "headers": headers})) or {}
+    data = intake.decode(res.get("b64") or "")
     if res.get("text"):
         log.info("byte fetch answered %s: %r", res.get("status"), res["text"][:200])
     return int(res.get("status") or 0), res.get("ct") or "", data

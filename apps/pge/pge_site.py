@@ -118,7 +118,6 @@ Lightning parent hears it, before giving up.
 """
 from __future__ import annotations
 
-import base64
 import html as _html
 import logging
 import re
@@ -129,6 +128,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core import redirects
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.capture import fetch_with_status as _fetch_with_status
@@ -1384,7 +1384,7 @@ def _pdf_from_here(page, before=()) -> Optional[bytes]:
     for candidate in seen[:6]:
         try:
             res = redirects.get(page.request, candidate, is_safe_url, timeout=60000)
-            body = res.body() if res.ok else b""
+            body = intake.body(res) if res.ok else b""
         except Exception as e:
             log.info("fetch %s: %s", _url_shape(candidate), type(e).__name__)
             continue
@@ -1395,7 +1395,7 @@ def _pdf_from_here(page, before=()) -> Optional[bytes]:
         body = b""
         try:
             got = _fetch_with_status(page, candidate)
-            body = base64.b64decode(got["b64"]) if got.get("b64") else b""
+            body = intake.decode(got.get("b64") or "")
         except Exception as e:
             log.info("fetch a blob: %s", type(e).__name__)
         if body[:5] == b"%PDF-":
@@ -1444,7 +1444,7 @@ def _pdf_from_blob_tab(page, tab, blob_url: str) -> Optional[bytes]:
             continue
         try:
             got = _fetch_with_status(holder, blob_url, ALLOWED_HOSTS)
-            body = base64.b64decode(got["b64"]) if got.get("b64") else b""
+            body = intake.decode(got.get("b64") or "")
         except Exception as e:
             log.info("the blob tab could not be read here (%s)", type(e).__name__)
             continue
@@ -1507,7 +1507,7 @@ def _blob_by_download(holders, blob_url: str) -> Optional[bytes]:
                 holder.evaluate(_SAVE_BLOB_JS, blob_url)
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "bill.pdf"
-                info.value.save_as(str(path))
+                intake.save_download_as(info.value, path)
                 body = path.read_bytes()
         except Exception as e:
             log.info("the blob could not be saved from here (%s)", type(e).__name__)
@@ -1547,7 +1547,7 @@ def _pdf_at(page, url: str) -> Optional[bytes]:
         return None
     try:
         res = page.request.get(url, max_redirects=0, timeout=60000)
-        body = res.body() if res.ok else b""
+        body = intake.body(res) if res.ok else b""
     except Exception as e:
         log.info("fetch %s: %s", _url_shape(url), type(e).__name__)
         return None
@@ -1595,7 +1595,7 @@ def _https_by_download(page, url: str) -> Optional[bytes]:
                 raise RuntimeError("not this page's origin")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bill.pdf"
-            info.value.save_as(str(path))
+            intake.save_download_as(info.value, path)
             body = path.read_bytes()
     except Exception as e:
         log.info("the new tab's address could not be saved from here (%s)", type(e).__name__)
@@ -1775,7 +1775,7 @@ def _pdf_from_value(value, depth: int = 0) -> Optional[bytes]:
             text = text.split(",", 1)[1]
         if text.startswith(_B64_PDF) and len(text) > 200:
             try:
-                data = base64.b64decode(text, validate=False)
+                data = intake.decode(text, validate=False)
             except Exception:
                 return None
             return data if data[:5] == b"%PDF-" else None
@@ -2029,8 +2029,9 @@ def download_bill(page, doc: dict, out_path: Path, config: dict) -> bool:
                 target_url = href if href.startswith("http") else (BASE.rstrip("/") + "/" + href.lstrip("/"))
                 if is_safe_url(target_url):
                     res = redirects.get(page.request, target_url, is_safe_url)
-                    if res.ok and res.body()[:5] == b"%PDF-":
-                        out_path.write_bytes(res.body())
+                    body = intake.body(res) if res.ok else b""
+                    if body[:5] == b"%PDF-":
+                        out_path.write_bytes(body)
                         print("  [site] Successfully fetched PDF via direct href!")
                         return True
         except Exception as e_href:
@@ -2065,7 +2066,7 @@ def download_bill(page, doc: dict, out_path: Path, config: dict) -> bool:
                     return
                 ct = (res.headers.get("content-type") or "").lower()
                 if "application/pdf" in ct or ".pdf" in res.url.lower():
-                    b = res.body()
+                    b = intake.body(res)
                     if b and b[:5] == b"%PDF-":
                         if whose == "ours":
                             captured_response_bytes[0] = b
@@ -2223,7 +2224,10 @@ def download_bill(page, doc: dict, out_path: Path, config: dict) -> bool:
                 _remember_blob(captured_download[0].url or "")
             except Exception:
                 pass
-            captured_download[0].save_as(str(out_path))
+            try:
+                intake.save_download_as(captured_download[0], out_path)
+            except intake.TooLarge:
+                pass
         elif blob_url and blob_url.startswith("blob:"):
             # The new tab opened at a blob, read by the page that made it,
             # and when the page's policy refuses that read, saved as a

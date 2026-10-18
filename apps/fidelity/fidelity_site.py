@@ -59,6 +59,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import escape_for_locator
 
@@ -250,7 +251,6 @@ def ensure_statements(page) -> bool:
 
 # -- documents ----------------------------------------------------------------------
 
-import base64 as _b64
 import zlib as _zlib
 from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
@@ -304,8 +304,9 @@ _POST_JS = """async ({url, body, headers}) => {
   const h = Object.assign({'Accept': 'application/json', 'Content-Type': 'application/json'}, headers);
   const r = await fetch(url, {method: 'POST', credentials: 'include', headers: h,
                               body: JSON.stringify(body), redirect: 'error'});
+  const raw = await ppRead(r);
   let j = null;
-  try { j = await r.json(); } catch (e) {}
+  try { j = JSON.parse(new TextDecoder().decode(raw)); } catch (e) {}
   return {status: r.status, json: j};
 }"""
 
@@ -313,7 +314,7 @@ _POST_JS = """async ({url, body, headers}) => {
 def _post(page, url: str, body: dict) -> dict:
     if not is_safe_url(url):
         raise ValueError("refusing an off-host request")
-    res = page.evaluate(_POST_JS, {"url": url, "body": body, "headers": APP_HEADERS})
+    res = intake.evaluate(page, _POST_JS, {"url": url, "body": body, "headers": APP_HEADERS})
     status = res.get("status")
     if status in (401, 403):
         raise SessionExpired("Fidelity answered %s" % status)
@@ -467,14 +468,17 @@ def fetch_pdf(page, item_id: str, doc_type: str, acct_type: str) -> bytes:
     content = dd.get("content") or ""
     if not content:
         return b""
-    raw = _b64.b64decode(content)
-    if raw[:4] != b"%PDF" and str(dd.get("deflated", "")).upper().startswith("Y"):
-        for wbits in (15, -15, 31):
-            try:
-                raw = _zlib.decompress(raw, wbits)
-                break
-            except _zlib.error:
-                continue
+    try:
+        raw = intake.decode(content)
+        if raw[:4] != b"%PDF" and str(dd.get("deflated", "")).upper().startswith("Y"):
+            for wbits in (15, -15, 31):
+                try:
+                    raw = intake.inflate(raw, wbits)
+                    break
+                except _zlib.error:
+                    continue
+    except intake.TooLarge:
+        return b""
     return raw
 
 

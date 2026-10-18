@@ -30,7 +30,6 @@ refined against the real DOM via paperpull amex diagnose.
 # Site layer verified working against the live site: 2026-08
 from __future__ import annotations
 
-import base64
 import html as _html
 import logging
 import re
@@ -39,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core import pressing
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import human_date as _human_date
@@ -1011,7 +1011,7 @@ _BLOB_FETCH_JS = r"""async () => {
     const src = f && f.src;
     if (!src) return null;
     const r = await fetch(src);
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await ppRead(r);
     let s = ''; for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
     return btoa(s);
 }"""
@@ -1046,9 +1046,9 @@ def download_by_url(page, url: str, out_path) -> bool:
     try:
         page.wait_for_selector("iframe[src^='blob:'], embed[src^='blob:']", timeout=15000)
         page.wait_for_timeout(1200)
-        b64 = page.evaluate(_BLOB_FETCH_JS)
+        b64 = intake.evaluate(page, _BLOB_FETCH_JS)
         if b64:
-            data = base64.b64decode(b64)
+            data = intake.decode(b64)
             if b"%PDF-" in data[:1024]:
                 out_path.write_bytes(data)
                 return True

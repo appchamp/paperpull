@@ -153,7 +153,6 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import io
 import json
 import logging
 import re
@@ -165,6 +164,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import unquote, urlencode, urlsplit
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core import pressing, receipt_pdf
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.redact import private_words, redact, set_private_words  # noqa: F401  (re-exported)
@@ -1130,8 +1131,8 @@ _RESULT_JS = r"""async () => {
   const s = window.__pp || {blobs: [], opened: []};
   const out = {blobs: s.blobs.map(b => ({type: b.type, size: b.size, url: b.url})), opened: s.opened.slice(), b64: ''};
   if (s.blobs.length === 1) {
-    const buf = await s.blobs[0].blob.arrayBuffer();
-    let bin = ''; const bytes = new Uint8Array(buf); for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    const bytes = await ppBlob(s.blobs[0].blob);
+    let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     out.b64 = btoa(bin);
   }
   return out;
@@ -1149,8 +1150,8 @@ def pdf_of(answer) -> bytes:
     if not isinstance(text, str) or not text:
         return b""
     try:
-        data = base64.b64decode(text, validate=True)
-    except (binascii.Error, ValueError):
+        data = intake.decode(text, validate=True)
+    except (binascii.Error, ValueError, intake.TooLarge):
         return b""
     return data if data[:5] == b"%PDF-" else b""
 
@@ -1188,8 +1189,8 @@ def accept(pdfs: list, blob_result: dict, *, new_pages: int, popups: int, downlo
     if any(u != b.get("url") for u in opened) or len(opened) > 1:
         return b"", "the page asked to open something other than the blob"
     try:
-        held = base64.b64decode((blob_result or {}).get("b64") or "", validate=True)
-    except (binascii.Error, ValueError):
+        held = intake.decode((blob_result or {}).get("b64") or "", validate=True)
+    except (binascii.Error, ValueError, intake.TooLarge):
         return b"", "the blob's bytes could not be read"
     if held != data:
         return b"", "the blob does not hold the statement answer's bytes"
@@ -1609,9 +1610,7 @@ def pdf_text(data: bytes, pages: int = 5) -> str:
     """The text of the first pages of a PDF held in memory, or "". Never
     logged, never written."""
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(data))
-        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)]))
+        return whole_characters("\n".join(pdf_reader.page_texts(data, max(1, pages))))
     except Exception:
         return ""
 
@@ -1753,7 +1752,7 @@ def _press_for_statement(page, el, entry: Entry, entries: List[Entry], out_path:
             except ListStopped:
                 decoded.append((matches, b""))
         try:
-            result = page.evaluate(_RESULT_JS) or {}
+            result = intake.evaluate(page, _RESULT_JS) or {}
         except Exception:
             result = {}
     except (SessionExpired, OtpRequired):

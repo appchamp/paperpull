@@ -65,6 +65,7 @@ import re
 from typing import List, Optional
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import escape_for_locator
 
@@ -282,8 +283,9 @@ _FETCH_JS = """async ({url, want}) => {
              'alightpersonsessiontoken': sessionStorage.getItem('alightPersonSessionToken') || '',
              'alightrequestheader': sessionStorage.getItem('alightRequestHeader') || ''};
   const r = await fetch(url, {credentials: 'include', headers: h, redirect: 'error'});
+  const raw = await ppRead(r);
   let j = null;
-  try { j = await r.json(); } catch (e) {}
+  try { j = JSON.parse(new TextDecoder().decode(raw)); } catch (e) {}
   if (want === 'items') {
     const spm = (j && j.spm) || {};
     return {status: r.status, total: spm.unfilteredMsgCount, items: spm.items || null};
@@ -299,7 +301,7 @@ _FETCH_JS = """async ({url, want}) => {
 def _api(page, url: str, want: str) -> dict:
     if not is_safe_url(url):
         raise ValueError("refusing an off-host request")
-    res = page.evaluate(_FETCH_JS, {"url": url, "want": want})
+    res = intake.evaluate(page, _FETCH_JS, {"url": url, "want": want})
     if res.get("status") in (401, 403):
         raise SessionExpired("My Account answered %s" % res["status"])
     return res
@@ -356,7 +358,6 @@ def resolve_item(page, title: str, date: str, occurrence: int = 0) -> Optional[d
 
 
 def fetch_pdf(page, item_id: str, client_id: str) -> bytes:
-    import base64
     from urllib.parse import quote
     if not re.fullmatch(r"[0-9a-f]{24}", item_id or ""):
         raise ValueError("mailboxItemId does not look like one")
@@ -368,7 +369,7 @@ def fetch_pdf(page, item_id: str, client_id: str) -> bytes:
     if res.get("status") != 200 or not res.get("b64"):
         log.info("content answered %s with %d chars", res.get("status"), len(res.get("b64") or ""))
         return b""
-    return strip_print_stream_prefix(base64.b64decode(res["b64"]))
+    return strip_print_stream_prefix(intake.decode(res["b64"]))
 
 
 def strip_print_stream_prefix(data: bytes) -> bytes:

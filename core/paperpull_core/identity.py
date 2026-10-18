@@ -547,11 +547,12 @@ def distinguish(path, expect: Optional[Identity], others=(), *,
 
 
 def _text_of(path, pages: int) -> str:
+    """The text of a PDF's first pages, read within the limits of a PDF's
+    time and memory, and "" when it cannot be had or a limit was passed,
+    which leaves the document unreadable rather than refused."""
+    from . import pdf_reader
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(str(Path(path)))
-        return whole_characters("\n".join((pg.extract_text() or "")
-                                                for pg in reader.pages[:max(1, pages)]))
+        return whole_characters("\n".join(pdf_reader.page_texts(Path(path), max(1, pages))))
     except Exception:
         return ""
 

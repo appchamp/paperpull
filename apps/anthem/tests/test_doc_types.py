@@ -430,10 +430,11 @@ def test_the_lookback_window_is_capped_at_24_months():
 def test_the_pdf_is_taken_from_the_download_envelopes_file_field():
     """The download returns {result:{data:{file: <base64 PDF>}}}, not raw bytes.
     The download JS must extract result.data.file and Python must base64-decode
-    and verify %PDF before writing."""
+    it, within the core's limit (intake.decode), and verify %PDF before
+    writing."""
     src = (Path(__file__).resolve().parents[1] / "anthem_site.py").read_text(encoding="utf-8")
     assert "result.data.file" in src or "result && j.result.data && j.result.data.file" in src
-    assert "base64.b64decode" in src
+    assert "intake.decode" in src
     assert 'body.startswith(b"%PDF")' in src
 
 

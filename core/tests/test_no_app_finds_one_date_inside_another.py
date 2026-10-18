@@ -109,6 +109,20 @@ SCRIPT_TEXTS = re.compile(
     r"\.(?:includes|indexOf|lastIndexOf|startsWith|endsWith|search|match)\(\s*(['\"])(?P<t>.*?)\1\s*\)")
 RE_TESTS = {"search", "match", "findall", "finditer", "fullmatch"}
 SCRIPTS = {"evaluate", "evaluate_handle", "wait_for_function"}
+# The core's own evaluate, intake.evaluate(target, js, arg), which runs js
+# with arg in target behind the core's reader of a body, so its script and
+# value are each one place further on than in Playwright's.
+CORES_EVALUATE = {"intake", "_intake"}
+# Where intake.evaluate hands every caller's script on, judged at each
+# caller rather than here, where the script is still to be put together.
+PASSES_SCRIPTS_ON = {("core/paperpull_core/intake.py", "evaluate")}
+
+
+def _shift(func) -> int:
+    """How many places further on a call's script and value are, 1 for
+    intake.evaluate and 0 for any of Playwright's."""
+    return int(isinstance(func, ast.Attribute) and func.attr == "evaluate"
+               and isinstance(func.value, ast.Name) and func.value.id in CORES_EVALUATE)
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
@@ -897,6 +911,8 @@ class Census:
             sites.append({"kind": kind, "fn": fn, "node": node, "needle": needle})
         L = self.labels
         for fn in self.fns.values():
+            if (fn.mod.rel, fn.qual) in PASSES_SCRIPTS_ON:
+                continue
             for node in own_nodes(fn):
                 if isinstance(node, ast.Compare):
                     left = node.left
@@ -924,7 +940,8 @@ class Census:
                 if name in PW_TEXT and node.args and not exact and L(fn, node.args[0]) & (DATEISH | {"RX"}):
                     site(name, fn, node, node.args[0])
                 # a selector, or a script's own text, with a date written in
-                written = node.args[0] if node.args else None
+                shift = _shift(f)
+                written = node.args[shift] if len(node.args) > shift else None
                 if written is not None and L(fn, written) & (DATEISH | {"HASDATE"}):
                     text = self._literal_text(fn, written)
                     if name in SELECTOR_CALLS and SELECTOR_SUBSTRING.search(text):
@@ -941,8 +958,9 @@ class Census:
                     if not (is_re and len(node.args) < 2) and hay is not None \
                             and "RX" in L(fn, pat) and "PAGE" in L(fn, hay):
                         site("re." + name, fn, node, pat)
-                if name in SCRIPTS and len(node.args) > 1 and L(fn, node.args[1]) & (DATEISH | {"HASDATE"}):
-                    site("script", fn, node, node.args[1])
+                if name in SCRIPTS and len(node.args) > 1 + shift \
+                        and L(fn, node.args[1 + shift]) & (DATEISH | {"HASDATE"}):
+                    site("script", fn, node, node.args[1 + shift])
         return sites
 
     def _literal_text(self, fn, node, depth=0):
@@ -1269,7 +1287,8 @@ class Census:
         hands a page script a date. A script that arrives through a
         parameter is taken from each caller."""
         fn, node = s["fn"], s["node"]
-        js, value = node.args[0], node.args[1]
+        shift = _shift(node.func)
+        js, value = node.args[shift], node.args[1 + shift]
         text = self._script_text(fn, js)
         if text is not None:
             return [(fn, text, value)]

@@ -157,6 +157,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import dismiss_overlays as _dismiss_overlays
 
@@ -2344,7 +2345,6 @@ def _bare(text: str) -> str:
 def _pdf_in_json(value) -> Optional[bytes]:
     """The PDF carried inside a JSON answer as base64 text, found by what it
     starts with rather than by the field's name, or None."""
-    import base64
     for text in _json_texts(value):
         text = _bare(text)
         if not text.startswith("JVBERi0") or len(text) > 60_000_000:
@@ -2352,7 +2352,7 @@ def _pdf_in_json(value) -> Optional[bytes]:
         try:
             # Strict, so text that only starts like a PDF is not decoded
             # into something that also only starts like one.
-            data = base64.b64decode(text, validate=True)
+            data = intake.decode(text, validate=True)
         except Exception:
             continue
         if data[:5] == b"%PDF-" and b"%%EOF" in data[-2048:]:
@@ -2460,7 +2460,10 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
                                           **_json_answer_shape(answer)))
                     return
                 try:
-                    body = res.body()
+                    body = intake.body(res)
+                except intake.TooLarge:
+                    # Larger than a document may be, and never asked again.
+                    body = b""
                 except Exception:
                     body = b""
                     got["refetch"] = url
@@ -2503,7 +2506,7 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
                 # browser's cookies wherever it led.
                 resp = page.context.request.get(got.pop("refetch"), max_redirects=0,
                                                 timeout=60000)
-                body = resp.body() if resp.ok else b""
+                body = intake.body(resp) if resp.ok else b""
                 if _is_document(body, zip_ok=True):
                     out_path.write_bytes(body)
                     return True

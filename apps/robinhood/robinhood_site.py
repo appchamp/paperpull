@@ -23,7 +23,6 @@ collect_documents_via_api matcher against Diagnostics/.
 # Site layer verified working against the live site: 2026-08
 from __future__ import annotations
 
-import base64
 import html as _html
 import json
 import logging
@@ -32,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.controls import click_next_page as _click_next_page
@@ -519,7 +520,7 @@ _BLOB_FETCH_JS = r"""async () => {
     const f = document.querySelector("iframe[src^='blob:']");
     if (!f || !f.src) return null;
     const r = await fetch(f.src);
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await ppRead(r);
     let s = ''; for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
     return btoa(s);
 }"""
@@ -556,9 +557,9 @@ def download_by_url(page, url: str, out_path) -> bool:
     try:
         page.wait_for_selector("iframe[src^='blob:']", timeout=15000)
         page.wait_for_timeout(1200)
-        b64 = page.evaluate(_BLOB_FETCH_JS)
+        b64 = intake.evaluate(page, _BLOB_FETCH_JS)
         if b64:
-            data = base64.b64decode(b64)
+            data = intake.decode(b64)
             if b"%PDF-" in data[:1024]:
                 out_path.write_bytes(data)
                 return True
@@ -1323,7 +1324,7 @@ def _click_and_capture(page, control, title: str, out_path, label: str = ""):
         # is the one fetch path in Playwright that returns raw bytes without
         # a download event, which is the whole point.
         resp = page.request.get(url, max_redirects=0, timeout=60000)
-        data = resp.body() if resp.ok else b""
+        data = intake.body(resp) if resp.ok else b""
     except Exception as e:
         log.info("fetching the PDF for %r failed: %s", title, e)
         return False
@@ -1455,9 +1456,7 @@ def _first_page_text(path) -> str:
     """The first page's text, or "" when it cannot be read. A period
     printed further in, beside a list of trades, is not the statement's own."""
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(str(path))
-        return whole_characters(reader.pages[0].extract_text() or "") if reader.pages else ""
+        return whole_characters((pdf_reader.page_texts(path, 1) or [""])[0])
     except Exception:
         return ""
 

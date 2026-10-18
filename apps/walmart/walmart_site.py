@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import pdf_reader
 from paperpull_core import page_check as _page_check
 from paperpull_core.models import IN_STORE, ONLINE, Item, Purchase
 from paperpull_core.urls import is_safe_url as _host_allows
@@ -1245,11 +1246,14 @@ def pdf_facts(path, purchase: Purchase, page_url: str = "", counted: int = 0) ->
     its words. `counted` is the count beside the order page's subtotal."""
     facts: dict = {}
     try:
-        from pypdf import PdfReader
         facts["kilobytes"] = Path(path).stat().st_size // 1024
-        reader = PdfReader(str(path))
-        facts["pages"] = len(reader.pages)
-        text = whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:5]))
+        got = pdf_reader.read(path, text_pages=5)
+        if not got.opened:
+            raise pdf_reader.Unread(got.over_limit or got.error, got.kind)
+        facts["pages"] = got.pages
+        if got.text_error:
+            raise pdf_reader.Unread(got.text_error, got.kind)
+        text = whole_characters("\n".join(got.texts))
         low = text.lower()
         squashed = re.sub(r"\s+", "", low)
         number = re.sub(r"\D", "", purchase.order_number or "")
@@ -1273,7 +1277,7 @@ def pdf_facts(path, purchase: Purchase, page_url: str = "", counted: int = 0) ->
                 r"\b" + r"\s+".join(map(re.escape, w.split())) + r"\b", low)],
         })
     except Exception as e:
-        facts["error"] = type(e).__name__
+        facts["error"] = getattr(e, "kind", "") or type(e).__name__
     if page_url:
         facts["printed_from_this_order"] = bool(
             purchase.order_number and purchase.order_number in page_url)

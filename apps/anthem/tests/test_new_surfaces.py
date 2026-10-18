@@ -205,10 +205,11 @@ def test_the_new_navigations_only_target_host_checked_urls():
 
 def test_a_letter_body_cannot_phone_home_when_rendered():
     """A letter body is rendered to PDF with all network blocked, so an embedded
-    tracking pixel or remote resource cannot load."""
+    tracking pixel or remote resource cannot load. It is printed by the
+    core's printed_pdf, which reads the PDF within the core's limit."""
     assert "def render_html_to_pdf" in SRC
     assert 'r.abort()' in SRC
-    assert 'Page.printToPDF' in SRC
+    assert 'printed_pdf(sess, PRINT_TO_PDF_OPTIONS)' in SRC
 
 
 # -- robustness: a failed listing must not read as an empty archive ----------

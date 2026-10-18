@@ -39,6 +39,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.characters import whole_json
@@ -364,7 +365,7 @@ _PDF_JS = """async (a) => {
   H['Accept'] = 'application/pdf';
   const r = await fetch('/api/document/pdf/' + a.t + '/' + a.id, {headers: H, credentials: 'include'});
   const ct = r.headers.get('content-type') || '';
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   let s = '';
   for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
   return {status: r.status, ct: ct, b64: btoa(s)};
@@ -554,7 +555,6 @@ def download_document(page, doc_id: str, out_path) -> bool:
     knows, so the request cannot be pointed anywhere else. Raises SessionExpired
     when myPay answers with a page instead of a document.
     """
-    import base64
     parsed = parse_doc_id(doc_id)
     if not parsed:
         log.error("refusing a document identity that is not a known type and date")
@@ -569,7 +569,7 @@ def download_document(page, doc_id: str, out_path) -> bool:
                     DOCUMENT_TYPES.get(type_id, type_id), date)
         return False
     try:
-        res = page.evaluate(_PDF_JS, {"t": type_id, "id": ident}) or {}
+        res = intake.evaluate(page, _PDF_JS, {"t": type_id, "id": ident}) or {}
     except Exception as e:
         log.warning("fetch failed: %s", str(e).splitlines()[0][:100])
         return False
@@ -581,7 +581,7 @@ def download_document(page, doc_id: str, out_path) -> bool:
         log.warning("fetch returned %s", status)
         return False
     try:
-        body = base64.b64decode(res.get("b64") or "")
+        body = intake.decode(res.get("b64") or "")
     except Exception:
         log.warning("could not decode the response")
         return False

@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Iterable, NamedTuple, Optional
 
 from . import browser as _launcher
+from . import intake as _intake
+from . import pdf_reader as _pdf_reader
 from .characters import whole_characters
 from .identity import MIN_TEXT, amount_variants, date_variants, on_its_own
 from .models import ValidationResult
@@ -299,8 +301,7 @@ def print_page_to_pdf(page, out_path: Path) -> None:
     try:
         session = page.context.new_cdp_session(page)
         try:
-            result = session.send("Page.printToPDF", dict(PRINT_TO_PDF_OPTIONS))
-            data = base64.b64decode(result["data"])
+            data = printed_pdf(session, PRINT_TO_PDF_OPTIONS)
         finally:
             try:
                 session.detach()
@@ -314,6 +315,37 @@ def print_page_to_pdf(page, out_path: Path) -> None:
             page.emulate_media(media="print" if before == "print" else "null")
         except Exception:
             pass
+
+
+def printed_pdf(session, options) -> bytes:
+    """The PDF Page.printToPDF makes of a page, over the CDP `session`, read
+    from the browser a piece at a time and refused past the limit
+    (intake.DOCUMENT_BYTES), the way Playwright's own page.pdf() reads it.
+    A page can lay itself out as long as it likes, and asked for whole the
+    PDF came back as one message of any size. Raises TooLarge."""
+    result = session.send("Page.printToPDF", dict(options, transferMode="ReturnAsStream"))
+    handle = result.get("stream")
+    if not handle:
+        # A browser that answers with the data itself.
+        return _intake.decode(result.get("data") or "")
+    parts, got = [], 0
+    try:
+        while True:
+            piece = session.send("IO.read", {"handle": handle, "size": 1 << 20})
+            data = piece.get("data") or ""
+            chunk = base64.b64decode(data) if piece.get("base64Encoded") else data.encode("latin-1")
+            got += len(chunk)
+            if got > _intake.DOCUMENT_BYTES:
+                raise _intake.refuse("The printed page", size=got)
+            parts.append(chunk)
+            if piece.get("eof"):
+                break
+    finally:
+        try:
+            session.send("IO.close", {"handle": handle})
+        except Exception:
+            pass
+    return b"".join(parts)
 
 
 def print_html_to_pdf(page, html: str, out_path: Path) -> None:
@@ -939,38 +971,65 @@ def open_zip(zip_path, set_aside=None) -> OpenedZip:
     The PDF is written to a temporary file and put in place only once it
     is whole. Any failure leaves the archive kept, never half a PDF under
     a document's name, and never the only copy of the answer gone.
+
+    An archive is kept the same way, unopened, when it is past a limit
+    (intake). Larger than a document may be, listing more files than
+    ZIP_MEMBERS, a file packed any way but stored or deflated (bzip2 and
+    LZMA unpack a whole block at once, however large), or its PDF larger
+    than a document may be or unpacking to more than ZIP_RATIO times its
+    packed size. The PDF is counted as it is copied too, whatever the
+    archive says of it.
     """
     import os
-    import shutil
     import tempfile
     import zipfile
 
     zip_path = Path(zip_path)
     tmp = None
     pdfs = others = 0
+    # Why the archive is past a limit, in words, or "". Kept only once the
+    # archive is closed, for the same reason as above.
+    refused = _archive_too_big(zip_path)
     try:
         # Written out and the archive CLOSED before anything is moved,
         # because on Windows an open file cannot be replaced (WinError 32).
-        with zipfile.ZipFile(zip_path) as z:
-            files = [i for i in z.infolist()
+        with (zipfile.ZipFile(zip_path) if not refused else _Nothing()) as z:
+            listed = z.infolist()
+            files = [i for i in listed
                      if not i.is_dir() and not i.filename.startswith("__MACOSX/")]
+            if len(listed) > _intake.ZIP_MEMBERS:
+                refused = ("The downloaded archive listed %d files, more than PaperPull "
+                           "opens" % len(listed), "ZIP_MEMBERS", "lets an archive list more files")
+            elif any(i.compress_type not in _ZIP_METHODS for i in files):
+                refused = ("The downloaded archive was packed in a way PaperPull does not "
+                           "open, only stored or deflated", "", "")
             found = []
-            for info in files:
+            for info in files if not refused else ():
                 with z.open(info) as src:
                     if _pdf_member(info.filename, src.read(1024)):
                         found.append(info)
             pdfs, others = len(found), len(files) - len(found)
             if pdfs == 1 and not others:
+                refused = _unpacks_too_far(found[0])
+            if pdfs == 1 and not others and not refused:
                 fd, name = tempfile.mkstemp(prefix=".opening-", suffix=".tmp",
                                             dir=str(zip_path.parent))
                 tmp = Path(name)
                 with os.fdopen(fd, "wb") as dst, z.open(found[0]) as src:
-                    shutil.copyfileobj(src, dst)
+                    whole = _copy_counted(src, dst, min(found[0].file_size,
+                                                        _intake.DOCUMENT_BYTES))
+                if not whole:
+                    _discard(tmp)
+                    tmp = None
+                    refused = ("The PDF in the downloaded archive unpacked to more than "
+                               "it said", "", "")
     except Exception as e:
         log.warning("could not open the archive %s: %s", zip_path.name, e)
         _discard(tmp)
         return _kept(zip_path, set_aside, "The downloaded archive could not be opened",
                      "the archive could not be opened")
+    if refused:
+        return _over_limit(zip_path, set_aside, *refused)
     if tmp is None:
         if not pdfs:
             what, failure = "The downloaded archive held no PDF", "the archive held no pdf"
@@ -992,6 +1051,102 @@ def open_zip(zip_path, set_aside=None) -> OpenedZip:
                      "The PDF in the downloaded archive could not be put in place",
                      "the archive could not be opened")
     return OpenedZip(pdf=zip_path)
+
+
+# The ways of packing a file that are read a piece at a time with a bound
+# on what each piece unpacks to.
+_ZIP_METHODS = (0, 8)  # zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED
+
+
+class _Nothing:
+    """An archive that is not opened, listing nothing."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    @staticmethod
+    def infolist():
+        return []
+
+
+def _archive_too_big(path: Path) -> str:
+    """Why an archive is not even listed, as (words, limit, what raising it
+    does), or "". Larger than a
+    document may be, or its own last record saying it lists more files
+    than ZIP_MEMBERS. zipfile builds an entry for every file listed before
+    anything can count them, and a 100 MB listing of two million names took
+    gigabytes to build, so the count is read from that record first."""
+    size = _intake.size_of(path)
+    if size > _intake.DOCUMENT_BYTES:
+        return ("The downloaded archive was larger than a document may be (%s)"
+                % _intake._mb(size), "DOCUMENT_BYTES", "lets a larger one in")
+    import zipfile
+    try:
+        with open(path, "rb") as f:
+            # The record at the end of every ZIP, the ZIP64 one included,
+            # read by zipfile's own reader of it.
+            end = zipfile._EndRecData(f)
+        listed = int(end[zipfile._ECD_ENTRIES_TOTAL]) if end else 0
+        listing = int(end[zipfile._ECD_SIZE]) if end else 0
+    except Exception:
+        # Not readable here means zipfile will say why itself.
+        return ""
+    # zipfile reads entries until the listing's size is used up, whatever
+    # the count says, so the size is held as well, at room for every file
+    # allowed with a long name.
+    if listed > _intake.ZIP_MEMBERS:
+        return ("The downloaded archive listed %d files, more than PaperPull opens" % listed,
+                "ZIP_MEMBERS", "lets an archive list more files")
+    if listing > _intake.ZIP_MEMBERS * _LISTING_PER_FILE:
+        return ("The downloaded archive's list of files was longer than PaperPull opens",
+                "ZIP_MEMBERS", "lets an archive list more files")
+    return ""
+
+
+# Room in an archive's listing for one file, its fixed 46 bytes and a long
+# name and extra fields.
+_LISTING_PER_FILE = 2048
+
+
+def _unpacks_too_far(info):
+    """Why the one PDF in an archive is not unpacked, as (words, limit, what
+    raising it does), or ""."""
+    if info.file_size > _intake.DOCUMENT_BYTES:
+        return ("The PDF in the downloaded archive was larger than a document may be "
+                "(%s)" % _intake._mb(info.file_size), "DOCUMENT_BYTES", "lets a larger one in")
+    if info.file_size > _intake.ZIP_RATIO_FROM and \
+            info.file_size > _intake.ZIP_RATIO * max(1, info.compress_size):
+        return ("The PDF in the downloaded archive unpacks to more than %d times its "
+                "packed size" % _intake.ZIP_RATIO, "ZIP_RATIO", "lets a file unpack further")
+    return ""
+
+
+def _copy_counted(src, dst, limit: int) -> bool:
+    """Copy `src` to `dst` a piece at a time, and False once more than
+    `limit` bytes have come, with no more read."""
+    got = 0
+    while True:
+        piece = src.read(min(1 << 20, limit - got + 1))
+        if not piece:
+            return True
+        got += len(piece)
+        if got > limit:
+            return False
+        dst.write(piece)
+
+
+def _over_limit(path: Path, folder, what: str, limit: str = "", gives: str = "") -> OpenedZip:
+    """An archive past a limit, said once and kept whole like any archive
+    that is not opened, with which limit it met and where it is raised."""
+    hint = _intake.raising(limit, gives) if limit else ""
+    log.warning("%s, so it was not opened. %s", what, hint)
+    print(("  %s, so it was not opened. %s" % (what, hint)).rstrip())
+    kept = _kept(path, folder, what, "the archive was over a limit")
+    # An app prints the reason and a full stop after it.
+    return kept._replace(reason=kept.reason + ". " + hint.rstrip(".")) if hint else kept
 
 
 def _discard(path) -> None:
@@ -1052,6 +1207,9 @@ def _same_archive(a: Path, b: Path) -> bool:
         return sorted((i.filename, i.file_size, i.CRC) for i in z.infolist() if not i.is_dir())
 
     try:
+        if _archive_too_big(a) or _archive_too_big(b):
+            # Not listed at all, for the reason open_zip did not list it.
+            return filecmp.cmp(str(a), str(b), shallow=False)
         with zipfile.ZipFile(a) as za, zipfile.ZipFile(b) as zb:
             return listing(za) == listing(zb)
     except Exception:
@@ -1062,10 +1220,13 @@ def _same_archive(a: Path, b: Path) -> bool:
 
 
 def save_download(download, out_path: Path) -> None:
-    """Save a Playwright download event directly to its final path."""
+    """Save a Playwright download event directly to its final path.
+
+    One larger than a document may be is never put there, and raises
+    TooLarge (intake.save_download_as)."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    download.save_as(str(out_path))
+    _intake.save_download_as(download, out_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1075,11 +1236,10 @@ def save_download(download, out_path: Path) -> None:
 def pdf_text(path: Path) -> str:
     """Every page's text, newline-joined. Empty on any failure, never raises,
     because a caller reparsing hundreds of receipts wants to skip one bad
-    file rather than stop."""
+    file rather than stop. Read within the limits of a PDF's time and
+    memory (pdf_reader), and empty when one is passed."""
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(str(path))
-        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages))
+        return whole_characters("\n".join(_pdf_reader.page_texts(path)))
     except Exception:
         return ""
 
@@ -1113,7 +1273,13 @@ def validate_pdf(path: Path, min_bytes: int = 3000,
     never counts, from the caller or from an app's own list. See
     _provider_words for why. An image-based PDF with little text is NOT
     rejected for missing tokens, and neither is a scan whose few words
-    include the provider's name, which the name alone used to pass."""
+    include the provider's name, which the name alone used to pass.
+
+    The PDF is read within the limits of a PDF's size, time and memory
+    (pdf_reader), and one past a limit does not validate, with
+    `over_limit` saying why. Like any PDF that does not validate, it is
+    the caller's to keep where it keeps those, and it is never deleted
+    here."""
     path = Path(path)
     if not path.exists():
         return ValidationResult(False, "File does not exist")
@@ -1131,22 +1297,24 @@ def validate_pdf(path: Path, min_bytes: int = 3000,
     if PDF_MAGIC not in head[:64]:
         return ValidationResult(False, "Missing %PDF signature", size_bytes=size)
 
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(str(path))
-        pages = len(reader.pages)
-    except Exception as e:
-        return ValidationResult(False, f"pypdf could not open file: {e}", size_bytes=size)
+    tokens = [t for t in (expect_tokens or ()) if t]
+    read = _pdf_reader.read(path, text_pages=5 if tokens else 0)
+    if read.over_limit:
+        return ValidationResult(False, read.over_limit, size_bytes=size,
+                                over_limit=read.over_limit)
+    if not read.opened:
+        return ValidationResult(False, f"pypdf could not open file: {read.error}",
+                                size_bytes=size)
+    pages = read.pages
     if pages < 1:
         return ValidationResult(False, "PDF has no pages", size_bytes=size, page_count=0)
 
     token_found = False
-    tokens = [t for t in (expect_tokens or ()) if t]
-    if tokens:
+    if tokens and not read.text_error:
+        # A page whose text could not be read leaves the text unchecked,
+        # as it always did, since that never fails an otherwise good PDF.
         try:
-            text = ""
-            for pg in reader.pages[:5]:
-                text += whole_characters(pg.extract_text() or "")
+            text = whole_characters("".join(read.texts))
             text_lower = text.lower()
             # POS receipts render with per-letter spacing ("T a r g e t"),
             # so also match against whitespace-squashed text.

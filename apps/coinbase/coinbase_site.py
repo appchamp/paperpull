@@ -125,6 +125,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import parse_qsl, urlsplit
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core import pressing
 from paperpull_core import redirects
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
@@ -1059,7 +1061,10 @@ def _fetch_tax_pdf(page, title: str, out_path: Path, trace: Optional[list],
         return False
     if trace is not None:
         trace.append({"note": "fetched", "host": host, "status": resp.status})
-    body = resp.body() if resp.ok else b""
+    try:
+        body = intake.body(resp) if resp.ok else b""
+    except intake.TooLarge:
+        return False
     if body[:5] != b"%PDF-":
         return False
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1799,10 +1804,7 @@ def _card_pdf_ok(body: bytes, iso: str) -> str:
     if not body or body[:5] != b"%PDF-":
         return "the answer is not a PDF"
     try:
-        import io
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(body))
-        text = whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages))
+        text = whole_characters("\n".join(pdf_reader.page_texts(body)))
     except Exception:
         text = ""
     flat = re.sub(r"\s+", " ", text)
@@ -2009,7 +2011,7 @@ def _take_card_statement(page, label: str, iso: str, out_path: Path, trace: Opti
             note("the statement's address answered", status=status)
             return False
         try:
-            body = resp.body()
+            body = intake.body(resp)
         except Exception as e:
             note("the statement's answer could not be read", error=type(e).__name__)
             return False

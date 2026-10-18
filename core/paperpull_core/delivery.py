@@ -68,7 +68,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import capture, shared_folder
+from . import capture, intake, shared_folder
 from .identity import Identity, REFUSED, UNCHECKED, Verdict, distinguish
 
 log = logging.getLogger("paperpull.delivery")
@@ -94,6 +94,8 @@ NOTHING = "nothing"        # the trigger fired and nothing arrived
 NOT_A_PDF = "not a pdf"    # something arrived and it was an error page
 WRONG = "wrong document"   # it arrived, it is a PDF, it is not the one asked for
 NOT_PLACED = "not placed"  # it arrived and was checked, and the folder refused it
+TOO_LARGE = "too large"    # it was larger than a document may be, and was not kept
+TOO_SLOW = "too slow"      # its download did not finish in time, and was cancelled
 
 PDF_MAGIC = b"%PDF-"
 
@@ -189,6 +191,12 @@ class Delivery:
             return ("the document arrived and was checked, and the folder "
                     "would not take it, which a sync client or a virus "
                     "scanner holding the file looks like")
+        if self.outcome == TOO_LARGE:
+            return ("what arrived was larger than PaperPull takes in for a "
+                    "document, so it was not kept")
+        if self.outcome == TOO_SLOW:
+            return ("the download did not finish in the time PaperPull gives "
+                    "one, so it was cancelled")
         return ("the request was made and nothing came back, by any of the "
                 "ways this provider might have answered")
 
@@ -207,6 +215,11 @@ class _Armed:
         self.is_safe_url = is_safe_url or (lambda u: False)
         self.body = b""
         self.download = None
+        # What the download's own file came to once it finished, its path,
+        # or "" when it failed. Missing while it is still arriving.
+        self.finished: dict = {}
+        # Whether an answer read in flight was larger than a document may be.
+        self.too_large = False
         self.new_pages: list = []
         self.before: set = set()
         self.start_url = ""
@@ -270,10 +283,19 @@ class _Armed:
 
     def _on_download(self, download):
         try:
-            if self.download is None:
-                self.download = download
+            if self.download is not None:
+                return
+            self.download = download
         except Exception:
-            pass
+            return
+        # Waited for here, in the listener's own fiber, so the capture can
+        # give up on a download that never finishes and cancel it, rather
+        # than wait in save_as for as long as the provider keeps sending
+        # (intake.waits_for, Meijer's way since #42).
+        try:
+            self.finished[id(download)] = download.path() or ""
+        except Exception:
+            self.finished[id(download)] = ""
 
     def _on_page(self, page):
         try:
@@ -299,9 +321,11 @@ class _Armed:
                         return
                 except Exception:
                     return
-            body = response.body()
+            body = intake.body(response)
             if body[:5] == PDF_MAGIC:
                 self.body = body
+        except intake.TooLarge:
+            self.too_large = True
         except Exception:
             pass
 
@@ -395,6 +419,8 @@ def deliver(page, request: DocumentRequest, out_path, *, is_safe_url,
 
     note("download", **request.describe())
 
+    said = intake.refused_count()
+    slow = intake.timed_out_count()
     mechanism, armed, rejected = _acquire(page, request, staged, is_safe_url,
                                           dl_dir, settle_ms, note)
     if not mechanism:
@@ -403,7 +429,16 @@ def deliver(page, request: DocumentRequest, out_path, *, is_safe_url,
         # no other mechanism produce anything. Reporting that as nothing
         # would lose the difference between a provider that answered with
         # an expired-link page and one that never answered, and those are
-        # different bugs on different days.
+        # different bugs on different days. Larger than a document may be
+        # is a third, and is never asked for again in the same capture.
+        if intake.refused_count() > said:
+            note("verify", outcome="too_large")
+            return Delivery(TOO_LARGE, "", armed=tuple(armed))
+        if intake.timed_out_count() > slow:
+            # Not NOTHING, which RedCard presses for again, and another
+            # press would wait the whole time once more.
+            note("verify", outcome="too_slow")
+            return Delivery(TOO_SLOW, DOWNLOAD, armed=tuple(armed))
         outcome = NOT_A_PDF if rejected else NOTHING
         note("verify", outcome=outcome)
         return Delivery(outcome, rejected[0] if rejected else "",
@@ -421,6 +456,14 @@ def _finish(staged: Path, out_path: Path, expect, strict: bool,
     network or printed from a page, and the only part worth having. A
     document reaches the archive after it has been checked and never
     before."""
+    if intake.over(staged):
+        # Larger than a document may be, however it came. Not kept, and
+        # never read for its identity.
+        size = _size(staged)
+        intake.refuse("The document that arrived", size=size)
+        _clear(staged)
+        note("verify", outcome="too_large", mechanism=mechanism)
+        return Delivery(TOO_LARGE, mechanism, armed=tuple(armed), bytes_len=size)
     if not _looks_like_pdf(staged):
         # A site that answers an expired link with an HTML error page
         # still produces a file, and it still has a plausible size.
@@ -497,6 +540,10 @@ def place(data: bytes, out_path, *, expect: Optional[Identity] = None,
     if not data:
         note("verify", outcome=NOTHING, mechanism=ASK)
         return Delivery(NOTHING, ASK, armed=(ASK,))
+    if len(data) > intake.DOCUMENT_BYTES:
+        intake.refuse("The document the app was handed", size=len(data))
+        note("verify", outcome="too_large", mechanism=ASK)
+        return Delivery(TOO_LARGE, ASK, armed=(ASK,), bytes_len=len(data))
     try:
         shared_folder.write_bytes(staged, data)
     except OSError as e:
@@ -574,11 +621,17 @@ def _acquire(page, request, staged: Path, is_safe_url, dl_dir, settle_ms,
     # trigger rather than as a fallback after it.
     if request.url:
         armed.append(ASK)
+        said = intake.refused_count()
         try:
             body = capture.fetch_pdf(page, request.url, is_safe_url)
         except Exception as e:
             log.info("asking for the document failed: %s", e)
             body = None
+        if not body and intake.refused_count() > said:
+            # Larger than a document may be. Pressing for it as well would
+            # only bring the same answer again.
+            note("download", mechanism=ASK, got=False, too_large=True)
+            return "", armed, rejected
         if body:
             try:
                 shared_folder.write_bytes(staged, body)
@@ -641,7 +694,9 @@ def _read_race(page, watch, staged: Path, is_safe_url, request, rejected):
     for mechanism in order:
         if mechanism == DOWNLOAD and watch.download is not None:
             try:
-                watch.download.save_as(str(staged))
+                if not _finished_in_bounds(page, watch):
+                    continue
+                intake.save_download_as(watch.download, staged)
                 if _looks_like_pdf(staged):
                     yield DOWNLOAD
                     return
@@ -688,6 +743,37 @@ def _read_race(page, watch, staged: Path, is_safe_url, request, rejected):
                 log.info("taking the saved file failed: %s", e)
 
 
+def _finished_in_bounds(page, watch) -> bool:
+    """Whether the download the press started finished in time, and did not
+    grow past the limit while it arrived. One that did not is cancelled
+    (intake.waits_for). Its size once finished is measured as it is saved
+    (intake.save_download_as)."""
+    return intake.waits_for(watch.download, page,
+                            finished=lambda d: id(d) in watch.finished,
+                            partial=lambda: _growing(watch))
+
+
+def _growing(watch) -> list:
+    """The files the browser is writing in the watched folder that were not
+    there, or have changed, since the press. A file another capture left
+    behind is not this download."""
+    if not watch.dl_dir:
+        return []
+    stamps = getattr(watch.before, "stamps", None) or {}
+    out = []
+    for path in intake.partials(watch.dl_dir):
+        name = path.name
+        if name not in watch.before:
+            out.append(path)
+            continue
+        try:
+            if name in stamps and capture._stamp(path) != stamps[name]:
+                out.append(path)
+        except OSError:
+            pass
+    return out
+
+
 def _order(hints) -> list:
     """The reading order, with a route's preference moved to the front.
 
@@ -720,6 +806,14 @@ def summarize(report) -> list:
         said.append("A document arrived by %s and passed its check, and "
                     "could not be moved into the folder. That is the disk, "
                     "not the provider." % (mechanism or "some route"))
+    elif outcome == TOO_LARGE:
+        said.append("What arrived was larger than PaperPull takes in for a "
+                    "document, so it was not kept and not asked for again in "
+                    "this capture.")
+    elif outcome == TOO_SLOW:
+        said.append("The download did not finish in the time PaperPull gives "
+                    "one, so it was cancelled and not asked for again in this "
+                    "capture.")
     elif outcome == NOTHING:
         said.append("The request was made and nothing came back. %s"
                     % (("These were watched, %s." % ", ".join(sorted(armed)))

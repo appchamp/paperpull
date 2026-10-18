@@ -62,7 +62,6 @@ run against Chase's accordions.
 # the account number printed inside each PDF).
 from __future__ import annotations
 
-import base64
 import html as _html
 import json
 import logging
@@ -71,6 +70,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core import controls as _controls
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.controls import click_next_page as _click_next_page
@@ -895,7 +895,7 @@ def _click_row_and_capture(page, ctx, account: str, date: str,
         try:
             with page.expect_download(timeout=25000) as dl:
                 link.click()
-            dl.value.save_as(str(out_path))
+            intake.save_download_as(dl.value, out_path)
             # A tax form that comes as a ZIP holding its PDF is kept for the
             # docs module, which opens it.
             if out_path.exists() and _is_document(out_path.read_bytes()[:5], zip_ok=True):
@@ -932,7 +932,7 @@ def _click_row_and_capture(page, ctx, account: str, date: str,
             b64 = _fetch_as_b64(page, url) if url.startswith("blob:") \
                 else _fetch_as_b64(new_page, url)
             if b64:
-                ok = _write_if_pdf(base64.b64decode(b64), out_path)
+                ok = _write_if_pdf(intake.decode(b64), out_path)
                 if ok:
                     log.info("captured via new tab (%s)", url[:70])
         except Exception as e:

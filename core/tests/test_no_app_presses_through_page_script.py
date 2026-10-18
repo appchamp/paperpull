@@ -125,9 +125,13 @@ REVIEWED_IN_A_FILE = {("gui/static/app.js", "<script>", "click()"): 2}
 
 # Parts of a script that are not followed back, each a value put into a
 # script rather than a script, with the reason, keyed by the file, the
-# function the part is in and what the part is. Every script is followed
-# to the end today, so this is empty.
-READ_AS_DATA = {}
+# function the part is in and what the part is.
+READ_AS_DATA = {
+    ("core/paperpull_core/intake.py", "reading", "_built"):
+        "the script intake.evaluate was handed, which is followed at every call "
+        "of intake.evaluate, with the core's reader of a body (_READ_JS) put in "
+        "front of it, a string written in intake.py and read with every other",
+}
 
 
 def is_test(path: Path) -> bool:
@@ -616,6 +620,11 @@ def scripts(mod: Module):
         name = node.func.attr
         if name in EVALUATORS:
             position, keyword = EVALUATORS[name]
+            if name == "evaluate" and isinstance(node.func.value, ast.Name) \
+                    and node.func.value.id in ("intake", "_intake"):
+                # The core's evaluate, intake.evaluate(target, js, arg), runs
+                # js in target behind the core's reader of a body.
+                position, keyword = 1, "js"
             given = None
             for k in node.keywords:
                 if k.arg == keyword:
