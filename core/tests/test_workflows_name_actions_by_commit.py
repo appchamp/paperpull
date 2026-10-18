@@ -46,6 +46,21 @@ def test_dependabot_proposes_the_actions_updates():
     assert "interval: weekly" in block
 
 
+def test_the_tests_run_on_the_versions_the_windows_package_ships():
+    """tools/release.sh waits for a passing Tests run, so it must be a run
+    of what the package carries, not of whatever PyPI held that day."""
+    text = (REPO / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    install = text.split("- name: Install what every suite needs", 1)[1].split("- name:", 1)[0]
+    lines = [line.strip() for line in install.splitlines() if "pip install" in line]
+    assert lines == [
+        "python -m pip install --upgrade pip",
+        "python -m pip install --require-hashes --only-binary :all: -r packaging/requirements-windows-x64.txt",
+        "python -m pip install pytest",
+        "python -m pip install --no-deps --no-build-isolation ./core",
+    ]
+    assert (REPO / "packaging" / "requirements-windows-x64.txt").is_file()
+
+
 def test_each_package_workflow_checks_the_python_it_installed():
     """The packaged interpreter is asked its version on the runner, after
     the build, against the version the builder names."""

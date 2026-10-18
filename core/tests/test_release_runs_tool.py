@@ -107,6 +107,8 @@ if args[0] == "api":
     sys.exit(0)
 if args[:2] == ["run", "list"]:
     name = args[args.index("--workflow") + 1]
+    if name in scene.get("list_fails", []):
+        sys.exit(4)
     print(json.dumps(scene["runs"].get(name, [])))
     sys.exit(0)
 if args[:2] == ["run", "view"]:
@@ -226,6 +228,16 @@ def test_release_sh_reads_the_run_s_commit_again_before_its_files(tmp_path):
     done, calls, _ = _release(tmp_path, scene)
     assert done.returncode == 1 and "macOS package run 300 is for " + OTHER in done.stderr
     assert _downloads(calls) == ["200"], "the Mac run's files never came down"
+
+
+@needs_bash
+def test_release_sh_says_so_when_gh_cannot_list_the_runs(tmp_path):
+    """Not "no Tests run", which would send a person looking for a run
+    that is there."""
+    done, calls, _ = _release(tmp_path, lambda sha: dict(_good(sha), list_fails=["Tests"]))
+    assert done.returncode == 1 and "gh could not list the Tests runs" in done.stderr
+    assert "no Tests run" not in done.stderr
+    assert _downloads(calls) == []
 
 
 @needs_bash

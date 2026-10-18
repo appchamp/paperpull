@@ -125,13 +125,15 @@ take_run() {
   local name="$1" runs verdict head
   while :; do
     runs="$("$GH" run list --workflow "$name" --commit "$SHA" --limit 50 \
-            --json databaseId,name,headSha,headBranch,event,status,conclusion | tr -d '\r')"
+            --json databaseId,name,headSha,headBranch,event,status,conclusion | tr -d '\r')" \
+      || { echo "gh could not list the $name runs, so nothing was taken. Run this again." >&2; return 1; }
     verdict="$(printf '%s' "$runs" | "$PY" "$RUNS_PY" pick "$name" "$SHA" "$TAG" | tr -d '\r')" \
       || return 1
     [ "$verdict" = "wait" ] || break
     sleep 20
   done
-  head="$("$GH" run view "$verdict" --json headSha --jq .headSha | tr -d '\r')"
+  head="$("$GH" run view "$verdict" --json headSha --jq .headSha | tr -d '\r')" \
+    || { echo "gh could not read $name run $verdict, so nothing was taken. Run this again." >&2; return 1; }
   [ "$head" = "$SHA" ] || { echo "$name run $verdict is for $head, and $TAG is $SHA" >&2; return 1; }
   printf '%s' "$verdict"
 }

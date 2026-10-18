@@ -32,8 +32,11 @@ All notable changes to PaperPull are recorded here. Versioning follows
   `packaging/requirements.in`, the versions the server image carries and
   the test suites run on, so the next packages carry Playwright 1.63.0,
   pypdf 6.19.0, FastAPI 0.141.1 and Uvicorn 0.52.3 where 0.55.0 had taken
-  newer ones. A Mac lock takes only packages that run on macOS 11, the
-  oldest the bundle opens on. The Windows build no longer runs a
+  newer ones. The Tests workflow installs the Windows lock too, so the
+  suites run on what the package ships. A Mac lock takes only packages
+  that run on macOS 11, the oldest the bundle opens on, and the Intel Mac
+  package carries cryptography 48.0.1, the last release with a built
+  package for Intel Macs. The Windows build no longer runs a
   `get-pip.py` fetched unchecked, it uses the pip inside the checked Python
   download, and PaperPull's own core is built with the setuptools from the
   lock.

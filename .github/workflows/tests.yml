@@ -63,11 +63,16 @@ jobs:
         # A missing library here does not fail a suite, it makes the suite
         # skip itself quietly, which is the thing this workflow exists to
         # stop. The runner below refuses to pass while the privacy canary
-        # is one of the skips.
+        # is one of the skips. The packages come from the Windows package's
+        # own lock, every file checked against its hash, so the suites run
+        # on exactly the versions the package ships and tools/release.sh
+        # waits for a run of them. pytest is the one thing the package does
+        # not carry, and the core is built with the lock's setuptools.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest playwright "pypdf[crypto]" openpyxl pdfplumber fastapi uvicorn
-          python -m pip install ./core
+          python -m pip install --require-hashes --only-binary :all: -r packaging/requirements-windows-x64.txt
+          python -m pip install pytest
+          python -m pip install --no-deps --no-build-isolation ./core
 
       - name: Install the browser the privacy canary needs
         # Without --with-deps. On Windows that installs the Media Foundation
