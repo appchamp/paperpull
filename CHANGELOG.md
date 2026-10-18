@@ -7,6 +7,18 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Added
+- **Citi downloads the older statements you requested.** Statements older
+  than the two years Citi lists online have to be requested on Citi by the
+  account holder, and Citi then lists them as Requested Statements for a
+  limited time. The app now takes every requested statement that is ready
+  while Citi lists it, dated the last day of its month, and never one for
+  a month already saved. One Citi no longer lists is marked No Longer
+  Listed rather than failed. The app still never submits a request itself.
+  Thanks to @appchamp for the request and for recording the page (#103).
+
 ## [0.55.0] - 2026-10-17
 
 Invest529 downloads your 529 college-savings statements and 1099-Q tax
