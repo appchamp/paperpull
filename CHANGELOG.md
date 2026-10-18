@@ -64,6 +64,21 @@ All notable changes to PaperPull are recorded here. Versioning follows
   other look alone could set the purchase down as gone. A look that sees
   no list now counts as not finding the purchase gone, and it stays to be
   looked for again.
+- **PaperPull Server says why Chrome cannot start on a host without user
+  namespaces (#110).** Chrome builds its sandbox from user namespaces and
+  seccomp, and Synology DSM's kernel has neither. PaperPull never starts
+  Chrome without its sandbox, so Chrome stopped the moment it started and
+  the Browser Screen stayed black with nothing saying why. A sign-in waited
+  twenty seconds, said to close every Chrome window and to install Chrome
+  or Edge, and the self-test spoke only of a debugging port. The server
+  now asks the kernel at its start and says in one line of the
+  container's log whether this host can give Chrome its sandbox, and why
+  not. The panel shows the reason at the top of every page, the
+  self-test's sandbox line names it, and a sign-in says it at once. A
+  container whose security profile was left out is told to check it. The
+  sandbox is never turned off. SERVER.md has a new On Synology section,
+  with a Debian 12 virtual machine or the desktop app as the ways that
+  work. Thanks to @akcamperdude for the report.
 
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed

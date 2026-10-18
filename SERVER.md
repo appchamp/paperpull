@@ -191,7 +191,24 @@ Community Applications.
 3. In Compose Manager, add a new stack, paste `compose.https.yaml` into it
    and start it with Compose Up. The setup code is in the container's log.
 
-Synology should work the same way and has not been tried yet.
+### On Synology
+
+Synology DSM cannot run PaperPull Server directly. Chrome builds its
+sandbox from user namespaces and seccomp, and DSM's kernel has neither.
+PaperPull never starts Chrome without its sandbox, since the sign-in
+windows hold your bank sessions, so on DSM itself no sign-in window opens
+and the Browser Screen stays black. The container's log says so in a line
+that starts with `[sandbox]`, and the panel says so at the top of every
+page. The same goes for any host whose kernel has no user namespaces.
+
+Two ways work on a Synology NAS.
+
+- **A Linux virtual machine.** If your model has Synology Virtual Machine
+  Manager, make a Debian 12 virtual machine there, install Docker in it,
+  and set up PaperPull Server inside it as above. Debian 12's kernel has
+  user namespaces and seccomp both. This has not been tried on a Synology
+  yet.
+- **The desktop app**, on a computer of your own.
 
 ## HTTPS
 
@@ -414,10 +431,16 @@ password gate and what is reachable from the network, and says what failed.
 docker exec paperpull python /opt/paperpull/server/selftest.py
 ```
 
-- **Chrome does not start.** The security profile is probably not applied.
-  Check that `seccomp-chrome.json` sits next to `compose.yaml` and that
-  `security_opt` names it. Docker's default profile stops Chrome's sandbox,
-  see [SECURITY-SERVER.md](SECURITY-SERVER.md).
+- **Chrome does not start.** Read the self-test's `sandbox` line, or the
+  line near the top of the container's log that starts with `[sandbox]`.
+  Both say whether this host can give Chrome its sandbox, and why not.
+  - If the container may not make user namespaces, the security profile is
+    probably not applied. Check that `seccomp-chrome.json` sits next to
+    `compose.yaml` and that `security_opt` names it. Docker's default
+    profile stops Chrome's sandbox, see
+    [SECURITY-SERVER.md](SECURITY-SERVER.md).
+  - If the host's kernel has no user namespaces, Chrome's sandbox cannot
+    start on it at all, see [On Synology](#on-synology).
 - **The first start ends at once.** It needs to reach `dl.google.com` once
   to download Chrome. After that it starts without a connection and uses
   the Chrome it has.
