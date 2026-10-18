@@ -52,4 +52,5 @@ def test_each_package_workflow_checks_the_python_it_installed():
     win = (REPO / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
     mac = (REPO / ".github" / "workflows" / "build-macos.yml").read_text(encoding="utf-8")
     assert "build_windows.PY_VERSION" in win and 'python\\python.exe") -c "import platform' in win
+    assert re.search(r"if \(\$have -ne \$want\) \{ throw ", win)
     assert "build_macos.PY_VERSION" in mac and 'test "$have" = "$want"' in mac
