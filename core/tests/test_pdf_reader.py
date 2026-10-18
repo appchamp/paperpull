@@ -539,6 +539,51 @@ def test_pdfplumber_past_its_memory_is_refused(tmp_path, monkeypatch):
     assert pdf_reader.plumbed(good(tmp_path))[0]["lines"]
 
 
+def pages_pdf(pages: int, lines: int = 46) -> bytes:
+    """A statement of `pages` dense pages, `lines` lines of transactions each."""
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", None,
+               b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for p in range(pages):
+        stream = "".join(
+            "BT /F1 9 Tf 36 %d Td (%02d/%02d POS DEBIT GROCER STORE %05d CITY ST  $%d.%02d) Tj ET\n"
+            % (760 - 16 * i, 1 + p % 12, 1 + i % 28, p * 100 + i, i * 3, i % 100)
+            for i in range(lines)).encode("latin-1")
+        objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")
+        objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                       b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>" % len(objects))
+        kids.append(len(objects))
+    objects[1] = b"<< /Type /Pages /Kids [%s] /Count %d >>" % (
+        b" ".join(b"%d 0 R" % k for k in kids), pages)
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for n, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for offset in offsets:
+        out += b"%010d 00000 n \n" % offset
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1, xref)
+    return bytes(out)
+
+
+@pytest.mark.skipif(sys.platform == "darwin",
+                    reason="macOS enforces no memory limit, the worker's own watch holds it there")
+def test_a_long_statement_is_read_by_pdfplumber_page_by_page_within_its_memory(
+        tmp_path, monkeypatch):
+    """pdfplumber keeps every page it has read unless each is closed. Sixty
+    dense pages held 358 MB that way and 30 MB closed (measured 2026-10-18),
+    so a long correct statement was refused for memory (review). Within
+    200 MB, every page is read."""
+    monkeypatch.setattr(intake, "PDF_MEMORY_BYTES", 200 * intake.MiB)
+    path = tmp_path / "Statement.pdf"
+    path.write_bytes(pages_pdf(60))
+    pages = pdf_reader.plumbed(path)
+    assert len(pages) == 60 and all(len(p["lines"]) == 46 for p in pages)
+
+
 def test_pdfplumber_is_never_asked_in_the_app(tmp_path, monkeypatch):
     """The app's own pdfplumber is one that cannot open anything, and the
     lines still come, from the worker's."""

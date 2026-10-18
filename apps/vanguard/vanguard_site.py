@@ -53,6 +53,7 @@ from paperpull_core.words import words_for as _words_for
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.capture import set_download_dir as _set_download_dir
+from paperpull_core.capture import growing as _growing
 from paperpull_core.capture import snapshot as _snapshot
 from paperpull_core.capture import take_download as _take_download
 from paperpull_core.capture import clear_copies as _clear_copies
@@ -699,8 +700,9 @@ def download_document(page, account_id: str, charitable: bool,
         began = True
         try:
             # Once the download has finished, within the time a download is
-            # given, and cancelled past it (intake.failure).
-            failed = intake.failure(dl, page)
+            # given, and cancelled past it or once it grows past the limit
+            # in the folder (intake.failure).
+            failed = intake.failure(dl, page, partial=lambda: _growing(staging, before))
         except Exception as e:
             failed = str(e).splitlines()[0][:70] if str(e) else type(e).__name__
     except pressing.TurnedOff:

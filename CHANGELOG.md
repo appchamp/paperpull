@@ -212,8 +212,10 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Coinbase, Paylocity, Stripe and UKG ask for through the session are read
   through the same limit, and refused unread when their length says they
   are over it. Every other place an answer is read whole as text or JSON
-  holds a list, and each is named in a test with what bounds it, so a new
-  one is looked at before it ships.
+  holds a list, or a PDF in base64 inside a page's own answer, which
+  Chromium keeps only up to about 10 MB and whose decoding was already held
+  to the limit. Each is named in a test with what bounds it, so a new one
+  is looked at before it ships.
 - **Best Buy and M&T press their year controls only when the control reads
   as one, and M&T never calls a list whole with a year left closed.** Best
   Buy's year menu and the year in it were pressed without a guard of their

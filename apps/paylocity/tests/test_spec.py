@@ -1,4 +1,5 @@
 """Paylocity's own facts, and the guards that matter most on a payroll site."""
+import json
 import sys
 from pathlib import Path
 
@@ -126,6 +127,7 @@ def _collect(rows):
         headers: dict = {}
         def __init__(self, payload): self._p = payload
         def json(self): return self._p
+        def body(self): return json.dumps(self._p).encode()
     class _Req:
         def get(self, url, params=None, max_redirects=None):
             if "GetCheckDatesForPayAssignment" in url:

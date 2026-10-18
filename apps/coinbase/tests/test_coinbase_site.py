@@ -257,6 +257,7 @@ class TaxList(unittest.TestCase):
         class Resp:
             ok, status, url, headers = True, 200, "", {}
             def json(self): return answers.pop(0)
+            def body(self): return json.dumps(answers.pop(0)).encode()
             def dispose(self): pass
         class Req:
             def get(self, url, **kw): return Resp()
@@ -279,6 +280,7 @@ class TaxList(unittest.TestCase):
         class Resp:
             ok, status, url, headers = True, 200, "", {}
             def json(self): return left.pop(0)
+            def body(self): return json.dumps(left.pop(0)).encode()
             def dispose(self): pass
 
         class Req:

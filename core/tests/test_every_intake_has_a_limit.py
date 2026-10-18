@@ -138,8 +138,9 @@ DOWNLOAD_STARTS = {"expect_download": None, "expect_event": "download",
 WAITS_FOR_FINISH = {"failure", "delete"}
 
 
-def _starts_a_download_wait(node: ast.Call, name: str) -> bool:
-    """Whether a call waits for a download to begin, with no time given."""
+def _starts_a_download_wait(node: ast.Call, name: str, constants=None) -> bool:
+    """Whether a call waits for a download to begin, with no time given. A
+    timeout named by a module constant is read as that constant."""
     if name not in DOWNLOAD_STARTS:
         return False
     event = DOWNLOAD_STARTS[name]
@@ -149,6 +150,8 @@ def _starts_a_download_wait(node: ast.Call, name: str) -> bool:
         if not (isinstance(first, ast.Constant) and first.value == event):
             return False
     given = next((k.value for k in node.keywords if k.arg == "timeout"), None)
+    if isinstance(given, ast.Name) and given.id in (constants or {}):
+        given = ast.Constant(constants[given.id])
     # No timeout, or one of 0, which Playwright takes as none.
     return given is None or (isinstance(given, ast.Constant) and not given.value)
 
@@ -198,6 +201,10 @@ def ways_in(path: Path, root: Path = REPO):
     rel = path.relative_to(root).as_posix()
     tree, owner = _parsed(path)
     found = []
+    # Module constants a download wait's timeout may name.
+    constants = {n.targets[0].id: n.value.value for n in tree.body
+                 if isinstance(n, ast.Assign) and len(n.targets) == 1
+                 and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Constant)}
     for node in ast.walk(tree):
         fn = owner.get(node, "")
         if isinstance(node, ast.Call):
@@ -215,7 +222,7 @@ def ways_in(path: Path, root: Path = REPO):
             elif name in WAITS_FOR_FINISH and isinstance(f, ast.Attribute) and bare:
                 found.append(("download_wait", node.lineno, fn,
                               "a download waited for until it finishes"))
-            elif isinstance(f, ast.Attribute) and _starts_a_download_wait(node, name):
+            elif isinstance(f, ast.Attribute) and _starts_a_download_wait(node, name, constants):
                 found.append(("download_wait", node.lineno, fn,
                               "a download's start waited for with no time given"))
             elif name in ("extract_text", "open") and isinstance(f, ast.Attribute) \
@@ -320,6 +327,7 @@ def test_every_snippet_that_reads_a_body_runs_through_intake_evaluate():
 
 SAMPLE = (
     "import base64, zipfile\n"
+    "NEVER = 0\n"
     "from pypdf import PdfReader\n"
     "JS = 'async (u) => { const r = await fetch(u); return await r.arrayBuffer(); }'\n"
     "B64 = 'async (u) => { const r = await fetch(u); return {b64: btoa(await r.text())}; }'\n"
@@ -330,6 +338,7 @@ SAMPLE = (
     "    with page.expect_download() as info:\n"
     "        pass\n"
     "    page.wait_for_event('download', timeout=0)\n"
+    "    page.expect_download(timeout=NEVER)\n"
     "    base64.b64decode('')\n"
     "    dl.save_as(path)\n"
     "    open(dl.path(), 'rb').read()\n"
@@ -352,7 +361,7 @@ def test_the_census_finds_what_it_looks_for(tmp_path):
     kinds = {k for k, *_ in found}
     assert kinds == set(HOME), kinds
     assert len([w for w in found if w[0] == "page_read"]) == 2, found
-    assert len([w for w in found if w[0] == "download_wait"]) == 3, found
+    assert len([w for w in found if w[0] == "download_wait"]) == 4, found
     assert any("sample_site.py" in line
                for line in snippets_run_without_the_reader([sample], tmp_path))
     good = sample.with_name("good_site.py")
@@ -496,7 +505,9 @@ ANSWERS = {
 }
 
 # A read of a fetched answer's text or JSON inside a snippet.
-SNIPPET_READS = re.compile(r"\.(?:json|text)\(\)")
+SNIPPET_READS = re.compile(r"\.(?:json|text)\(\)|\bresponseText\b")
+# What makes a string a snippet run in the page.
+IS_SNIPPET = re.compile(r"=>|\bfunction\s*\(|\bawait\s")
 
 
 def answers_read_whole(paths=None, root: Path = REPO):
@@ -513,16 +524,39 @@ def answers_read_whole(paths=None, root: Path = REPO):
                     and node.func.attr in ("json", "text") and not node.args \
                     and not node.keywords:
                 out.append((rel, owner.get(node, ""), node.lineno))
-        named = {}
+        # A module's snippet is looked at whole, its pieces joined the way
+        # the module joins them, so a piece holding the read and nothing
+        # that looks like code is not missed.
+        named, whole = {}, _module_strings(tree, rel)
         for node in tree.body:
             if isinstance(node, ast.Assign) and len(node.targets) == 1 \
                     and isinstance(node.targets[0], ast.Name):
                 for piece in ast.walk(node.value):
                     named[id(piece)] = node.targets[0].id
+                text = whole.get(node.targets[0].id)
+                if text and SNIPPET_READS.search(text) and IS_SNIPPET.search(text):
+                    out.append((rel, node.targets[0].id, node.lineno))
         for node, text in _strings(tree):
-            if SNIPPET_READS.search(text) and ("=>" in text or "await " in text):
-                out.append((rel, named.get(id(node)) or owner.get(node, ""), node.lineno))
+            if id(node) not in named and SNIPPET_READS.search(text) and IS_SNIPPET.search(text):
+                out.append((rel, owner.get(node, ""), node.lineno))
     return out
+
+
+def _module_strings(tree, rel: str) -> dict:
+    """Every module-level name bound to a string, its pieces joined."""
+    strings: dict = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1 \
+                or not isinstance(node.targets[0], ast.Name):
+            continue
+        try:
+            value = eval(compile(ast.Expression(node.value), rel, "eval"),
+                         {"__builtins__": {}}, dict(strings))
+        except Exception:
+            continue
+        if isinstance(value, str):
+            strings[node.targets[0].id] = value
+    return strings
 
 
 def unnamed_answers(paths=None, root: Path = REPO):
@@ -554,10 +588,15 @@ def test_the_answers_census_finds_what_it_looks_for(tmp_path):
         "DOC = 'async (u) => { const r = await fetch(u); return await ppText(r); }'\n"
         "def read(resp, page):\n"
         "    resp.text()\n"
-        "    page.evaluate('async () => (await fetch(\"/x\")).json()')\n", encoding="utf-8")
+        "    page.evaluate('async () => (await fetch(\"/x\")).json()')\n"
+        "JOINED = ('async (u) => { const r = await fetch(u); '\n"
+        "          'return r.json(); }')\n"
+        "OLD = 'function (u) { var x = new XMLHttpRequest(); return x.responseText; }'\n",
+        encoding="utf-8")
     assert unnamed_answers([sample], tmp_path) == [
         "apps/sample/sample_site.py:1 LIST", "apps/sample/sample_site.py:4 read",
-        "apps/sample/sample_site.py:5 read"]
+        "apps/sample/sample_site.py:5 read", "apps/sample/sample_site.py:6 JOINED",
+        "apps/sample/sample_site.py:8 OLD"]
 
 
 # -- every bounded snippet compiles in a real browser ---------------------------

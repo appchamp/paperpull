@@ -852,6 +852,56 @@ def test_a_download_whose_tab_closed_is_still_waited_for(page, server, tmp_path,
     assert out.stat().st_size == MiB
 
 
+def test_a_finished_download_is_saved_after_every_page_closed(browser, server, tmp_path):
+    """With no page open to pause on, the wait pauses on the browser's own
+    context, so a download that had finished is still saved rather than
+    refused as one whose browser had gone (review)."""
+    base, _ = server
+    ctx = browser.new_context(accept_downloads=True)
+    try:
+        only = ctx.new_page()
+        only.goto(base + "/?d=attachment&n=5000")
+        with only.expect_download(timeout=10000) as dl:
+            only.click("#go")
+        only.wait_for_timeout(500)
+        only.close()
+        assert ctx.pages == []
+        out = tmp_path / "Statement.pdf"
+        intake.save_download_as(dl.value, out)
+        assert out.stat().st_size == 5000
+    finally:
+        ctx.close()
+
+
+def test_one_error_the_follower_meets_is_not_taken_for_the_download_finishing(
+        page, server, tmp_path, monkeypatch):
+    """Playwright raises a listener's own error at whichever call comes
+    next, and that can be the follower's. Taken for the download finishing,
+    it left the save to wait in Playwright for as long as the provider sent
+    (review). It is asked again, and the time still holds."""
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 3)
+    base, sent = server
+    page.goto(base + FOREVER % "stray")
+    with page.expect_download(timeout=10000) as dl:
+        page.click("#go")
+    download = dl.value
+    real = type(download).path
+    raised = []
+
+    def path_once_raising(self=download):
+        if not raised:
+            raised.append(1)
+            raise RuntimeError("a listener's own error")
+        return real(self)
+    download.path = path_once_raising
+    out = tmp_path / "Statement.pdf"
+    started = time.monotonic()
+    with pytest.raises(intake.TooSlow):
+        intake.save_download_as(download, out)
+    assert raised == [1] and time.monotonic() - started < 12
+    assert _sending_stopped(sent, "stray"), "the download was left running"
+
+
 def test_delivery_holds_up_no_listener_after_its_own(page, server):
     """Delivery waited for the download inside its own listener, and every
     listener after it heard nothing until the download finished, pressing's

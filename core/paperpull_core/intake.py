@@ -422,11 +422,17 @@ def _follow(download) -> Optional[_Following]:
     state = _Following()
 
     def wait() -> None:
-        try:
-            download.path()
-        except Exception:
-            # Cancelled, failed, or its browser gone. Finished either way.
-            pass
+        # Playwright raises a listener's own error at whichever call comes
+        # next, which can be this one, and the download has not finished
+        # then. One cancelled, failed or with its browser gone says so again
+        # at once, so it is asked three times before it counts as finished
+        # (review).
+        for _ in range(3):
+            try:
+                download.path()
+                break
+            except Exception:
+                continue
         state.done = True
 
     fiber = greenlet.greenlet(wait)
@@ -449,8 +455,10 @@ def _follow(download) -> Optional[_Following]:
 
 class _Pages:
     """Pauses on the page a download is waited from, else the page it came
-    on, else any open page of its context. A tab that opened only to start
-    the download and closed again does not end the wait."""
+    on, else any open page of its context, else the context itself. A tab
+    that opened only to start the download and closed again does not end
+    the wait, nor does every page of the browser having closed while the
+    context is still open."""
 
     def __init__(self, download, page=None):
         self.download = download
@@ -475,7 +483,20 @@ class _Pages:
                 return
             except Exception:
                 continue
-        raise RuntimeError("no open page to wait on")
+        # No page is open. The context's own close is waited for instead,
+        # which runs Playwright's loop for the pause and so lets the
+        # follower see a download that had already finished (review).
+        try:
+            context = self.download.page.context
+        except Exception:
+            context = None
+        if context is not None:
+            try:
+                context.wait_for_event("close", timeout=max(1, ms))
+            except Exception as e:
+                if type(e).__name__ == "TimeoutError":
+                    return
+        raise RuntimeError("no open page or context to wait on")
 
 
 def finish(download, page=None, seconds: Optional[float] = None, *, partial=None) -> bool:
@@ -531,11 +552,12 @@ def _slow_words(what: str = "The download for this document",
             % (what, seconds, raising("DOWNLOAD_SECONDS", "gives a download longer")))
 
 
-def failure(download, page=None) -> str:
-    """download.failure() within DOWNLOAD_SECONDS. "" when the download
-    finished whole, the browser's word for why it did not, or the refusal
-    it met in finish()."""
-    if not finish(download, page):
+def failure(download, page=None, *, partial=None) -> str:
+    """download.failure() within DOWNLOAD_SECONDS, and within the limit in
+    the folder the browser writes it to (`partial`, as finish takes it).
+    "" when the download finished whole, the browser's word for why it did
+    not, or the refusal it met in finish()."""
+    if not finish(download, page, partial=partial):
         return str(refusal(download) or "cancelled unfinished")
     return download.failure() or ""
 

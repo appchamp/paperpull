@@ -806,6 +806,10 @@ def page_lines(text_lines: List[dict]) -> List[str]:
               and sum(1 for t in tops if abs(tl["top"] - t) <= ROW_JOIN_PT) >= ROW_JOIN_MIN}
     group = short | joined
     chars = [c for i in sorted(group) for c in (text_lines[i].get("chars") or [])]
+    if not chars:
+        # Its characters did not come, so nothing can be rebuilt, and every
+        # line is kept as read rather than lost.
+        return [tl["text"] for tl in text_lines]
     kept = [(tl["top"], n, tl["text"]) for n, tl in enumerate(text_lines) if n not in group]
     rebuilt = [(top, len(text_lines) + n, txt) for n, (top, txt) in enumerate(_band_lines(chars))]
     return [txt for _, _, txt in sorted(kept + rebuilt)]

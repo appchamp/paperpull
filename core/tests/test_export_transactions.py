@@ -1267,6 +1267,45 @@ def test_a_statement_whose_font_gives_half_a_character_makes_both_spreadsheets(t
     assert prefixed == {999.0: False, 998.0: False, 997.0: False, 996.0: True}
 
 
+def _stalling_pdf(pieces: int = 1_000_000) -> bytes:
+    """A PDF of a few kilobytes whose text, a million pieces drawn one after
+    another, keeps pdfplumber reading for seconds and fills its memory, as
+    test_pdf_reader's does."""
+    import zlib
+    body = zlib.compress(b"BT /F1 1 Tf " + b"(x) Tj 1 0 Td " * pieces + b"ET", 9)
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Filter /FlateDecode /Length %d >>\nstream\n" % len(body) + body + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for n, obj in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % n + obj + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for offset in offsets:
+        out += b"%010d 00000 n \n" % offset
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1, xref)
+    return bytes(out) + b" " * 4000
+
+
+def test_a_page_whose_characters_did_not_come_keeps_every_line():
+    """The PDF reader hands back a page's characters only when it counts
+    enough short lines to rebuild, and counts on the text made whole. Where
+    the two counts could differ, two halves of one character counted as two
+    there and as one here, the rebuild had no characters and the lines it
+    would rebuild were lost (review). They are kept as read."""
+    tls = [{"text": chr(65 + n % 26), "top": 100.0 + 12 * n} for n in range(xt.SCATTER_MIN)]
+    tls.append({"text": "Ending Balance $996.00", "top": 400.0})
+    assert xt.page_lines(tls) == [tl["text"] for tl in tls]
+
+
 def test_a_statement_refused_for_a_limit_is_named_and_read_again_by_the_next_export(
         tmp_path, monkeypatch, capsys):
     """pdfplumber read the archive in the export's own process, with nothing
@@ -1278,13 +1317,12 @@ def test_a_statement_refused_for_a_limit_is_named_and_read_again_by_the_next_exp
     openpyxl = pytest.importorskip("openpyxl")
     pytest.importorskip("pdfplumber")
     from paperpull_core import intake, pdf_reader
-    import test_pdf_reader as made
     monkeypatch.setattr(intake, "PDF_SECONDS", 1)
     pdf_reader.stop()
     pdf_reader.forget()
     try:
         index = _bank_folder(tmp_path, "Jane", "Checking")
-        (index.parent / "June Statement.pdf").write_bytes(made.stalling_pdf())
+        (index.parent / "June Statement.pdf").write_bytes(_stalling_pdf())
         started = time.monotonic()
         r = xt.export(tmp_path, log=lambda *_: None)
         assert time.monotonic() - started < 15

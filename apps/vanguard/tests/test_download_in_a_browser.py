@@ -318,6 +318,25 @@ def test_a_download_that_never_ends_is_cancelled_and_nothing_is_taken(
     assert SENT["forever"] == first, "the download was left running"
 
 
+def test_a_download_growing_past_the_limit_in_the_folder_is_cancelled_as_it_arrives(
+        browser_page, tmp_path, answer, monkeypatch, capsys):
+    """The browser writes the download into the staging folder while it
+    arrives, and it is cancelled as soon as it is larger there than a
+    document may be, not once the provider has sent it all (review)."""
+    import time
+    from paperpull_core import intake
+    monkeypatch.setattr(intake, "DOCUMENT_BYTES", 30_000)
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 60)
+    answer["doc"] = "forever"
+    page = browser_page(True)
+    started = time.monotonic()
+    got, archive, staging, out = _download(page, tmp_path)
+    assert got is False
+    assert time.monotonic() - started < 20
+    assert "larger than" in capsys.readouterr().out
+    assert _listing(archive) == []
+
+
 def test_a_press_that_starts_no_download_takes_nothing(browser_page, tmp_path, answer, monkeypatch):
     """With no download of its own, the newest PDF in the folder was taken,
     which could be another tab's, or an earlier statement answered late.

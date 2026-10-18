@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import storage  # noqa: F401  (binds this provider's AppSpec)
 import netbenefits_site as site
 import netbenefits_docs as docs
-from paperpull_core import receipt_pdf
+from paperpull_core import intake, receipt_pdf
 from paperpull_core.models import State
 from paperpull_core.testkit import receipt_app, text_pdf
 
@@ -157,7 +157,7 @@ class Page:
                 {"text": NAMES[p], "value": OPTION % (CLIENTS[p], p), "disabled": False} for p in NAMES]
         if js == site._SIGNED_IN_JS:
             return self.signed_in
-        if js == site._MAKE_JS:
+        if js == intake.reading(site._MAKE_JS):
             self.made.append(self.in_context)
             return {"status": 200, "isStatement": True, "title": "Statement Details"}
         if js == site._PROBE_JS:

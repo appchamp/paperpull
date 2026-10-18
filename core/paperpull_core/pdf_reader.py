@@ -881,21 +881,30 @@ def _plumb(job: dict, data: Optional[bytes]) -> dict:
         with pdfplumber.open(source) as pdf:
             for page in pdf.pages:
                 try:
-                    # Made whole where pdfplumber hands it over (characters.py).
-                    lines = whole_json(_lines(page.extract_text_lines(
-                        layout=False, strip=True, return_chars=True), chars_when))
-                except Exception as e:
-                    if _out_of_memory(e):
-                        raise MemoryError from None
-                    pages.append({"text": whole_characters(page.extract_text() or "")})
-                    continue
-                pages.append({"lines": lines})
+                    pages.append(_plumbed_page(page, chars_when))
+                finally:
+                    # pdfplumber keeps every page it has read, and a dense
+                    # statement of 60 pages held 358 MB that way against
+                    # 30 MB closed page by page (measured 2026-10-18,
+                    # review), which the memory limit would have refused.
+                    page.close()
     except Exception as e:
         if _out_of_memory(e):
             raise MemoryError from None
         return {"opened": False, "error": ("%s" % e) or type(e).__name__,
                 "error_kind": type(e).__name__}
     return {"opened": True, "pages": len(pages), "plumbed": pages}
+
+
+def _plumbed_page(page, chars_when: int) -> dict:
+    try:
+        # Made whole where pdfplumber hands it over (characters.py).
+        return {"lines": whole_json(_lines(page.extract_text_lines(
+            layout=False, strip=True, return_chars=True), chars_when))}
+    except Exception as e:
+        if _out_of_memory(e):
+            raise MemoryError from None
+        return {"text": whole_characters(page.extract_text() or "")}
 
 
 def _out_of_memory(error) -> bool:
@@ -915,7 +924,9 @@ def _lines(found: list, chars_when: int) -> list:
     """pdfplumber's lines of a page with what plumbed() hands back of each,
     and their characters on a page with at least `chars_when` lines of one
     or two characters."""
-    short = sum(1 for tl in found if len((tl.get("text") or "").strip()) <= 2)
+    # Counted on the text made whole, as the caller counts it, where the two
+    # halves of one character are one (review).
+    short = sum(1 for tl in found if len(whole_characters(tl.get("text") or "").strip()) <= 2)
     keep = bool(chars_when) and short >= chars_when
     return [_line(tl, keep) for tl in found]
 
