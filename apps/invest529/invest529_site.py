@@ -59,6 +59,7 @@ from paperpull_core.controls import escape_for_locator
 from paperpull_core.redact import redact, set_private_words  # noqa: F401
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.api_census import shape_of as _shape
+from paperpull_core.characters import whole_json
 from paperpull_core.dates import checked as _checked_date
 
 log = logging.getLogger("invest529_docs.site")
@@ -520,7 +521,7 @@ def survey(page, dwell_ms: int = 4000, max_follow: int = 6) -> dict:
             entry = {"url": redact(url)[:200], "status": res.status, "type": ct[:40]}
             if "json" in ct:
                 try:
-                    entry["shape"] = _shape(res.json())
+                    entry["shape"] = _shape(whole_json(res.json()))
                 except Exception:
                     entry["shape"] = "unreadable"
             seen.append(entry)
