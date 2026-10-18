@@ -38,10 +38,15 @@ paperpull adp diagnose            REM a masked survey, if something looks wrong
   to `Pay Statements\` or `Tax Documents\` as
   `YYYY-MM-DD ADP Workforce Now Pay Statement.pdf` or
   `YYYY-12-31 ADP Workforce Now W-2 Tax Form.pdf`. Nothing on the page is
-  clicked, and only my.adp.com and workforcenow.adp.com are ever asked.
+  clicked to fetch it, and only my.adp.com and workforcenow.adp.com are
+  ever asked.
 - **Read-only.** `FORBIDDEN_CONTROL_RE` refuses anything about direct
   deposit, withholding, W-4, time off, timecards, benefits, beneficiaries,
-  addresses or settings, and there is no code here that clicks at all.
+  addresses or settings. The one control the app presses is the Tax
+  Statements card's own "View statement", which makes ADP ask you to
+  verify yourself before it hands over a tax statement. It is pressed only
+  when `is_safe_control()` passes it and nothing covers it, and you answer
+  ADP's check in the browser yourself.
 - **Delete-safe.** A statement downloaded once is remembered as done, so
   deleting the PDF after importing it into paperless-ngx never brings it
   back.

@@ -44,57 +44,64 @@ The `.gitignore` already blocks all of the following. Do not override it.
   how the provider exposes its documents:
 
   - **Apps that hold a control to an allowlist** (AAFMAA, ADP, Ally, Alpaca,
-    American Family, Apple Card, AT&T, Bilt, Chase, Chase Business, Coinbase,
-    Costco, Discover, Dominion, eBay, E*TRADE, Fairfax Water, First Horizon,
-    Golden 1, Interactive Brokers, Meijer, Nelnet, Newrez, PayPal, PG&E,
-    RedCard, SBA, Shelby County, Simmons Bank, SMUD, Spectrum, State Farm, T-Mobile,
-    TreasuryDirect, U.S. Bank, Vanguard, Venmo, Verizon Mobile and Wells
-    Fargo) decide which of the page's controls may be pressed with
-    `is_safe_control()`, a hard blocklist (`FORBIDDEN_CONTROL_RE`,
+    American Family, Apple Card, AT&T, Best Buy, Bilt, Chase, Chase Business,
+    Coinbase, Costco, Discover, Dominion, eBay, E*TRADE, Fairfax Water, First
+    Horizon, Golden 1, Interactive Brokers, M&T, Meijer, Nelnet, Newrez,
+    PayPal, PG&E, RedCard, SBA, Shelby County, Simmons Bank, SMUD, Spectrum,
+    State Farm, T-Mobile, TreasuryDirect, U.S. Bank, Vanguard, Venmo, Verizon
+    Mobile and Wells Fargo) decide which of the page's controls may be
+    pressed with `is_safe_control()`, a hard blocklist (`FORBIDDEN_CONTROL_RE`,
     buy/sell/transfer/pay/delete/change-setting) **plus** a document
     allowlist (`SAFE_DOC_CONTROL_RE`). A control must pass **both**, so
     anything unrecognized is refused, deny by default. AAFMAA runs the same
-    two patterns inline. Alpaca, Bilt, Chase Business, First Horizon,
-    Simmons Bank, Spectrum, TreasuryDirect and Venmo narrow the allowlist to the whole
-    labels they press, and all of them but TreasuryDirect give each control
-    a guard of its own built the same way. Besides those, an app may press a
-    control it finds by a selector or by words written in the app, such as a
-    session dialog's "Continue session", an accordion, a year menu or a
-    list's "Next", which a document allowlist would refuse.
-  - **Apps that press only controls they find themselves** (Amex, Best Buy,
-    Capital One, M&T, Navy Federal, Robinhood, Schwab, Target, USAA,
-    Verizon, Walmart and Wealthfront) call no `is_safe_control()` during a
-    run. They press controls they find by a selector or by words written in
-    the app, such as a statement row by its test id, a link that says
-    Statements, a "Next page" button or a year menu. Capital One and Schwab
-    press nothing but their own "continue session" dialog, Best Buy only its
-    year menu, and M&T only the year headings of its statements list, after
-    checking each heading against the blocklist. Target and Walmart, whose
-    order pages are printed, have no `is_safe_control()` at all. They press
+    two patterns inline. Alpaca, Best Buy, Bilt, Chase Business, First
+    Horizon, Simmons Bank, Spectrum, TreasuryDirect and Venmo narrow the
+    allowlist to the whole labels they press, and all of them but
+    TreasuryDirect give each control a guard of its own built the same way.
+    Best Buy presses only its year menu and a year in it. M&T presses only
+    the year headings of its statements list, and since a year is no
+    document word, `is_safe_control()` would refuse them. So the heading
+    has a guard of its own, the blocklists plus its whole words, a year
+    with at most the few words a heading carries beside it, and a year left
+    closed stops the run rather than leave the list short. Besides those,
+    an app may press a control it finds by a selector or by words written
+    in the app, such as a session dialog's "Continue session", an
+    accordion, a year menu or a list's "Next", which a document allowlist
+    would refuse.
+  - **Apps that press only controls they find themselves** (Amex, Capital
+    One, Navy Federal, Robinhood, Schwab, Target, USAA, Verizon, Walmart and
+    Wealthfront) call no `is_safe_control()` during a run. They press
+    controls they find by a selector or by words written in the app, such as
+    a statement row by its test id, a link that says Statements, a "Next
+    page" button or a year menu. Capital One and Schwab press nothing but
+    their own "continue session" dialog. Target and Walmart, whose order
+    pages are printed, have no `is_safe_control()` at all. They press
     fixed controls (the purchase history tabs, a year menu, Load more, a
     list's Next, the items toggle) and check every receipt control against
     the blocklist inline, since a document allowlist would refuse the paging
     they need.
   - **Apps that click nothing at all during a run** (Affirm, Amazon, Anthem,
     Apple, Citi, E-ZPass Virginia, FedEx, Fidelity, Gap, GitHub, Home Depot,
-    IRS, Kroger, Lowe's, MILITARY STAR, myPay, NetBenefits, Optum Bank,
-    Paylocity, SDG&E, Stripe, TSP, Uber, UKG and UPS) open the provider's
+    Invest529, IRS, Kroger, Lowe's, MILITARY STAR, myPay, NetBenefits, Optum
+    Bank, Paylocity, SDG&E, Stripe, TSP, Uber, UKG and UPS) open the provider's
     pages by their address and read them, or ask for the same lists and
     files the provider's own page asks for, from inside the signed-in page or
     with its cookies. On a site that can also change direct deposit and tax
     withholding, not activating a control is the strongest guarantee
     available, and UKG additionally refuses any URL whose path says `EDIT`
-    rather than `VIEW`. The Diagnose command of Affirm, Fidelity, NetBenefits
-    and TSP, run by hand to help repair a provider, may follow up to six
+    rather than `VIEW`. The Diagnose command of Affirm, Fidelity, Invest529,
+    NetBenefits and TSP, run by hand to help repair a provider, may follow up to six
     links whose whole text is a section name it knows, such as Statements or
     Documents, each through `is_safe_control()`.
   - **Every app has a host allowlist.** A stored or page-supplied URL that
     resolves to any other host is refused before the browser goes there. A
     repo-wide test (`core/tests/test_every_app_guard.py`) checks that every
-    app has the allowlist and a working guard, and that no broad click is
-    left unguarded. When an app asks for a document through Playwright's
-    own client, which carries the browser's cookies, each redirect is
-    checked with the same guard before it is followed, one step at a time,
+    app has the allowlist and a working guard, that a guard an app defines
+    is asked on a path its run takes, that an app said here to click nothing
+    presses nothing in its run, and that no broad click is left unguarded.
+    When an app asks for a document through Playwright's own client, which
+    carries the browser's cookies, each redirect is checked with the same
+    guard before it is followed, one step at a time,
     and an address asked for a second time follows none
     (`core/tests/test_no_request_follows_a_redirect_off_the_allowlist.py`).
     Target's headless fallback print asks the same guard about each request

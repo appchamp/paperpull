@@ -22,6 +22,7 @@ from __future__ import annotations
 from paperpull_core import failure
 from paperpull_core import listing
 from paperpull_core import not_shown
+from paperpull_core import pressing
 from paperpull_core import renaming
 from paperpull_core import saved_copy
 from paperpull_core.journal import Journal
@@ -467,14 +468,31 @@ class App:
         from datetime import date as _date
         while True:
             self._open_orders(page)
-            choices = site.year_choices(page)
-            query = site.capture_history_query(page, choices[0] if choices else str(_date.today().year))
-            hist = self._walk_years(page, query)
+            try:
+                choices = site.year_choices(page)
+                query = site.capture_history_query(
+                    page, choices[0] if choices else str(_date.today().year))
+                hist = self._walk_years(page, query)
+            except site.Refused as refused:
+                log.warning("%s", refused)
+                hist = {"entries": [], "years": 0, "answered": 0, "last": False,
+                        "stop": "control refused", "status": 0, "year": 0}
             if hist["answered"] or hist["last"]:
                 return hist
             self.progress.save(backup=True)
             print("\n!! Your purchase history did not come when this asked Best Buy for it")
             print(f"({site.why_it_stopped(hist)}), so this cannot say which purchases are new.")
+            if hist["stop"] == "control refused":
+                print("Its year menu does not read the way this app knows it, so nothing was")
+                print("pressed. Best Buy may have changed the page. Run Diagnose and send the")
+                print("file it writes, so the app can be repaired.")
+                self.write_failure("read the purchase history",
+                                   "the year menu did not read as one",
+                                   postmortem=self._history_facts(hist))
+                if not need_it:
+                    print("This goes on with the purchases already found.")
+                    return hist
+                raise SystemExit(0)
             if hist["stop"] == "no answer":
                 print("Best Buy's bot protection does this after too many requests in a short")
                 print("time. Nothing is lost. Leave it for an hour before asking again.")
@@ -1181,7 +1199,7 @@ class App:
         return self._journal
 
     def write_failure(self, step: str, reason: str, text: str = "",
-                      postmortem: dict = None) -> None:
+                      postmortem: dict = None, extra: dict = None) -> None:
         """What the page looked like when this went wrong, to a file.
 
         Written without anybody having to know to ask for it, because a
@@ -1193,7 +1211,10 @@ class App:
         is still sitting on the thing that broke."""
         if self.stats.get("failure_files"):
             return
-        extra = {"postmortem": postmortem} if postmortem else None
+        # `extra` is a stop's facts, as pressing.stop_run hands them on.
+        extra = dict(extra or {})
+        if postmortem:
+            extra["postmortem"] = postmortem
         # A checkpoint at the moment it gave up. It is also what makes the
         # journal when nothing had written to it yet, and every tester file
         # sent in on 2026-09-25 came back without one for that reason.
@@ -1210,7 +1231,7 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='Best Buy', text=text, extra=extra)
+            provider='Best Buy', text=text, extra=extra or None)
         if not path:
             return
         self.stats["failure_files"] = 1
@@ -1463,6 +1484,10 @@ def main(argv=None):
         else:
             build_parser().print_help()
             return 0
+    except pressing.Stop as stop:
+        # A press it would not make, something over the year menu say, stops
+        # the run here with the reason said and the failure file written.
+        pressing.stop_run(app, stop)
     except KeyboardInterrupt:
         print("\nStopped by user. Progress saved.")
         return 130

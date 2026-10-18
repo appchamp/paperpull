@@ -50,7 +50,8 @@ contributed to anything, is
    tax form is listed, just record what you have.
 5. Click **Diagnose** as well, in the same **more** menu. It downloads
    nothing, presses nothing but a Statements, Savings, Documents or Tax
-   Documents link, and takes no screenshot. It writes two files. The one
+   Documents link and a "Show more" or the like that lists more of
+   them, and takes no screenshot. It writes two files. The one
    whose name starts with `survey-diagnose-` holds counts and states and
    no text from your account, and that is the one to send.
    `diagnose-documents.json` beside it is the detailed one, with the

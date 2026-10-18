@@ -104,7 +104,9 @@ into `Diagnostics\`, then repair that one file.
 
 - Read-only on eBay. Never bids, buys, pays, returns, cancels, leaves
   feedback, contacts a seller, or changes account settings. Forbidden
-  controls are blocked by an explicit regex, and nothing is clicked at all.
+  controls are blocked by an explicit regex, and nothing is clicked but a
+  "Show more" the order list offers, only when `is_safe_control()` passes
+  its words.
 - Stops and hands control to you on CAPTCHA/OTP, sign-out, or rate limiting.
 - Sequential processing with polite randomized delays.
 - Progress written atomically after every order. CSV/JSON backed up before

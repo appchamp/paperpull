@@ -863,7 +863,16 @@ class App:
             # Same non-destructive path as discover: read the statements you
             # listed across any open tab, then the tax page. Never navigates or
             # resets the statements list.
-            docs = site.collect_statement_rows(page)
+            # A year left closed stops a run. Here it is written down instead,
+            # the heading's words as their shape, so the file shows what the
+            # heading says.
+            try:
+                docs = site.collect_statement_rows(page)
+            except site.YearsLeftClosed as stop:
+                docs = []
+                info["years_left_closed"] = {"reason": stop.reason,
+                                             "closed": stop.facts.get("closed"),
+                                             "heading": getattr(stop, "heading", "")}
             info["collected"] = len(docs)
             info["samples"] = []
             for d in docs[:12]:

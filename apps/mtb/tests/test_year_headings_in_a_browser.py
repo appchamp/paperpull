@@ -54,10 +54,14 @@ COVER = ('<div class="cover" role="dialog" aria-label="Chat with us" onclick="sa
          'Chat with us</div>')
 
 
-def heading(year, open_=False, onclick=None, words=None, ident=True):
-    span = '<span class="%s"%s onclick="%s"></span>' % (
+def heading(year, open_=False, onclick=None, words=None, ident=True, aria=None):
+    """One year's heading, which reads "2025 Statements" unless told
+    otherwise. M&T's own read the year alone, which
+    test_the_live_wording_and_its_neighbors_are_opened presses too."""
+    span = '<span class="%s"%s%s onclick="%s"></span>' % (
         "close-table" if open_ else "open-table",
         ' id="spViewStatementsElectronic-%s"' % year if ident else "",
+        ' aria-label="%s"' % aria if aria else "",
         onclick or "listYear(this, '%s')" % year)
     rows = STATEMENT % (year, year) if open_ else ""
     said_words = "%s Statements" % year if words is None else words
@@ -187,16 +191,19 @@ def test_a_stop_at_a_heading_is_no_ordinary_failure(show):
         site.collect_statement_rows(page)
 
 
-def test_a_year_that_does_not_open_is_pressed_once(show):
+def test_a_year_that_does_not_open_is_pressed_once_and_stops_the_run(show):
     """Its press answers nothing, so the count of collapsed years does not
-    fall. It is pressed once, the run reads what is on screen, and no other
-    year is pressed after it."""
+    fall. It is pressed once, no other year is pressed after it, and the
+    run stops, since a list with two years closed is not the whole list."""
     page = show(heading(2026, open_=True) + heading(2025, onclick="said('open-2025')")
                 + heading(2024))
     frame = page.frame(name="statements")
-    rows = site.collect_statement_rows(page)
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
     assert said(frame) == ["open-2025"]
-    assert listed_years(rows) == ["2026"]
+    assert stopped.value.reason == "a year did not open"
+    assert stopped.value.facts == {"closed": 2}
+    assert stopped.value.after_a_press
 
 
 # Pressing 2025 opens 2024 instead and leaves 2025 collapsed, so the count
@@ -208,20 +215,23 @@ DRAWS_ANEW = ("said('press-2025'); const l = document.getElementById('list');"
               " l.innerHTML = l.innerHTML; listYear(document.getElementById('x2024'), '2024')")
 
 
-@pytest.mark.parametrize("how", ["same element", "drawn anew", "no words or id"])
+@pytest.mark.parametrize("how", ["same element", "drawn anew", "no id"])
 def test_a_heading_pressed_once_is_never_pressed_again(show, how):
     """The heading of 2025 is still collapsed after its press, and the
     count of collapsed years fell all the same. It is not pressed again,
     whether it is the same element, a new one with its words and its id, or
-    the same element with no words and no id to know it by."""
-    if how == "no words or id":
-        first = heading(2025, onclick=OPENS_ANOTHER, words="", ident=False)
+    the same element with no id to know it by, so its words and id are no
+    key to it."""
+    if how == "no id":
+        first = heading(2025, onclick=OPENS_ANOTHER, ident=False)
     else:
         first = heading(2025, onclick=OPENS_ANOTHER if how == "same element" else DRAWS_ANEW)
     second = heading(2024).replace('id="spViewStatementsElectronic-2024"', 'id="x2024"')
     page = show('<div id="list">' + heading(2026, open_=True) + first + second + "</div>")
     frame = page.frame(name="statements")
-    site.collect_statement_rows(page)
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
+    assert stopped.value.reason == "a year pressed once stayed closed"
     assert said(frame) == ["press-2025", "open-2024"]
     # Not vacuous. 2025 is still collapsed and first, so a loop that went
     # on would have pressed it again.
@@ -230,12 +240,12 @@ def test_a_heading_pressed_once_is_never_pressed_again(show, how):
 
 @pytest.mark.parametrize("shared", ["id", "words"])
 def test_years_that_share_an_id_or_words_are_each_opened(show, shared):
-    """Two years can share a heading's id, or its words when the year is
-    written somewhere else. Each heading is still a heading of its own, and
-    every year is opened and read."""
+    """Two years can share a heading's id, or its words, should the page
+    ever write one year twice. Each heading is still a heading of its own,
+    and every year is opened and read."""
     years_ = [heading(2026, open_=True)]
     for year in (2025, 2024, 2023):
-        h = heading(year, words="Statements" if shared == "words" else None)
+        h = heading(year, words="Statements 2025" if shared == "words" else None)
         if shared == "id":
             h = h.replace("spViewStatementsElectronic-%s" % year, "spViewStatementsElectronic-7")
         years_.append(h)
@@ -246,12 +256,72 @@ def test_years_that_share_an_id_or_words_are_each_opened(show, shared):
     assert listed_years(rows) == ["2023", "2024", "2025", "2026"]
 
 
-def test_a_heading_whose_words_are_refused_is_not_pressed(show):
-    page = show(heading(2026, open_=True)
-                + heading(2025, words="Change paperless options for 2025"))
+@pytest.mark.parametrize("words", [
+    "2025", "2025 Statements", "Statements and Notices 2025", "2025 (12)", "Expand 2025"])
+def test_the_live_wording_and_its_neighbors_are_opened(show, words):
+    """The live list's headings read the year alone. The words a heading
+    may carry beside it are taken too."""
+    page = show(heading(2026, open_=True) + heading(2025, words=words))
     frame = page.frame(name="statements")
-    site.collect_statement_rows(page)
+    rows = site.collect_statement_rows(page)
+    assert said(frame) == ["open-2025"]
+    assert listed_years(rows) == ["2025", "2026"]
+
+
+@pytest.mark.parametrize("words", [
+    "Change paperless options for 2025", "Make a payment", "2025 Make a payment",
+    "Statements", "Older statements", ""])
+def test_a_heading_that_does_not_read_as_a_year_stops_the_run_with_nothing_pressed(
+        show, words):
+    """Nor is any heading after it pressed. The run stops rather than read
+    the one open year as the whole list, the undercount a person once
+    caught, and says what to do."""
+    page = show(heading(2026, open_=True) + heading(2025, words=words) + heading(2024))
+    frame = page.frame(name="statements")
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
+    stop = stopped.value
+    assert isinstance(stop, pressing.Stop)
+    assert stop.step == "open a year of statements"
+    assert stop.reason == "a year heading did not read as one"
+    assert stop.facts == {"closed": 2}
+    assert not stop.after_a_press
+    assert "yourself" in stop.lines[-1]
     assert said(frame) == []
+
+
+def test_a_heading_carrying_a_refused_label_stops_the_run_with_nothing_pressed(show):
+    """It reads 2025, and its own aria-label asks for a payment."""
+    page = show(heading(2026, open_=True) + heading(2025, aria="Pay my mortgage"))
+    frame = page.frame(name="statements")
+    with pytest.raises(site.YearsLeftClosed):
+        site.collect_statement_rows(page)
+    assert said(frame) == []
+
+
+def test_what_reads_as_a_year_heading():
+    for label in ("2025", " 2019 ", "2025\n", "2025 Statements", "2025 statement",
+                  "Statements 2025", "Statements and Notices 2025", "2025 (12)",
+                  "2025 Statements (3)", "Expand 2025", "show 2025"):
+        assert site.is_year_heading(label), label
+    for label in ("", "25", "20255", "Statements", "Pay 2025", "2025 Make a payment",
+                  "2025 | Make a payment", "Expand", "(12)", "2025 2024", None):
+        assert not site.is_year_heading(label), label
+    assert site.PRESS_GUARDS == (site.is_year_heading,)
+
+
+def test_more_closed_years_than_one_run_opens_stops_it(show, monkeypatch):
+    """The opening ends after twenty presses. Years still closed then stop
+    the run as any year left closed does."""
+    import builtins
+    page = show(heading(2026, open_=True) + heading(2025) + heading(2024) + heading(2023))
+    real = builtins.range
+    monkeypatch.setattr(site, "range", lambda n: real(2), raising=False)
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
+    assert stopped.value.reason == "more years than one run opens"
+    assert stopped.value.facts == {"closed": 1}
+    assert said(page.frame(name="statements")) == ["open-2025", "open-2024"]
 
 
 def test_headings_in_the_page_itself_are_opened_too(show):
@@ -260,3 +330,56 @@ def test_headings_in_the_page_itself_are_opened_too(show):
     rows = site.collect_statement_rows(page)
     assert said(page.main_frame) == ["open-2025", "open-2024", "open-2023"]
     assert listed_years(rows) == ["2023", "2024", "2025", "2026"]
+
+
+# A count of collapsed headings that falls is not every year opened. The
+# three below each left 2024 unread while the collector returned normally,
+# found by review, and the list went on to be marked whole.
+
+def test_a_press_that_takes_another_years_mark_away_stops_the_run(show):
+    """Pressing 2025 lists it, and the redraw drops 2024's open-table class
+    without listing 2024, so the count falls to none left."""
+    drop = ("listYear(this, '2025'); "
+            "document.getElementById('spViewStatementsElectronic-2024').className = 'x'")
+    page = show(heading(2026, open_=True) + heading(2025, onclick=drop) + heading(2024))
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
+    assert stopped.value.reason == "a year opened and listed nothing"
+    assert stopped.value.facts == {"closed": 1}
+    assert said(page.frame(name="statements")) == ["open-2025"]
+
+
+def test_a_press_that_sends_the_frame_elsewhere_stops_the_run(show):
+    page = show(heading(2026, open_=True)
+                + heading(2025, onclick="location.href='/gone'") + heading(2024))
+    with pytest.raises(site.YearsLeftClosed):
+        site.collect_statement_rows(page)
+
+
+def test_a_press_that_takes_the_frame_away_stops_the_run(show):
+    """The core's own look after the press may stop it first, since the
+    frame it looked into is gone. Either way the run stops."""
+    page = show(heading(2026, open_=True)
+                + heading(2025, onclick="window.frameElement.remove()") + heading(2024))
+    with pytest.raises(pressing.Stop):
+        site.collect_statement_rows(page)
+
+
+def test_opening_that_fails_partway_stops_the_run(show, monkeypatch):
+    """An error that is no stop, Playwright's own when a press tears the
+    page down, say, was logged and the years on screen read."""
+    def torn(fr):
+        raise RuntimeError("Execution context was destroyed")
+    monkeypatch.setattr(site, "_open_years", torn)
+    page = show(years())
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
+    assert stopped.value.reason == "opening the years failed"
+    assert stopped.value.facts == {"closed": 3}
+
+
+def test_a_list_with_no_year_closed_is_read_without_a_press(show):
+    page = show(heading(2026, open_=True) + heading(2025, open_=True))
+    rows = site.collect_statement_rows(page)
+    assert listed_years(rows) == ["2025", "2026"]
+    assert said(page.frame(name="statements")) == []

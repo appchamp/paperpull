@@ -25,9 +25,15 @@ SAFETY (this is a BANK, and a mortgage can move real money):
   and downloads PDFs M&T already generated. It must NEVER activate a control
   that pays the mortgage, sets up or edits autopay, moves money, transfers,
   sends a wire or Zelle, changes escrow, applies for anything, or changes a
-  setting. A control must clear FORBIDDEN_CONTROL_RE *and* match
-  SAFE_DOC_CONTROL_RE, and every URL requested must be on an M&T host. There
-  is deliberately no code here that submits a form or confirms a dialog.
+  setting. The one control it presses, a collapsed year's heading on the
+  statements list, must read as a year's heading (YEAR_HEADING_RE) and clear
+  FORBIDDEN_CONTROL_RE and the shared core blocklists (is_year_heading). A
+  year left closed for any reason stops the run (YearsLeftClosed), so a list
+  missing years is never read as whole. Any other control would
+  have to clear FORBIDDEN_CONTROL_RE *and* match SAFE_DOC_CONTROL_RE
+  (is_safe_control), and none is pressed. Every URL requested must be on an
+  M&T host. There is deliberately no code here that submits a form or
+  confirms a dialog.
 
 Documents are genuine PDF downloads, captured via the Playwright download
 event -> download.save_as(), until diagnose shows otherwise.
@@ -43,6 +49,7 @@ from typing import List, Optional, Tuple
 from paperpull_core import intake
 from paperpull_core import pressing
 from paperpull_core import redirects
+from paperpull_core.controls import AUTH_CONTROL_RE, SETTINGS_CONTROL_RE, control_labels
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.words import words_for as _words_for
@@ -416,6 +423,12 @@ _TAX_ROWS_JS = r"""() => {
 # only when nothing covers it in its frame or covers the frame in the page.
 _OPEN_TABLE = "span.open-table"
 _OPEN_TABLE_COUNT_JS = r"""() => document.querySelectorAll('span.open-table').length"""
+# The words of every collapsed year's heading, read the way _HEADING_WORDS_JS
+# reads one.
+_CLOSED_WORDS_JS = r"""() => [...document.querySelectorAll('span.open-table')].map((s) => {
+  const h = s.closest('h2') || s.parentElement;
+  return ((h ? h.innerText : s.innerText) || '').replace(/\s+/g, ' ').trim();
+})"""
 _HEADING_WORDS_JS = r"""(s) => {
   const h = s.closest('h2') || s.parentElement;
   return ((h ? h.innerText : s.innerText) || '').replace(/\s+/g, ' ').trim();
@@ -423,6 +436,34 @@ _HEADING_WORDS_JS = r"""(s) => {
 # Whether the element is one of those already pressed.
 _ONE_OF_JS = r"""(s, pressed) => pressed.some((p) => p === s)"""
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+
+# A collapsed year's heading. The live list showed the year alone, "2025",
+# and the words a heading may carry with it are taken too, "2025 Statements",
+# "Statements and Notices 2025", a count such as "(12)", or a screen
+# reader's "Expand". Nothing else is, and a heading that is not taken stops
+# the run (_open_years), so a wording this does not know is said, never read
+# as a list with one year.
+YEAR_HEADING_RE = re.compile(
+    r"(?:(?:expand|show) )?(?:statements?(?: and notices)? )?(?:19|20)\d{2}"
+    r"(?: statements?(?: and notices)?)?(?: ?\(\d{1,4}\))?", re.I)
+
+
+def _refused(label: str) -> bool:
+    return bool(FORBIDDEN_CONTROL_RE.search(label) or SETTINGS_CONTROL_RE.search(label)
+                or AUTH_CONTROL_RE.search(label))
+
+
+def is_year_heading(label) -> bool:
+    """The heading of one collapsed year on the statements list, by its
+    whole words, the year with only the words YEAR_HEADING_RE allows beside
+    it. is_safe_control would refuse a year, since a year is no document
+    word, so the one press has a guard of its own."""
+    label = re.sub(r"\s+", " ", str(label or "")).strip()
+    return bool(label) and not _refused(label) and bool(YEAR_HEADING_RE.fullmatch(label))
+
+
+PRESS_GUARDS = (is_year_heading,)
 
 
 def _words():
@@ -443,7 +484,15 @@ def _open_years(fr) -> None:
     and its id, is never pressed again, and the loop ends the moment the
     count of collapsed years stops falling. Words or an id alone do not tell
     a heading, since two years can share either one, and taking them for
-    one heading would leave a year unread."""
+    one heading would leave a year unread. A heading is pressed only when
+    its words read as a year's heading and no label it carries is refused
+    (is_year_heading).
+
+    A year left closed, whether its heading was refused, did not open, was
+    pressed already or lay past the twentieth press, stops the run with
+    nothing more pressed (YearsLeftClosed), so the list read is never one
+    that misses years. Reading only the open year once filed 10 of 93
+    statements as all there were."""
     page = fr.page
     pressed = []
     known = set()
@@ -455,15 +504,15 @@ def _open_years(fr) -> None:
         if heading is None:
             break
         label = heading.evaluate(_HEADING_WORDS_JS) or ""
-        if FORBIDDEN_CONTROL_RE.search(label):
-            log.warning("refusing to expand a section labeled %r", label[:40])
-            break
+        if not is_year_heading(label) or any(_refused(own) for own in control_labels(heading)):
+            raise _left_closed(remaining, "a year heading did not read as one",
+                               "A year on the statements list has a heading this app does not "
+                               "know, so it was not pressed.", heading=label)
         key = (heading.get_attribute("id") or "", label)
         if (all(key) and key in known) or heading.evaluate(_ONE_OF_JS, pressed):
-            log.warning("a year section pressed once already is still collapsed (%d left), "
-                        "so the run reads what is on screen. Expand the years yourself and "
-                        "re-run if statements look short.", remaining)
-            break
+            raise _left_closed(remaining, "a year pressed once stayed closed",
+                               "A year on the statements list stayed closed after it was "
+                               "pressed, and it is never pressed twice.")
         year = _YEAR_RE.search(label)
         what = ("the heading of the year %s on the statements list" % year.group(0) if year
                 else "a year heading on the statements list")
@@ -474,11 +523,35 @@ def _open_years(fr) -> None:
         fr.wait_for_timeout(1200)
         now = fr.evaluate(_OPEN_TABLE_COUNT_JS)
         if now >= remaining:
-            log.warning("a year section did not open (%d left); reading "
-                        "what is on screen. Expand the years yourself "
-                        "and re-run if statements look short.", now)
-            break
+            raise _left_closed(now, "a year did not open",
+                               "A year on the statements list did not open when it was "
+                               "pressed.", after_a_press=True)
         remaining = now
+    if remaining:
+        raise _left_closed(remaining, "more years than one run opens",
+                           "The statements list has more closed years than this app opens.",
+                           after_a_press=bool(pressed))
+
+
+class YearsLeftClosed(pressing.Stop):
+    """A year of the statements list is still closed, so the list is not
+    whole, and the run stops rather than file it as whole."""
+
+
+def _left_closed(closed: int, reason: str, said: str, after_a_press: bool = False,
+                 heading: str = "") -> YearsLeftClosed:
+    """The stop, with the words of a heading not taken kept on it for
+    Diagnose, which writes them as their shape. They are no fact of the
+    failure file, which holds only this program's own words."""
+    stop = YearsLeftClosed("open a year of statements", reason, [
+        said,
+        "%d year(s) of statements are still closed, so the list read would be "
+        "short, and the run stops here." % closed,
+        "Open every year on the statements list in the browser yourself, then "
+        "press Resume here, or run this again."],
+        facts={"closed": closed}, after_a_press=after_a_press)
+    stop.heading = heading
+    return stop
 
 
 def _tax_year(row_text: str, fallback: str) -> str:
@@ -504,17 +577,23 @@ def collect_statement_rows(page) -> List[dict]:
     rows: List[dict] = []
     seen = set()
 
-    def harvest_statement_links(links):
+    def harvest_statement_links(links, years=None):
+        """Add the statements among `links` not seen yet, and put the year
+        of every statement among them, seen or not, into `years`."""
         added = 0
         for a in links:
             href = a.get("href") or ""
-            if not href or href in seen:
+            if not href:
                 continue
             full = _abs(href)
             # Judge the PATH, not a substring of the URL. This is what stops a
             # crafted on-host link (a payment route carrying the endpoint name
             # as a query parameter) from being queued as a "statement".
             if _endpoint_of(full) != "statement":
+                continue
+            if years is not None:
+                years.add(_date_from_stmt_href(href, a.get("label") or "")[:4])
+            if href in seen:
                 continue
             label = re.sub(r"\s+", " ", a.get("label") or "").strip()
             m = re.search(r"[?&]t=([A-Z]+)", href)
@@ -557,17 +636,39 @@ def collect_statement_rows(page) -> List[dict]:
         # noticed). Each press is guarded like any other control (_open_years),
         # and a stop at a press is a SystemExit, which passes this except and
         # ends the run.
+        #
+        # A count of collapsed headings that falls is not every year opened.
+        # A redraw can take a heading's mark away without listing its year, a
+        # press can send the frame elsewhere, and the frame can go. So the
+        # years closed before the first press are kept, and once the frame
+        # is read each of them must have a statement listed, or the run stops
+        # (YearsLeftClosed) rather than read a short list as the whole one.
+        try:
+            closed = [w for w in (fr.evaluate(_CLOSED_WORDS_JS) or []) if isinstance(w, str)]
+        except Exception as e:
+            log.info("could not read the year headings of a frame: %s",
+                     str(e).splitlines()[0][:80])
+            closed = []
+        want = {m.group(0) for m in (_YEAR_RE.search(w) for w in closed) if m}
         try:
             _open_years(fr)
         except Exception as e:
+            if closed:
+                raise _left_closed(len(closed), "opening the years failed",
+                                   "Opening the years of the statements list failed "
+                                   "partway.", after_a_press=True)
             log.info("year expansion stopped: %s", str(e).splitlines()[0][:80])
-        # Harvest regardless of whether expansion worked, so a failed expand
-        # still yields the years already on screen.
+        listed: set = set()
         try:
-            found_statements += harvest_statement_links(fr.evaluate(_COLLECT_JS) or [])
+            found_statements += harvest_statement_links(fr.evaluate(_COLLECT_JS) or [], listed)
         except Exception as e:
             log.info("could not read links from a frame: %s",
                      str(e).splitlines()[0][:80])
+        missing = want - listed
+        if missing:
+            raise _left_closed(len(missing), "a year opened and listed nothing",
+                               "A year on the statements list showed no statements "
+                               "once it was opened.", after_a_press=True)
     if found_statements == 0:
         log.warning("No statements found in any open tab. On the Statements and "
                     "Notices page, pick your account and click View so they "

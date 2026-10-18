@@ -20,8 +20,10 @@ delete-safe, part of [PaperPull](../../README.md).
    Sign in yourself, answer any code it sends, and leave the window open.
 4. Click **more** under the buttons, then **Diagnose**. It reads the
    documents page and writes `Diagnostics\diagnose-documents.json` in the
-   E*TRADE folder. It downloads nothing, clicks nothing but a documents
-   link, takes no screenshot, and writes any word that is not on PaperPull's fixed list as its shape.
+   E*TRADE folder. It downloads nothing, takes no screenshot, and writes
+   any word that is not on PaperPull's fixed list as its shape. It presses
+   only links and buttons that lead to the documents or show more of them,
+   a documents link or "Show more" for instance.
 5. Click **Record**, in the same **more** menu. Go back to the browser window
    and click your way to one document the way you normally would, then come
    back here and click **Stop recording**. It writes

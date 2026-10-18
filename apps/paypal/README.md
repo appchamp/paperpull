@@ -16,7 +16,9 @@ Statements live under **Settings, Statements & Taxes, All transactions**,
 a month-by-month list for the past three years. The page gets that list
 from PayPal's own endpoint, and each Download asks another for the PDF.
 This app makes the same two requests from inside the signed-in page, so
-the session never leaves the browser, and it clicks nothing.
+the session never leaves the browser, and for a personal account it clicks
+nothing. For a business account it presses a statement's own Download and
+the list's next page, see [Business accounts](#business-accounts).
 
 A statement is identified by its month. Filenames read like
 `2026-08-31 PayPal Monthly Statement.pdf`, dated by the month's last day.

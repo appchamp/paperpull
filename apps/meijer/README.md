@@ -29,7 +29,7 @@ touches your credentials and never bypasses CAPTCHAs or OTP.
    orders page (and the places in-store receipts are likely to live),
    follows the first receipt or order-details link it finds, and writes
    `Diagnostics\diagnose-meijer.json` in the Meijer folder. It downloads
-   nothing to keep, clicks nothing, takes no screenshot, and masks every
+   nothing to keep, clicks nothing but the two tabs, takes no screenshot, and masks every
    number of two digits or more and every email address. It also records
    the shape (field names, not values) of the data the page loads.
 5. Click **Record**, in the same **more** menu. Go back to the browser window
@@ -171,7 +171,9 @@ structure into `Diagnostics\`, then repair that one file.
 - Read-only on Meijer. Never adds to a cart, reorders, clips a coupon,
   redeems mPerks rewards, refills a prescription, cancels or changes an
   order, or changes account settings. Forbidden controls are blocked by an
-  explicit regex, and nothing is clicked at all. Only a receipt's own link
+  explicit regex. Nothing is clicked but the Online Orders and In-Store
+  Receipts tabs and an in-store row's own receipt icon, which must read as
+  the receipt and pass `is_safe_control()`. Only a receipt's own link
   address is followed, and only on meijer.com.
 - Stops and hands control to you on CAPTCHA/OTP, sign-out, or rate limiting.
 - Sequential processing with polite randomized delays.

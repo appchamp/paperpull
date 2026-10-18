@@ -55,8 +55,14 @@ WHAT THE LIVE PROBE ESTABLISHED (2026-08-19):
   * History observed: 24 statements, the oldest .. the newest - about two
     years. Older statements are not reachable from this page and are not
     guessed at.
-  * Discover shows an inactivity "stay logged in?" modal; only its keep-alive
-    control is ever clicked (dismiss_timeout).
+  * Discover shows an inactivity "stay logged in?" modal. Of that modal only
+    the keep-alive control is ever clicked (dismiss_timeout). Elsewhere a run
+    presses only what reaches the statements when the address does not
+    (click_documents_nav), the site's own nav control (Activity, Statements
+    or Documents, through is_safe_control) and then, when that opens a
+    submenu, its link reading Statements or Tax Forms whole, and a "Show
+    more" or a period in the page's own fallback (expand_all, _select_option,
+    through the blocklist).
 
 STILL UNVERIFIED:
   * A login with MORE THAN ONE Discover card. This account has one, so no card
