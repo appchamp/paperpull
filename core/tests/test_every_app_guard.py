@@ -390,13 +390,18 @@ def press_something(page):
 # after the blocklist alone, and SECURITY.md's audit for 0.54.0 found it by
 # reading every app. The reachability test above passed both, because it
 # only looks at the calls there are. Here every guard an app defines must be
-# asked on a path a run takes. A use only in a survey, a page summary or the
-# Diagnose command does not count, and nor does one in a function only those
-# call, since none of them is a run.
+# asked on a path a run takes, from a command a run starts with (every
+# cmd_ but cmd_diagnose, main, and what a module names outside its
+# functions, an AppSpec say) through the functions each calls. A function
+# nothing calls is no path, and a use in a survey, a page summary or the
+# Diagnose command does not count, nor one in a function only they reach.
 
-# Functions that are surveys, summaries or Diagnose, run by hand to repair a
-# provider rather than to fetch anything.
-_DIAGNOSTIC_FN = re.compile(r"(?:^|_)(?:survey|summary|diagnose)(?:_|$)")
+# The functions that report on a page rather than fetch from it, by their
+# whole names, so a run's own function that happens to say "survey", Best
+# Buy's hide_survey or Wells Fargo's _survey, is not taken for one.
+_REPORT_FN = re.compile(
+    r"^(?:cmd_diagnose|_page_summary|_link_summary|_control_survey|survey|survey_\w+|"
+    r"_survey_\w+)$")
 # Names that hold a control to a list of labels. FORBIDDEN_CONTROL_RE alone
 # is a blocklist, which lets anything it does not name through, so it is not
 # one of them, and is_safe_url guards where a fetch goes, not a press.
@@ -412,11 +417,17 @@ CLICK_NOTHING = {
 }
 # Apps that press only controls they find by a selector or by words written
 # in the app, and keep is_safe_control() for Diagnose, SECURITY.md's second
-# list. Target and Walmart define no guard. This list may only shrink.
+# list. Target and Walmart define no guard. This list may only shrink, which
+# test_the_diagnose_only_list_only_shrinks holds it to.
 GUARD_FOR_DIAGNOSE_ONLY = {
     "amex", "capitalone", "navyfederal", "robinhood", "schwab", "usaa", "verizon",
     "wealthfront",
 }
+# The list as it stood when the census came in, for 0.55.0. Never added to.
+_DIAGNOSE_ONLY_WHEN_THE_CENSUS_CAME = frozenset({
+    "amex", "capitalone", "navyfederal", "robinhood", "schwab", "usaa", "verizon",
+    "wealthfront",
+})
 
 
 def _functions(source: str):
@@ -464,19 +475,26 @@ def _modules(app) -> dict:
             for py in sorted(app.glob("*.py")) if "test" not in py.name}
 
 
-def _by_hand(modules: dict):
-    """({stem: {function: names}}, the functions only run by hand)."""
-    modules = {stem: _functions(source) for stem, source in modules.items()}
+def _refs(modules: dict) -> dict:
+    """{function: the names its body refers to}, over every module."""
     refs = {}
     for fns in modules.values():
         for name, seen in fns.items():
             refs.setdefault(name, set()).update(seen)
+    return refs
+
+
+def _by_hand(modules: dict):
+    """({stem: {function: names}}, the reporting functions and every one
+    only they call). Everything else counts as a run's, a function nothing
+    calls included, which is the careful side for a census of presses."""
+    modules = {stem: _functions(source) for stem, source in modules.items()}
+    refs = _refs(modules)
     callers = {}
     for name, seen in refs.items():
         for other in seen - {name}:
             callers.setdefault(other, set()).add(name)
-    # Diagnostic, and anything that only diagnostic functions call.
-    by_hand = {name for name in refs if _DIAGNOSTIC_FN.search(name)}
+    by_hand = {name for name in refs if _REPORT_FN.match(name)}
     while True:
         more = {name for name in refs if name not in by_hand and callers.get(name)
                 and callers[name] <= by_hand}
@@ -486,18 +504,60 @@ def _by_hand(modules: dict):
     return modules, by_hand
 
 
+def _outside_functions(source: str) -> set:
+    """The names a module refers to outside its functions, an AppSpec's
+    hooks or a table of commands, say."""
+    import ast
+    out = set()
+    todo = list(ast.parse(source).body)
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(node, ast.Name):
+            out.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            out.add(node.attr)
+        todo.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def run_reaches(sources: dict) -> set:
+    """The functions a run can reach, from every cmd_ but cmd_diagnose,
+    main, and what the modules name outside their functions, through the
+    functions each calls, never into a reporting one. A function nothing
+    reaches, dead code, is not among them, which is the careful side for a
+    census of guards."""
+    modules = {stem: _functions(source) for stem, source in sources.items()}
+    refs = _refs(modules)
+    roots = {name for name in refs if name.startswith("cmd_") or name == "main"}
+    for source in sources.values():
+        roots |= _outside_functions(source) & set(refs)
+    todo = [name for name in roots if not _REPORT_FN.match(name)]
+    reached = set()
+    while todo:
+        name = todo.pop()
+        if name in reached:
+            continue
+        reached.add(name)
+        todo.extend(n for n in refs.get(name, ()) if n in refs and n not in reached
+                    and not _REPORT_FN.match(n))
+    return reached
+
+
 def guards_asked_in_a_run(app) -> list:
     """["module:function", ...] for each function of `app` that asks one of
-    its site module's guards on a path a run can take. Empty for an app that
+    its site module's guards on a path a run takes. Empty for an app that
     defines no guard."""
     sources = _modules(app)
     guards = _press_guards(sources["%s_site" % app.name])
     if not guards:
         return []
-    modules, by_hand = _by_hand(sources)
+    reached = run_reaches(sources)
+    modules = {stem: _functions(source) for stem, source in sources.items()}
     return sorted("%s:%s" % (stem, name) for stem, fns in modules.items()
                   for name, seen in fns.items()
-                  if name not in by_hand and name not in guards and seen & guards)
+                  if name in reached and name not in guards and seen & guards)
 
 
 def _defines_a_guard(app) -> bool:
@@ -571,6 +631,12 @@ def show_all(page):
     assert presses_in_a_run(app) == ["pick_year:click", "show_all:click in the page"]
 
 
+def test_the_diagnose_only_list_only_shrinks():
+    """An app off it presses through a guard. One put on it would be let
+    off asking a guard it defines, which is the hole the census closed."""
+    assert GUARD_FOR_DIAGNOSE_ONLY <= _DIAGNOSE_ONLY_WHEN_THE_CENSUS_CAME
+
+
 def test_every_app_on_the_lists_here_is_an_app_with_a_guard():
     """A name that is no app, or an app without a guard, would hold nothing."""
     with_guard = {a.name for a in APPS if _defines_a_guard(a)}
@@ -611,6 +677,28 @@ def cmd_run(page):
     site.pick_year(page, "2025")
 ''', encoding="utf-8")
     assert guards_asked_in_a_run(app) == []
+
+    # A function nothing calls asking the guard is dead code, no run.
+    site = (app / "shop_site.py").read_text(encoding="utf-8")
+    (app / "shop_site.py").write_text(site + '''
+def pick_year_carefully(page, year):
+    if is_safe_control(page.locator("#menu").inner_text()):
+        page.locator("#menu").click()
+''', encoding="utf-8")
+    assert guards_asked_in_a_run(app) == []
+
+    # A run's own function whose name says survey is still the run's.
+    (app / "shop_site.py").write_text(site + '''
+def hide_survey(page):
+    if is_safe_control(page.locator("#menu").inner_text()):
+        page.locator("#menu").click()
+''', encoding="utf-8")
+    docs = (app / "shop_docs.py").read_text(encoding="utf-8")
+    (app / "shop_docs.py").write_text(docs.replace(
+        'site.pick_year(page, "2025")', 'site.hide_survey(page)'), encoding="utf-8")
+    assert guards_asked_in_a_run(app) == ["shop_site:hide_survey"]
+    (app / "shop_docs.py").write_text(docs, encoding="utf-8")
+    (app / "shop_site.py").write_text(site, encoding="utf-8")
 
     # The same press, asked of the guard first, is a run that asks it.
     site = (app / "shop_site.py").read_text(encoding="utf-8")
