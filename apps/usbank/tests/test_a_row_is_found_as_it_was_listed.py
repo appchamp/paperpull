@@ -143,3 +143,45 @@ def test_a_heading_that_would_not_answer_is_never_taken_for_no_section(page, mon
                            _section(["September 30, 2031"])))
     stall_reads(monkeypatch, {"h-savings"}, locator=("inner_text",))
     assert site.find_row_control(page, "2031-09-30") == (None, "")
+
+
+def test_a_second_twin_that_will_not_read_presses_neither(page, monkeypatch):
+    """The first of two rows reading as one date answers and the second's
+    label stalls. Neither is pressed, since the stalled one may be the twin."""
+    from paperpull_core.testkit import stall_reads
+    page.set_content(_list("September 30, 2031", "September 2031"))
+    stall_reads(monkeypatch, {"b1"}, locator=("get_attribute",))
+    assert site.find_row_control(page, "2031-09-30") == (None, "")
+
+
+def test_a_row_whose_buttons_will_not_count_is_never_taken_for_none(page, monkeypatch):
+    """A row whose download buttons cannot be counted is not a row without
+    one, so nothing is pressed and the list is not read as whole."""
+    from paperpull_core.testkit import stall_reads
+    page.set_content(_list("September 30, 2031", "September 2031"))
+    stall_reads(monkeypatch, {"b1"}, locator=("count",))
+    assert site.find_row_control(page, "2031-09-30") == (None, "")
+    with pytest.raises(site.RowUnread):
+        site.read_rows(page, "Checking")
+
+
+def test_a_heading_that_will_not_read_stops_the_list(page, monkeypatch):
+    """read_rows meets a section heading that will not answer. The list stops
+    rather than going on without that section."""
+    from paperpull_core.testkit import stall_reads
+    page.set_content(_page(_section(["August 2031"], "Savings statements"),
+                           _section(["September 30, 2031"])))
+    stall_reads(monkeypatch, {"h-savings"}, locator=("inner_text",))
+    with pytest.raises(site.RowUnread):
+        site.read_rows(page, "Checking")
+
+
+def test_a_heading_that_will_not_count_stops_the_list(page, monkeypatch):
+    """Counting a section's heading stalls. The list stops rather than taking
+    the section for one with no heading."""
+    from paperpull_core.testkit import stall_reads
+    page.set_content(_page(_section(["August 2031"], "Savings statements"),
+                           _section(["September 30, 2031"])))
+    stall_reads(monkeypatch, {"h-savings"}, locator=("count",))
+    with pytest.raises(site.RowUnread):
+        site.read_rows(page, "Checking")
