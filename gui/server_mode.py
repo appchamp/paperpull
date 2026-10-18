@@ -17,8 +17,9 @@ WHAT IT ADDS
   A gate in front of everything else. A request without a signed-in session
   is sent to the sign-in page, or answered 401 under /api/. A session is a
   random token in a cookie the page's scripts cannot read and another site
-  cannot send. Wrong passwords from one address make it wait, longer each
-  time.
+  cannot send, and it ends after IDLE_SECONDS with nothing asked of it by
+  the panel's own page. Wrong passwords from one address make it wait,
+  longer each time.
 
   Its own names. It answers only a request made to its address or to a
   name that exists only on a home network, and to the names listed in
@@ -29,7 +30,9 @@ WHAT IT ADDS
   container's virtual screen, and noVNC shows it in the page. Its connection
   runs through the panel to the screen sharing server, which listens inside
   the container only, so the screen sits behind the same password and the
-  same port as everything else.
+  same port as everything else. More than SCREEN_IDLE_SECONDS after
+  anyone was last seen there, the password typed, the screen opened or
+  used, it closes and asks for the password again.
 """
 from __future__ import annotations
 
@@ -66,10 +69,36 @@ SESSION_COOKIE = "paperpull_session"
 # name under the same domain can set or replace it.
 SECURE_SESSION_COOKIE = "__Host-paperpull_session"
 SESSION_COOKIES = (SECURE_SESSION_COOKIE, SESSION_COOKIE)
+# The longest a session lasts, however much it is used.
 SESSION_SECONDS = 14 * 86400
+# A session the panel's own page has asked nothing of for this long ends.
+# Longer than any sitting at the panel, a long first run included, and
+# shorter than the days between visits to a NAS used every few days, so
+# each visit signs in once and a browser left signed in is signed out the
+# same day.
+IDLE_SECONDS = 8 * 3600
+# The Browser Screen is live keyboard and mouse on every provider signed in
+# there. So it opens, and stays open, only within this long of someone
+# being seen there, the password typed, the screen's page opened from the
+# panel, or a key pressed or the mouse moved on it, a sign-in at a provider
+# and the wait for its texted code fitting many times. After that it closes
+# and asks for the password again. What the panel does meanwhile counts for
+# nothing, since its page asks for things by itself, the next run of Run
+# All among them, and nor does noVNC connecting again by itself, which it
+# does after every close.
+SCREEN_IDLE_SECONDS = 15 * 60
 # How often an open Browser Screen asks whether its session still holds, so
 # signing out, a new password or reset_password.py ends it within seconds.
 SCREEN_CHECK_SECONDS = 3
+# noVNC's page, as the Browser Screen and the panel's docked sign-in window
+# open it. It finds the screen's connection at path, on the page's own
+# address, by wss over HTTPS and ws over plain HTTP.
+NOVNC_PAGE = "/screen/novnc/vnc.html?autoconnect=1&reconnect=1&resize=scale&path=screen/websockify"
+# What the Browser Screen shows when it was closed for going unused, or is
+# asked for again after that. noVNC shows the first reason a screen gives.
+SCREEN_CLOSED = ("The sign-in window closed after %d minutes without use, since it is live control "
+                 "of the providers signed in there. Reload this page, or open the sign-in window "
+                 "again from the panel, and enter your password." % (SCREEN_IDLE_SECONDS // 60))
 MIN_PASSWORD = 10
 # scrypt's cost, the OWASP profile of 16 MiB in five lanes. The same memory
 # as the cost before it (p=1) at five times the work, measured at 0.15 s a
@@ -296,8 +325,14 @@ def _password_stamp() -> str:
 
 
 def new_session() -> str:
+    """A session for a password just typed. Each one keeps when it ends at
+    the latest, the password it belongs to, when it was last used, and when
+    the password was last typed or the Browser Screen last used, which is
+    what the Browser Screen asks about."""
     token = secrets.token_urlsafe(32)
-    _SESSIONS[token] = (time.time() + SESSION_SECONDS, _password_stamp())
+    now = time.time()
+    _SESSIONS[token] = {"ends": now + SESSION_SECONDS, "stamp": _password_stamp(),
+                        "used": now, "screen": now}
     return token
 
 
@@ -305,11 +340,47 @@ def session_valid(token: str) -> bool:
     entry = _SESSIONS.get(token or "")
     if not entry:
         return False
-    expiry, stamp = entry
-    if expiry < time.time() or not stamp or stamp != _password_stamp():
+    now = time.time()
+    if (entry["ends"] < now or now - entry["used"] > IDLE_SECONDS
+            or not entry["stamp"] or entry["stamp"] != _password_stamp()):
         _SESSIONS.pop(token, None)
         return False
     return True
+
+
+def note_use(token: str) -> None:
+    """The panel's own page asked for something with the session, which
+    keeps it from going idle. It never opens the Browser Screen, since the
+    page asks for things by itself with nobody there."""
+    entry = _SESSIONS.get(token or "")
+    if entry:
+        entry["used"] = time.time()
+
+
+def note_screen_use(token: str) -> None:
+    """Someone was seen at the Browser Screen, a key pressed or the mouse
+    moved on it, or its page opened from the panel. It keeps the session
+    from going idle and the screen open to it."""
+    entry = _SESSIONS.get(token or "")
+    if entry:
+        entry["used"] = entry["screen"] = time.time()
+
+
+def screen_open(token: str) -> bool:
+    """Whether the Browser Screen may open for a session, or stay open,
+    which takes someone seen there, the password typed, its page opened or
+    the screen used, no longer than SCREEN_IDLE_SECONDS ago."""
+    if not session_valid(token):
+        return False
+    entry = _SESSIONS.get(token or "")
+    return bool(entry) and time.time() - entry["screen"] <= SCREEN_IDLE_SECONDS
+
+
+def screen_again(token: str) -> None:
+    """The password was typed again to open the Browser Screen."""
+    entry = _SESSIONS.get(token or "")
+    if entry:
+        entry["used"] = entry["screen"] = time.time()
 
 
 def end_session(token: str) -> None:
@@ -404,6 +475,18 @@ def over_https(scope) -> bool:
     return False
 
 
+def from_its_own_page(headers: dict) -> bool:
+    """Whether a request is one the panel's own page made, or an address the
+    browser opened by itself, typed in or opened from a bookmark. A page of
+    another program on the same machine, at another port, is the same site
+    as far as the browser knows, so it sends the session's cookie with
+    whatever that page asks for, an image for instance. Such a request
+    never counts as the session being used."""
+    if (headers.get("sec-fetch-site") or "").lower() == "none":
+        return True
+    return same_origin(headers)
+
+
 def same_origin(headers: dict) -> bool:
     """Whether a request came from the panel's own page, on the desktop and
     on the server alike. Sec-Fetch-Site says so plainly in every current
@@ -492,6 +575,60 @@ def client_of(scope) -> str:
     return str(client[0])
 
 
+# -- behind the HTTPS proxy -----------------------------------------------------------
+#
+# compose.https.yaml puts Caddy in front of the panel, and every request then
+# comes from Caddy's address. Wrong passwords are counted by address, so
+# counted against Caddy's, five from anyone on the network would make the
+# owner wait as well. So the proxy is named in PAPERPULL_PROXY, by its name
+# on the project's own network, and a request from that name's address is
+# taken to come from the browser the proxy names. Caddy writes that
+# address in X-Forwarded-For itself, in place of any a browser sent.
+
+PROXY_LOOKUP_SECONDS = 60
+_PROXY = {"name": "", "addresses": frozenset(), "until": 0.0}
+
+
+async def addresses_of(name: str) -> frozenset:
+    """Every address a name has, looked up without holding up the panel."""
+    infos = await asyncio.get_running_loop().getaddrinfo(name, None)
+    return frozenset(str(info[4][0]) for info in infos)
+
+
+async def proxy_addresses() -> frozenset:
+    """The addresses PAPERPULL_PROXY names, looked up again every minute,
+    since the proxy's address changes when its container is made again."""
+    name = (os.environ.get("PAPERPULL_PROXY") or "").strip()
+    if not name:
+        return frozenset()
+    now = time.time()
+    if _PROXY["name"] == name and now < _PROXY["until"]:
+        return _PROXY["addresses"]
+    try:
+        found = await addresses_of(name)
+    except OSError:
+        found = frozenset()
+    _PROXY.update(name=name, addresses=found, until=now + PROXY_LOOKUP_SECONDS)
+    return found
+
+
+async def client_address(scope) -> str:
+    """The address a sign-in came from, which its wrong tries count against.
+    From the proxy, the last address in the last X-Forwarded-For line, the
+    one the proxy nearest the panel wrote, and from anywhere else, or when
+    the proxy names no plain address, the address the request came from."""
+    peer = client_of(scope)
+    if peer not in await proxy_addresses():
+        return peer
+    lines = [value.decode("latin-1") for key, value in scope.get("headers", [])
+             if key.decode("latin-1").lower() == "x-forwarded-for"]
+    last = lines[-1].split(",")[-1].strip() if lines else ""
+    try:
+        return str(ipaddress.ip_address(last))
+    except ValueError:
+        return peer
+
+
 # -- the gate ------------------------------------------------------------------------
 
 OPEN_PATHS = {"/login", "/setup", "/favicon.ico"}
@@ -512,7 +649,14 @@ class SignInGate:
         path = scope.get("path", "")
         if scope["type"] == "http" and path in OPEN_PATHS:
             return await self.app(scope, receive, send)
-        if signed_in(scope) and (scope["type"] == "http" or same_origin(_headers(scope))):
+        headers = _headers(scope)
+        token = session_token(headers)
+        if session_valid(token) and (scope["type"] == "http" or same_origin(headers)):
+            # A connection to the Browser Screen is not use, since noVNC
+            # makes one again by itself when one ends. Keys and the mouse
+            # on the screen are, and the screen notes those itself.
+            if scope["type"] == "http" and from_its_own_page(headers):
+                note_use(token)
             return await self.app(scope, receive, send)
         if scope["type"] == "websocket":
             await receive()
@@ -587,14 +731,30 @@ def setup_body(message: str = "") -> str:
             "%s<button>Set the password</button></form>" % (MIN_PASSWORD, said))
 
 
+def again_body(to: str, message: str = "") -> str:
+    """The Browser Screen asking for the password again. to says where it
+    goes once the password is right, its own tab or the panel's docked
+    sign-in window."""
+    said = '<p class="bad">%s</p>' % html.escape(message) if message else ""
+    return ("<h1>Sign-in window</h1><p>The sign-in window is live control of every provider "
+            "signed in there, so after %d minutes without use it asks for your password "
+            "again.</p>"
+            '<form method="post" action="/screen/again">'
+            '<input type="hidden" name="to" value="%s">'
+            '<label for="password">Password</label>'
+            '<input id="password" name="password" type="password" autocomplete="current-password" autofocus required>'
+            "%s<button>Open the sign-in window</button></form>"
+            % (SCREEN_IDLE_SECONDS // 60, "dock" if to == "dock" else "screen", said))
+
+
 SCREEN = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PaperPull Browser Screen</title><link rel="icon" href="/favicon.ico">
 <style>html,body{margin:0;height:100%;background:#0f1115}
 iframe{border:0;width:100%;height:100%;display:block}</style></head>
-<body><iframe src="/screen/novnc/vnc.html?autoconnect=1&amp;reconnect=1&amp;resize=scale&amp;path=screen/websockify"
-title="The Browser Screen"></iframe></body></html>"""
+<body><iframe src="__NOVNC__"
+title="The Browser Screen"></iframe></body></html>""".replace("__NOVNC__", html.escape(NOVNC_PAGE))
 
 
 # A screen, drawn with the page's own color so it suits light and dark.
@@ -672,37 +832,27 @@ def install(app) -> None:
             return RedirectResponse("/setup", status_code=303)
         return HTMLResponse(page(login_body()), headers={"Cache-Control": "no-store"})
 
-    @app.post("/login", include_in_schema=False)
-    async def login(request: Request):
-        only_on_the_server()
-        if not password_set():
-            return RedirectResponse("/setup", status_code=303)
-        if not same_origin(dict(request.headers)):
-            return refused(login_body("That request did not come from this page."), 403)
-        # The body is read before the wait is looked at. Read after it, many
-        # logins whose headers came at once all passed the wait together,
-        # before any of them was counted wrong.
-        given = await read_form(request)
-        if given is None:
-            return too_large(login_body("That sign-in sent more than a password."))
-        client = request.client.host if request.client else "?"
+    async def password_tried(client: str, password: str):
+        """None when a password typed into a form is the server's, or the
+        status and the words that say why not. The caller reads the body,
+        and where it came from, before this looks at the wait. Read after
+        it, many logins whose headers came at once all passed the wait
+        together, before any of them was counted wrong."""
         wait = wait_left(client)
         if wait:
-            return refused(login_body("Too many wrong passwords. Try again in %d seconds." % wait), 429)
+            return 429, "Too many wrong passwords. Try again in %d seconds." % wait
         if hashing_full():
-            return refused(login_body("The server is busy checking other sign-ins. "
-                                      "Try again in a moment."), 503)
+            return 503, "The server is busy checking other sign-ins. Try again in a moment."
         # Each try is counted wrong before its password is hashed, and the
         # count is forgiven only once the hash says it was right. The hash
         # runs on another thread while other logins go on, so a try counted
         # after it would let many logins sent at once all pass the wait
-        # first. From the body being in to the count nothing waits, so each
-        # is judged after the one before it was counted.
+        # first. From the wait being looked at to the count nothing waits,
+        # so each is judged after the one before it was counted.
         record = _read().get("password") or {}
         note_failure(client)
-        password = given.get("password", "")
         if not await off_the_loop(matches, password, record):
-            return refused(login_body("That is not the password."))
+            return 401, "That is not the password."
         note_success(client)
         if outdated(record) and not hashing_full():
             # Hashed again at today's cost while the password is at hand,
@@ -715,6 +865,22 @@ def install(app) -> None:
             except (OSError, ValueError, RuntimeError) as e:
                 print("The password could not be kept at the new cost yet, %s. It still signs "
                       "in, and is tried again next time." % e, flush=True)
+        return None
+
+    @app.post("/login", include_in_schema=False)
+    async def login(request: Request):
+        only_on_the_server()
+        if not password_set():
+            return RedirectResponse("/setup", status_code=303)
+        if not same_origin(dict(request.headers)):
+            return refused(login_body("That request did not come from this page."), 403)
+        given = await read_form(request)
+        if given is None:
+            return too_large(login_body("That sign-in sent more than a password."))
+        client = await client_address(request.scope)
+        wrong = await password_tried(client, given.get("password", ""))
+        if wrong:
+            return refused(login_body(wrong[1]), wrong[0])
         return signed_in_answer(request, new_session())
 
     @app.get("/setup", include_in_schema=False)
@@ -738,7 +904,7 @@ def install(app) -> None:
         given = await read_form(request)
         if given is None:
             return too_large(setup_body("That form sent more than a code and a password."))
-        client = request.client.host if request.client else "?"
+        client = await client_address(request.scope)
         wait = wait_left(client)
         if wait:
             return refused(setup_body("Too many wrong codes. Try again in %d seconds." % wait), 429)
@@ -779,19 +945,53 @@ def install(app) -> None:
         return answer
 
     @app.get("/screen", include_in_schema=False)
-    def screen():
+    def screen(request: Request):
         only_on_the_server()
+        if not screen_open(session_token(_headers(request.scope))):
+            return HTMLResponse(page(again_body("screen")), headers={"Cache-Control": "no-store"})
         return HTMLResponse(SCREEN, headers={"Cache-Control": "no-store"})
 
     @app.get("/screen/novnc/{rest:path}", include_in_schema=False)
-    def novnc_file(rest: str):
-        """noVNC's own files, and nothing outside its folder."""
+    def novnc_file(request: Request, rest: str):
+        """noVNC's own files, and nothing outside its folder. Its page asks
+        for the password first once the session has gone unused too long
+        for the Browser Screen, since the panel docks that very page. The
+        files are kept by the browser only as long as they are still the
+        image's, so a newer image never meets a mix of two noVNCs."""
         only_on_the_server()
         root = novnc_dir().resolve()
         target = (root / rest).resolve()
         if root not in target.parents or not target.is_file():
             raise HTTPException(404)
-        return FileResponse(target)
+        if target.suffix == ".html":
+            token = session_token(_headers(request.scope))
+            if not screen_open(token):
+                return HTMLResponse(page(again_body("dock")), headers={"Cache-Control": "no-store"})
+            # The page is opened by a person, from the panel or its own tab,
+            # where noVNC connecting again never opens it again.
+            note_screen_use(token)
+        return FileResponse(target, headers={"Cache-Control": "no-cache"})
+
+    @app.post("/screen/again", include_in_schema=False)
+    async def screen_with_password(request: Request):
+        """The password typed again, to open the Browser Screen. Wrong ones
+        count and wait as at /login."""
+        only_on_the_server()
+        # Where the answer is shown, the panel's docked window or the
+        # screen's own tab, for the answers made before the form is read.
+        framed = "dock" if request.headers.get("sec-fetch-dest") == "iframe" else "screen"
+        if not same_origin(dict(request.headers)):
+            return refused(again_body(framed, "That request did not come from this page."), 403)
+        given = await read_form(request)
+        if given is None:
+            return too_large(again_body(framed, "That sent more than a password."))
+        to = "dock" if given.get("to") == "dock" else "screen"
+        client = await client_address(request.scope)
+        wrong = await password_tried(client, given.get("password", ""))
+        if wrong:
+            return refused(again_body(to, wrong[1]), wrong[0])
+        screen_again(session_token(_headers(request.scope)))
+        return RedirectResponse(NOVNC_PAGE if to == "dock" else "/screen", status_code=303)
 
     @app.websocket("/screen/websockify")
     async def screen_socket(websocket: WebSocket):
@@ -801,18 +1001,24 @@ def install(app) -> None:
         # The gate let this connection in on its session, and the screen is
         # live keyboard and mouse on every provider signed in there, so the
         # session is asked again every few seconds and the screen closes once
-        # it has ended, by signing out, a new password or reset_password.py.
-        token = session_token(dict(websocket.headers))
+        # it has ended, by signing out, a new password or reset_password.py,
+        # or once nobody has been seen there for SCREEN_IDLE_SECONDS. The
+        # panel's requests never keep it open, and a connection noVNC makes
+        # again by itself starts no time of its own.
+        token = session_token(_headers(websocket.scope))
         asked = websocket.headers.get("sec-websocket-protocol", "")
         await websocket.accept(subprotocol="binary" if "binary" in asked else None)
+        if not screen_open(token):
+            await turned_away(websocket)
+            return
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", vnc_port())
         except OSError:
             await close_quietly(websocket, 1011)
             return
         await bridge(websocket.receive, websocket.send_bytes, reader, writer,
-                     allowed=lambda: session_valid(token))
-        await close_quietly(websocket, 1000 if session_valid(token) else 1008)
+                     allowed=lambda: screen_open(token), used=lambda: note_screen_use(token))
+        await close_quietly(websocket, 1000 if screen_open(token) else 1008)
 
 
 # -- after a run, the plug-ins ----------------------------------------------------------
@@ -1028,14 +1234,74 @@ async def close_quietly(websocket, code: int = 1000) -> None:
         pass
 
 
-async def bridge(receive, send_bytes, reader, writer, allowed=None) -> None:
+async def turned_away(websocket) -> None:
+    """Tell noVNC why the screen will not open, in the screen sharing
+    protocol's own words. A server that lets nobody in sends its version,
+    then no way in and the reason, which noVNC shows in place of the screen.
+    noVNC makes no new connection after one it could not open, so the
+    reason stays until the page is opened again."""
+    try:
+        await websocket.send_bytes(b"RFB 003.008\n")
+        # noVNC answers with its own version before it reads any further.
+        await asyncio.wait_for(websocket.receive(), 5)
+        reason = SCREEN_CLOSED.encode("ascii")
+        await websocket.send_bytes(b"\x00" + len(reason).to_bytes(4, "big") + reason)
+    except (asyncio.TimeoutError, RuntimeError, WebSocketDisconnect, OSError):
+        pass
+    await close_quietly(websocket, 1008)
+
+
+# The messages noVNC sends the screen sharing server, by the number each
+# starts with, and how long each is, from its first byte. The ones only a
+# person sends, a key and the mouse, are 4 and 5, and 255 followed by 0, a
+# key as QEMU's extension sends it. The rest noVNC sends by itself, a
+# request for the screen's next picture above all, which it makes every
+# time the picture changes, so a page showing something that moves sends a
+# stream of them with nobody there. A paste, 6, is among those, since
+# noVNC answers the screen's own clipboard with one, measured live, and a
+# person who pastes presses Ctrl+V in the page afterwards.
+_PERSON = (4, 5)
+_FIXED = {0: 20, 3: 10, 150: 10, 250: 4}
+
+
+def person_in(data: bytes) -> bool:
+    """Whether a message from noVNC holds a key or the mouse. noVNC sends
+    each message of its own as one, so a message starts every one read
+    here, and one that starts with anything else, the protocol's opening
+    among them, is taken to hold none."""
+    i = 0
+    while i < len(data):
+        kind = data[i]
+        if kind in _PERSON or (kind == 255 and data[i + 1:i + 2] == b"\x00"):
+            return True
+        if kind in _FIXED:
+            size = _FIXED[kind]
+        elif kind == 6 and len(data) >= i + 8:
+            # Its length is signed, less than nothing for the clipboard's
+            # extension, which counts the same bytes.
+            size = 8 + abs(int.from_bytes(data[i + 4:i + 8], "big", signed=True))
+        elif kind == 2 and len(data) >= i + 4:
+            size = 4 + 4 * int.from_bytes(data[i + 2:i + 4], "big")
+        elif kind == 248 and len(data) >= i + 9:
+            size = 9 + data[i + 8]
+        elif kind == 251 and len(data) >= i + 7:
+            size = 8 + 16 * data[i + 6]
+        else:
+            return False
+        i += size
+    return False
+
+
+async def bridge(receive, send_bytes, reader, writer, allowed=None, used=None) -> None:
     """Carry the browser screen's bytes both ways until either side ends.
 
     noVNC speaks the screen sharing protocol over a WebSocket, and the
     screen sharing server speaks it over plain TCP, so each message from
     the page goes to the server as it is, and each block from the server
     goes back as one binary message. When `allowed` is given it is asked
-    every SCREEN_CHECK_SECONDS, and the bridge ends once it says no."""
+    every SCREEN_CHECK_SECONDS, and the bridge ends once it says no. `used`
+    is told each time a message from the page holds a key, the mouse or a
+    paste."""
     async def watch():
         while allowed():
             await asyncio.sleep(SCREEN_CHECK_SECONDS)
@@ -1050,6 +1316,8 @@ async def bridge(receive, send_bytes, reader, writer, allowed=None) -> None:
                 data = (message.get("text") or "").encode("latin-1")
             writer.write(data)
             await writer.drain()
+            if used is not None and person_in(data):
+                used()
 
     async def to_page():
         while True:

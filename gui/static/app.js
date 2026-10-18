@@ -63,8 +63,14 @@ let PROVIDERS = null;   // /api/providers, for choosing providers
 let VIEW = '';
 const ROUTE = {view: '', app: '', account: ''};
 
+// PaperPull Server signs a session out after hours without use, and the
+// page then meets 401 on its next request, so it goes to the sign-in.
+function signedOut(r) {
+  if (SERVER && r.status === 401) location.href = '/login';
+}
 async function getJSON(url) {
   const r = await fetch(url);
+  signedOut(r);
   let d = {};
   try { d = await r.json(); } catch (e) { /* not JSON */ }
   if (!r.ok) throw new Error((d && typeof d.detail === 'string' && d.detail) || 'the panel answered ' + r.status);
@@ -73,6 +79,7 @@ async function getJSON(url) {
 async function postJSON(url, body) {
   const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
                               body: JSON.stringify(body || {})});
+  signedOut(r);
   let d = {};
   try { d = await r.json(); } catch (e) { /* not JSON */ }
   if (!r.ok) throw new Error((d && typeof d.detail === 'string' && d.detail) || 'that did not work');
@@ -1242,8 +1249,12 @@ function openDock(provider) {
   $('dock-title').textContent = provider ? provider + ' sign-in window' : 'Sign-in window';
   $('dock-say').textContent = 'Sign in below the way you would on ' + (provider ? provider + "'s" : "the provider's") +
     ' own site. Your password goes to the provider, never to PaperPull. Leave it signed in when you are done.';
+  // Opened again unless noVNC shows the screen now, since one that closed
+  // after going unused asks for the password once its page is opened.
   const frame = $('dockframe');
-  if (frame.getAttribute('src') === 'about:blank') {
+  let live = false;
+  try { live = frame.contentDocument.documentElement.classList.contains('noVNC_connected'); } catch (e) { live = false; }
+  if (!live) {
     frame.src = '/screen/novnc/vnc.html?autoconnect=1&reconnect=1&resize=scale&path=screen/websockify';
   }
   document.body.classList.add('docked');

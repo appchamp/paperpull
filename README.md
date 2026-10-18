@@ -295,6 +295,10 @@ rest, Paperless, a NAS's own Docker screens, updates and backups.
    choose a password, with the setup code the container prints in
    `docker logs paperpull`.
 
+For HTTPS, the setup SERVER.md recommends, use `compose.https.yaml` with
+`Caddyfile` beside it in place of `compose.yaml`, see
+[HTTPS](SERVER.md#https).
+
 It is made for a machine at home. A rented server works, but providers
 treat data-center addresses as likely bots and check far more often. It
 listens on your home network behind a password, so it has privacy and

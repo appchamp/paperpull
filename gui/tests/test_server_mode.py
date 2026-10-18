@@ -465,7 +465,8 @@ def test_no_other_site_may_show_the_panel_in_a_frame(base, on_server, tmp_path, 
                           ("/api/apps", {"Host": "rebind.example"})):
         _, answer, _ = ask(base + path, session=session, headers=headers)
         assert answer["X-Frame-Options"] == "DENY", path
-        assert answer["Content-Security-Policy"] == "frame-ancestors 'none'", path
+        # The panel's page has a policy for its script besides.
+        assert "frame-ancestors 'none'" in answer.get_all("Content-Security-Policy"), path
     _, answer, _ = ask(base + "/screen/novnc/vnc.html", session=session)
     assert answer["X-Frame-Options"] == "SAMEORIGIN"
     assert answer["Content-Security-Policy"] == "frame-ancestors 'self'"

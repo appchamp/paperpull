@@ -23,7 +23,9 @@ moved or copied, and the old way of running them keeps working alongside.
 """
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
 import json
 import os
 from datetime import date, datetime
@@ -530,6 +532,13 @@ def _not_its_address(host: str, scope) -> str:
             "and http://localhost%s, on this computer.\n" % (port, port))
 
 
+def _frameable(path: str) -> bool:
+    """Whether a page of the panel's own may show this answer in a frame,
+    noVNC's files and the Browser Screen asking for the password again,
+    which the panel's docked sign-in window shows in place of noVNC."""
+    return path.startswith("/screen/novnc/") or path == "/screen/again"
+
+
 class NotInAFrame:
     """No page of another site may show the panel inside one of its own,
     where a click it asks for could land on Run All instead. Every answer
@@ -537,7 +546,7 @@ class NotInAFrame:
     frame-ancestors for the rest, in a policy of its own beside any the
     answer already carries. noVNC's page alone may be framed by a page of
     the panel's own, since the Browser Screen of PaperPull Server is that
-    page in a frame."""
+    page in a frame, and so may what stands in its place there."""
 
     def __init__(self, app):
         self.app = app
@@ -545,7 +554,7 @@ class NotInAFrame:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        own = scope.get("path", "").startswith("/screen/novnc/")
+        own = _frameable(scope.get("path", ""))
 
         async def framed(message):
             if message["type"] == "http.response.start":
@@ -559,10 +568,51 @@ class NotInAFrame:
         await self.app(scope, receive, framed)
 
 
-# Added after the server's sign-in gate, so these two come first, the frame
-# headers outermost of the panel's own, so that a refusal carries them too.
+# The answers the same for everyone, which a browser may keep, the icon and
+# the typefaces for a day, noVNC's files while they are still the image's.
+_ANYONES = "/favicon.ico"
+_ANYONES_UNDER = ("/fonts/", "/screen/novnc/")
+
+
+class KeptPrivate:
+    """Every answer the panel makes says two things more. nosniff, so a
+    browser takes a file for the kind its answer names and never runs one
+    as a script or shows it as a page because its bytes look like one. And
+    no-store, so no browser or proxy keeps a copy of a page, a record, a
+    spreadsheet or a download to show later, after a sign-out or to the
+    next person at that computer, on every answer but the ones that are the
+    same for everyone. An answer that said no-cache, a run's stream among
+    them, is told no-store instead, since no-cache still lets a copy be
+    kept. Answers made before the rest of the panel sees a request, a
+    refusal of the address or of the sign-in, carry both too."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path = scope.get("path", "")
+        anyones = path == _ANYONES or path.startswith(_ANYONES_UNDER)
+
+        async def said(message):
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                headers = MutableHeaders(scope=message)
+                headers["X-Content-Type-Options"] = "nosniff"
+                if not anyones and "no-store" not in (headers.get("cache-control") or "").lower():
+                    headers["Cache-Control"] = "no-store"
+            await send(message)
+
+        await self.app(scope, receive, said)
+
+
+# Added after the server's sign-in gate, so these come first, the frame and
+# privacy headers outermost of the panel's own, so that a refusal carries
+# them too.
 app.add_middleware(OwnAddressOnly)
 app.add_middleware(NotInAFrame)
+app.add_middleware(KeptPrivate)
 
 
 def _desktop_only() -> None:
@@ -4143,8 +4193,27 @@ FOOTER_SERVER = (
     '<a href="https://ko-fi.com/rheeloaded" target="_blank" rel="noopener">donate on Ko-fi</a>.</span>')
 
 
-@app.get("/", response_class=HTMLResponse)
-def index():
+# The panel's page carries its whole script inline, in one block.
+_SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.S)
+
+
+def _script_policy(page: str) -> str:
+    """The page's policy for scripts. Only the very script the page was
+    served with may run, named by its hash, so a script that found its way
+    into the page some other way, through a name or a title shown in it,
+    never runs, and nor does a plugin or a frame of another kind. The
+    browser hashes a script with its line breaks made plain, and _page
+    reads the files that way, so the hash is of the very text it hashes."""
+    hashes = []
+    for script in _SCRIPT_RE.findall(page):
+        digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
+        hashes.append("'sha256-%s'" % digest)
+    return ("script-src %s; object-src 'none'; base-uri 'none'; form-action 'self'"
+            % (" ".join(hashes) or "'none'"))
+
+
+def index() -> str:
+    """The panel's page, filled in for this edition and this person."""
     server = server_mode.enabled()
     bar = server_mode.server_bar() if server else ""
     footer = FOOTER_SERVER if server else FOOTER_DESKTOP
@@ -4153,6 +4222,13 @@ def index():
             .replace("__SERVER__", "true" if server else "false")
             .replace("__TERMS_VERSION__", TERMS_VERSION)
             .replace("__TERMS_DUE__", "true" if terms_due() else "false"))
+
+
+@app.get("/", response_class=HTMLResponse)
+def panel_page():
+    """The panel's page, with the policy that lets only its own script run."""
+    page = index()
+    return HTMLResponse(page, headers={"Content-Security-Policy": _script_policy(page)})
 
 
 # The PaperPull icon, for the browser tab the panel opens in. There is one

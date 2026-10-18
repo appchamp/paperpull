@@ -162,18 +162,20 @@ def test_compose_names_the_image_the_workflow_publishes():
     """By this release's version, never latest, so a person's server moves
     to another version only when they write it. The release's zip carries
     compose.yaml from its tag, so the version commit raises both."""
-    compose_file = (SERVER / "compose.yaml").read_text(encoding="utf-8")
     version = (REPO / "VERSION").read_text(encoding="utf-8").strip()
-    images = re.findall(r"^    image: (\S+)$", compose_file, re.M)
-    assert images == ["ghcr.io/rheeloaded/paperpull-server:%s" % version], \
-        "server/compose.yaml names %s, write the image of version %s there" % (images, version)
+    for name in ("compose.yaml", "compose.https.yaml"):
+        compose_file = (SERVER / name).read_text(encoding="utf-8")
+        images = [image for image in re.findall(r"^    image: (\S+)$", compose_file, re.M)
+                  if not image.startswith("caddy:")]
+        assert images == ["ghcr.io/rheeloaded/paperpull-server:%s" % version], \
+            "server/%s names %s, write the image of version %s there" % (name, images, version)
     assert 'image="ghcr.io/${OWNER,,}/paperpull-server"' in jobs()["publish"]
     assert 'docker push "$image:$version"' in jobs()["publish"]
 
 
 def test_the_smoke_run_starts_a_persons_compose_file_as_it_is(tmp_path):
     smoke.write_project(tmp_path, "some/image:tag")
-    for name in ("compose.yaml", "seccomp-chrome.json"):
+    for name in ("compose.yaml", "compose.https.yaml", "Caddyfile", "seccomp-chrome.json"):
         assert (tmp_path / name).read_bytes() == (SERVER / name).read_bytes(), name
     override = (tmp_path / "compose.smoke.yaml").read_text(encoding="utf-8")
     keys = set(re.findall(r"^\s*([\w-]+):", override, re.M))
@@ -181,6 +183,15 @@ def test_the_smoke_run_starts_a_persons_compose_file_as_it_is(tmp_path):
                     "PUID", "PGID"}, keys
     assert "image: some/image:tag" in override
     assert "container_name: %s" % smoke.CONTAINER in override
+    # The HTTPS file as a person fills it in, with this computer's name and
+    # address, and nothing else changed.
+    override = (tmp_path / "compose.https.smoke.yaml").read_text(encoding="utf-8")
+    keys = set(re.findall(r"^\s*([\w-]+):", override, re.M))
+    assert keys <= {"services", "paperpull", "proxy", "image", "container_name", "environment",
+                    "PUID", "PGID", "PAPERPULL_HOSTS", "PAPERPULL_ADDRESS", "PAPERPULL_NAMES"}, keys
+    assert "image: some/image:tag" in override
+    assert "container_name: %s" % smoke.CONTAINER in override
+    assert "container_name: %s" % smoke.PROXY in override
 
 
 def test_taking_the_smoke_run_down_can_only_reach_its_own_project(tmp_path, monkeypatch):
@@ -188,7 +199,9 @@ def test_taking_the_smoke_run_down_can_only_reach_its_own_project(tmp_path, monk
     hold its live sign-ins. So the smoke run's project and container have
     names of their own, and every compose command names the project."""
     assert smoke.PROJECT != "paperpull" and smoke.CONTAINER != "paperpull"
-    assert re.search(r"^name: paperpull$", (SERVER / "compose.yaml").read_text(encoding="utf-8"), re.M)
+    assert smoke.PROXY not in (smoke.CONTAINER, "paperpull-proxy")
+    for name in ("compose.yaml", "compose.https.yaml"):
+        assert re.search(r"^name: paperpull$", (SERVER / name).read_text(encoding="utf-8"), re.M)
     seen = []
 
     def run(cmd, **kwargs):
@@ -197,6 +210,9 @@ def test_taking_the_smoke_run_down_can_only_reach_its_own_project(tmp_path, monk
 
     monkeypatch.setattr(smoke.subprocess, "run", run)
     smoke.compose(tmp_path, "down", "-v", "--remove-orphans")
-    assert seen and seen[0][:4] == ["docker", "compose", "-p", smoke.PROJECT]
+    smoke.compose(tmp_path, "down", "-v", "--remove-orphans", https=True)
+    assert len(seen) == 2 and all(cmd[:4] == ["docker", "compose", "-p", smoke.PROJECT]
+                                  for cmd in seen)
+    assert str(tmp_path / "compose.https.yaml") in seen[1]
     source = (SERVER / "smoke.py").read_text(encoding="utf-8")
     assert source.count('"compose"') == 1, "compose is run somewhere other than compose()"

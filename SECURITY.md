@@ -118,6 +118,9 @@ The `.gitignore` already blocks all of the following. Do not override it.
   it, not even one that points a name of its own at your computer, and no
   other site may show the panel inside a page of its own. A link opened
   from an email, a chat or a PDF can open the panel, never start a run.
+  Every answer it makes tells the browser to take it for exactly the kind
+  of file it says it is, and to keep no copy of a page, a record or a
+  download, and its page runs only its own script, named by its hash.
 - **Spreadsheet text stays text.** Item names, store and merchant names and
   document titles are chosen by other people, and a spreadsheet takes a cell
   that starts with =, +, - or @ as a formula. The CSV files every app keeps
@@ -130,6 +133,33 @@ The `.gitignore` already blocks all of the following. Do not override it.
   through it.
 - **Delete-safe.** A sticky `downloaded_ok` marker means deleting the PDFs after
   you import them elsewhere will not cause re-downloads.
+
+## If something may have been exposed
+
+If your computer, its disk, a backup of the downloaders' folders or a copy
+of a browser profile folder may be in someone else's hands, do these in
+order. PaperPull Server has steps of its own, see
+[SECURITY-SERVER.md](SECURITY-SERVER.md).
+
+1. **PaperPull's own panel** keeps no sign-in on the desktop, and answers
+   only on this computer, so there is nothing to end there.
+2. **End the sign-ins at the providers.** Each provider's folder holds a
+   browser profile folder with its live sign-in, `browser-profile` or a
+   name ending in `-browser-profile`, and a copy of it works wherever it
+   is. Close every sign-in browser, then delete those folders, which signs
+   this computer out of every provider. A copy made
+   before still works until each provider ends it. So sign in at each
+   provider's own website from a device you trust, sign out every other
+   device or session where it offers that, and change the password there.
+3. **Take the newest release** from the
+   [releases page](https://github.com/rheeloaded/paperpull/releases), or
+   let the Store update it.
+
+**How security fixes are announced.** Every release that fixes a security
+problem says so under Security in [CHANGELOG.md](CHANGELOG.md) and in its
+notes on the [releases page](https://github.com/rheeloaded/paperpull/releases).
+To hear of every release, watch the repository on GitHub and choose
+Releases, under Watch and then Custom.
 
 ## Reporting
 

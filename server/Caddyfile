@@ -1,0 +1,34 @@
+# Caddy in front of PaperPull Server, for compose.https.yaml. See "HTTPS" in
+# SERVER.md.
+#
+# It answers by HTTPS on port 8765, with a certificate from a certificate
+# authority of its own, made at its first start and kept in its volume, and
+# passes each request on to the panel inside the project's own network. It
+# says X-Forwarded-Proto https and the browser's address in X-Forwarded-For,
+# in place of any a browser sent, and carries the Browser Screen's
+# connection as wss. Nothing here needs changing. The names and the address
+# it answers to are x-names and x-address in compose.https.yaml.
+{
+	# The one port compose.https.yaml publishes.
+	https_port 8765
+	# No plain HTTP port is published, so there is nothing to send to HTTPS.
+	auto_https disable_redirects
+	# A browser that opens an address names no site, so Caddy answers it
+	# with the address's certificate.
+	default_sni {$PAPERPULL_ADDRESS}
+	# Nothing changes its settings while it runs.
+	admin off
+	# The certificate authority is for your own devices to trust, not this
+	# container.
+	skip_install_trust
+	servers {
+		# HTTP/3 travels by UDP, which compose.https.yaml does not publish.
+		protocols h1 h2
+	}
+}
+
+{$PAPERPULL_NAMES}, {$PAPERPULL_ADDRESS} {
+	tls internal
+	reverse_proxy paperpull:8765
+	header -Server
+}

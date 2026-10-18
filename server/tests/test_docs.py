@@ -7,12 +7,15 @@ tie the promises that can be checked to the files that keep them.
 import ast
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 SERVER = Path(__file__).resolve().parents[1]
 REPO = SERVER.parent
+sys.path.insert(0, str(SERVER))
+import smoke  # noqa: E402
 PAGES = ("SERVER.md", "PRIVACY-SERVER.md", "SECURITY-SERVER.md")
 
 
@@ -81,7 +84,48 @@ def test_what_the_security_page_says_about_waiting_matches_the_panel():
     text = " ".join((REPO / "SECURITY-SERVER.md").read_text(encoding="utf-8").split())
     assert "After five wrong passwords" in text and panel_setting("FREE_TRIES") == 5
     assert "up to a quarter of an hour" in text and panel_setting("LONGEST_WAIT") == 15 * 60
-    assert "A session lasts 14 days" in text and panel_setting("SESSION_SECONDS") == 14 * 86400
+    assert "after eight hours in which the panel's own page asked nothing of it" in text
+    assert panel_setting("IDLE_SECONDS") == 8 * 3600
+    assert "after 14 days at most" in text and panel_setting("SESSION_SECONDS") == 14 * 86400
+    assert "only within 15 minutes of someone being seen at it" in text
+    assert "After that it closes, says why" in text
+    assert panel_setting("SCREEN_IDLE_SECONDS") == 15 * 60
+    setup = " ".join((REPO / "SERVER.md").read_text(encoding="utf-8").split())
+    assert "more than 15 minutes after typing the password or last using the window" in setup
+    assert "signs you out after eight hours without use" in setup
+
+
+def test_the_names_the_https_setup_takes_are_separated_as_caddy_reads_them():
+    """Caddy refuses to start on names joined by a comma alone, so the pages
+    and the file say spaces, which the panel takes as well."""
+    setup = " ".join((REPO / "SERVER.md").read_text(encoding="utf-8").split())
+    https = (SERVER / "compose.https.yaml").read_text(encoding="utf-8")
+    assert "more than one separated by spaces" in setup
+    assert "# Any names you open PaperPull by as well, separated by spaces" in https
+    names = re.search(r'^x-names: &names "([^"]*)"$', https, re.M).group(1)
+    assert not re.search(r",\S", names), names
+
+
+def test_the_https_setup_names_what_compose_https_yaml_holds():
+    """The command that copies Caddy's authority out names its container and
+    its file, and the volume the pages warn about is the one that holds it."""
+    setup = (REPO / "SERVER.md").read_text(encoding="utf-8")
+    https = (SERVER / "compose.https.yaml").read_text(encoding="utf-8")
+    assert "docker cp paperpull-proxy:%s paperpull-root.crt" % smoke.ROOT_CERT in setup
+    assert "container_name: paperpull-proxy" in https and "- proxy-data:/data" in https
+    security = (REPO / "SECURITY-SERVER.md").read_text(encoding="utf-8")
+    assert "docker volume rm paperpull_proxy-data" in security
+    assert "docker volume rm paperpull_profiles" in security
+    assert "`proxy-data` volume" in setup and "`proxy-data` volume" in security
+
+
+@pytest.mark.parametrize("page", ["SECURITY.md", "SECURITY-SERVER.md"])
+def test_both_security_pages_say_what_to_do_when_something_may_be_exposed(page):
+    text = (REPO / page).read_text(encoding="utf-8")
+    assert "## If something may have been exposed" in text
+    assert "**How security fixes are announced.**" in text
+    assert "under Security in [CHANGELOG.md](CHANGELOG.md)" in " ".join(text.split())
+    assert "## Reporting" in text
 
 
 def test_what_the_security_page_says_about_the_password_matches_the_panel():

@@ -28,8 +28,9 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-# What the server's setup needs from the repo, all of it in server/.
-SERVER_FILES = ("compose.yaml", "seccomp-chrome.json")
+# What the server's setup needs from the repo, all of it in server/, the
+# HTTPS setup's compose file and Caddy's settings among it.
+SERVER_FILES = ("compose.yaml", "compose.https.yaml", "Caddyfile", "seccomp-chrome.json")
 
 
 def server_kit_name(version: str) -> str:
@@ -39,19 +40,20 @@ def server_kit_name(version: str) -> str:
 def server_readme(version: str) -> str:
     return ("PaperPull Server %s\n"
             "\n"
-            "Put compose.yaml and seccomp-chrome.json in a folder of their own on the\n"
-            "machine that will run PaperPull Server, fill in compose.yaml, and start it.\n"
-            "The image downloads itself the first time. The setup guide walks through\n"
-            "every step, a UGREEN NAS included.\n"
+            "Put these files in a folder of their own on the machine that will run\n"
+            "PaperPull Server. compose.https.yaml, with Caddyfile beside it, is the\n"
+            "recommended setup, the panel by HTTPS. compose.yaml serves it by plain HTTP.\n"
+            "Fill in the one you use and start it. The image downloads itself the first\n"
+            "time. The setup guide walks through every step, a UGREEN NAS included.\n"
             "\n"
             "https://github.com/rheeloaded/paperpull/blob/v%s/SERVER.md\n" % (version, version))
 
 
 def server_kit(version: str, out_dir, repo=REPO) -> Path:
     """PaperPull-Server-<version>.zip in out_dir. A folder of that name holds
-    compose.yaml and seccomp-chrome.json exactly as the tag v<version> has
-    them, LF endings and all, whatever the working copy holds, and a
-    README.txt that points to the setup guide."""
+    SERVER_FILES exactly as the tag v<version> has them, LF endings and all,
+    whatever the working copy holds, and a README.txt that points to the
+    setup guide."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / server_kit_name(version)

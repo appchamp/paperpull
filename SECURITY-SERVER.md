@@ -28,9 +28,22 @@ See "Design safety" in [SECURITY.md](SECURITY.md).
   refused before more of it is read.
 - **Sessions.** Signing in gives your browser a random token in a cookie
   that the page's scripts cannot read and other sites cannot send. A
-  session lasts 14 days, and ends sooner when the container restarts, the
-  password changes, or you sign out. A sign-in window left open closes
-  within seconds of its session ending.
+  session ends after eight hours in which the panel's own page asked
+  nothing of it, and after 14 days at most, and sooner when the container
+  restarts, the password changes, or you sign out. A page of another
+  program on the same server, which the browser sends the cookie to as
+  well, never keeps it going. A sign-in window left open closes within
+  seconds of its session ending.
+- **The sign-in window asks again.** It is live keyboard and mouse on
+  every site you are signed in to there, so it opens, and stays open, only
+  within 15 minutes of someone being seen at it, the password typed, the
+  window opened from the panel, or a key pressed or the mouse moved on it.
+  After that it closes, says why, and asks for the password again. What
+  the panel does meanwhile counts for nothing, its own runs and Run All
+  included, and nor does noVNC connecting again by itself or a page in the
+  window that keeps changing. So whoever sits down at a computer left
+  signed in needs the password to open it. A browser that fills in
+  passwords by itself fills in this one too, so lock a computer you leave.
 - **Wrong guesses wait.** After five wrong passwords or setup codes from one
   address, each next try waits, twice as long each time, up to a quarter of
   an hour. Each try is counted before its password is checked, so many
@@ -44,6 +57,14 @@ See "Design safety" in [SECURITY.md](SECURITY.md).
   website cannot reach it through your browser by pointing a name of its
   own at your server. And no other site may show the panel inside a page
   of its own.
+- **Its answers stay where they were sent.** Every answer tells the
+  browser to take it for exactly the kind of file it says it is, never a
+  script or a page because of what is in it. Every answer but the icon,
+  the typefaces and noVNC's own files tells the browser and any proxy to
+  keep no copy, so no page, record or download can be shown again from a
+  cache after you sign out. The panel's page runs only its own script,
+  named by its hash, so a script hidden in a name or a title it shows
+  never runs.
 - **A forgotten password** is removed with
   `docker exec paperpull python /opt/paperpull/server/reset_password.py`,
   which signs everyone out.
@@ -60,20 +81,45 @@ password manager.
   internet.
 - **From outside,** reach it through your own VPN, such as WireGuard or
   Tailscale, into your home network.
-- **HTTPS.** On your home network the panel speaks plain HTTP, like most
-  things on a NAS. If its traffic crosses a network you do not trust, put it
-  behind a reverse proxy that adds HTTPS, and list the name the proxy is
-  reached by in `PAPERPULL_HOSTS`. When the proxy says the browser came by
-  HTTPS, in `X-Forwarded-Proto` or `Forwarded`, the sign-in cookie is one
-  of its own, `__Host-paperpull_session`, marked to travel over HTTPS
-  only, so a plain HTTP visit to the proxy's name never carries it. Its
-  prefix has the browser keep it only that way and only for the very name
-  that set it, so no other name under the same domain can set or replace
-  it. Caddy and Traefik say so on their own, and nginx
-  does with `proxy_set_header X-Forwarded-Proto $scheme;`. Anyone else on
-  a network the panel's plain HTTP crosses can read what it carries, the
-  password as you sign in included, so a guest network or a device you do
-  not trust on the same network is reason enough for HTTPS.
+- **HTTPS, the setup to use.** Anyone else on a network the panel's plain
+  HTTP crosses can read what it carries, the password as you sign in and
+  everything you type in the sign-in window included, so a guest network or
+  a device you do not trust on the same network is reason enough for HTTPS.
+  `compose.https.yaml`, see "HTTPS" in [SERVER.md](SERVER.md), puts Caddy
+  in front of the panel. Caddy answers by HTTPS with a certificate from a
+  certificate authority of its own, carries the sign-in window as `wss`
+  over the same connection, and is the only part published on your
+  network. The panel is published on no port, so your network is offered
+  no plain HTTP to it. Docker before version 28 still let a device that
+  sends its traffic through the server reach a container's unpublished
+  ports, one more reason to keep Docker current. Caddy runs with no powers
+  but the one its program needs to start, on a read-only file system.
+  `compose.yaml` still serves the panel by plain HTTP, for an installation
+  that has not moved.
+- **The cookie over HTTPS.** When the browser came by HTTPS, as Caddy says
+  in `X-Forwarded-Proto`, the sign-in cookie is one of its own,
+  `__Host-paperpull_session`, marked to travel over HTTPS only, so a plain
+  HTTP visit to the same name never carries it. Its prefix has the browser
+  keep it only that way and only for the very name that set it, so no
+  other name under the same domain can set or replace it.
+- **Wrong passwords behind Caddy.** Every request reaches the panel from
+  Caddy's address, so `compose.https.yaml` names Caddy in
+  `PAPERPULL_PROXY`, and a request from that address is counted against
+  the browser address Caddy writes in `X-Forwarded-For`, in place of any a
+  browser sent. Without that, five wrong passwords from anyone on your
+  network would make you wait as well.
+- **Caddy's certificate authority.** Each device you open the panel from
+  trusts it once. Its key, in the `proxy-data` volume, can make
+  certificates those devices trust for any website, so keep that volume
+  out of shared folders and out of backups others can read.
+- **A reverse proxy of your own** works too, with `compose.yaml`. List the
+  name it is reached by in `PAPERPULL_HOSTS`, and have it say the browser
+  came by HTTPS in `X-Forwarded-Proto` or `Forwarded`, which Caddy and
+  Traefik do on their own and nginx does with
+  `proxy_set_header X-Forwarded-Proto $scheme;`. Name it, or give its
+  address, in `PAPERPULL_PROXY` too, when it writes the browser's address
+  last in `X-Forwarded-For`, and keep the panel's own port off your network
+  so that the proxy is the only way in.
 - **Rented servers** are not recommended, see "Where to run it" in
   [SERVER.md](SERVER.md).
 
@@ -92,7 +138,8 @@ password manager.
 - **Only the panel is on the network.** Each provider's browser debugging
   port and the screen sharing server listen inside the container only. The
   sign-in window reaches you through the panel, behind the password, on the
-  panel's one port.
+  panel's one port. With `compose.https.yaml` only Caddy is on your
+  network, and the panel only on the project's own.
 - **Chrome keeps no passwords.** Its password manager and card autofill are
   switched off by policy, since a container's browser profile has no
   operating system keyring to protect them.
@@ -217,6 +264,52 @@ Anyone who can read that volume can act as you on those
 sites, so back it up only somewhere as safe as your passwords, or not at
 all, since you can always sign in again. Deleting the volume signs you out
 everywhere at once.
+
+## If something may have been exposed
+
+If the server, its disk, a backup of its volumes or a device that was
+signed in to the panel may be in someone else's hands, or someone may have
+seen the password, do these in order. With `compose.https.yaml`, add
+`-f compose.https.yaml` to each `docker compose` command.
+
+1. **End PaperPull's own sessions.** The reset tool signs everyone out at
+   once. Then open the panel and choose a new password, with the new setup
+   code in the container's log. Sessions are kept only in memory, so a
+   restart of the container ends them too, but keeps the old password.
+   ```bash
+   docker exec paperpull python /opt/paperpull/server/reset_password.py
+   docker logs paperpull
+   ```
+2. **End the sign-ins at the providers.** The `profiles` volume holds every
+   provider's live sign-in, and a copy of it works wherever it is. Deleting
+   the volume signs the server out of every provider at once.
+   ```bash
+   docker compose down
+   docker volume rm paperpull_profiles
+   docker compose up -d
+   ```
+   A copy made before still works until each provider ends it. So sign in
+   at each provider's own website from a device you trust, sign out every
+   other device or session where it offers that, and change the password
+   there. Then sign in again in the sign-in window.
+3. **Caddy's certificate authority, if its volume may have gone too.**
+   Take Caddy Local Authority off the trusted authorities of every device
+   you added it to, delete the volume so that Caddy makes a new authority
+   at its next start, and give your devices the new one, see "HTTPS" in
+   [SERVER.md](SERVER.md).
+   ```bash
+   docker compose -f compose.https.yaml down
+   docker volume rm paperpull_proxy-data
+   docker compose -f compose.https.yaml up -d
+   ```
+4. **Take the newest release,** see "Updating" in [SERVER.md](SERVER.md).
+
+**How security fixes are announced.** Every release that fixes a security
+problem says so under Security in [CHANGELOG.md](CHANGELOG.md) and in its
+notes on the [releases page](https://github.com/rheeloaded/paperpull/releases),
+and each release publishes its own image, named by its version. To hear of
+every release, watch the repository on GitHub and choose Releases, under
+Watch and then Custom.
 
 ## Reporting
 

@@ -314,3 +314,108 @@ def test_the_sign_in_window_docks_beside_the_accounts_on_the_server(browser, por
     finally:
         context.close()
     assert json.dumps(server_mode._FAILS) == "{}"
+
+
+def test_the_panels_page_runs_under_its_script_policy_and_nothing_else_does(browser, port, shop):
+    """The page carries a policy that lets only its own script run, named by
+    its hash. A hash that missed the script the browser read would stop the
+    whole panel, and a handler that found its way into the page, through a
+    name or a title shown in it, has to stay a dead letter."""
+    base = "http://127.0.0.1:%d" % port
+    context = browser.new_context()
+    # Put in by the browser itself, which no page policy stops, to hear of
+    # every refusal.
+    context.add_init_script("window.__refused = [];"
+                            "document.addEventListener('securitypolicyviolation',"
+                            " e => window.__refused.push(e.violatedDirective));")
+    try:
+        tab = context.new_page()
+        answer = tab.goto(base + "/")
+        policies = [h["value"] for h in answer.headers_array()
+                    if h["name"].lower() == "content-security-policy"]
+        assert any(p.startswith("script-src 'sha256-") for p in policies), policies
+        tab.wait_for_selector("#view-home .acct .who a")
+        for view in ("#/settings", "#/"):
+            tab.evaluate("location.hash = %r" % view)
+            tab.wait_for_timeout(300)
+        assert tab.evaluate("window.__refused") == []
+        tab.evaluate("document.body.insertAdjacentHTML('beforeend',"
+                     " '<img src=\"data:,\" onerror=\"window.__ran = 1\">')")
+        tab.wait_for_function("() => window.__refused.length > 0", timeout=10000)
+        assert tab.evaluate("window.__ran") is None
+        assert all(d.startswith("script-src") for d in tab.evaluate("window.__refused"))
+    finally:
+        context.close()
+
+
+def test_a_panel_signed_out_while_open_goes_to_the_sign_in(browser, port, shop, monkeypatch):
+    """PaperPull Server signs a session out after hours without use, and the
+    open page then met 401 on its next request and showed it as an error.
+    It goes to the sign-in instead."""
+    monkeypatch.setenv("PAPERPULL_SERVER", "1")
+    server_mode.set_password(PASSWORD)
+    base = "http://127.0.0.1:%d" % port
+    token = server_mode.new_session()
+    context = browser.new_context()
+    context.add_cookies([{"name": server_mode.SESSION_COOKIE, "value": token, "url": base}])
+    try:
+        tab = context.new_page()
+        tab.goto(base + "/")
+        tab.wait_for_selector("#view-home .acct")
+        server_mode.end_session(token)
+        with tab.expect_navigation(url=base + "/login", timeout=15000):
+            tab.evaluate("getJSON('/api/apps').catch(() => null)")
+        assert tab.title() == "PaperPull"
+    finally:
+        context.close()
+
+
+def test_the_docked_window_asks_for_the_password_again_after_a_gap(browser, port, shop, tmp_path,
+                                                                    monkeypatch):
+    """The sign-in window docked beside the accounts was opened once and
+    kept, so one that closed after going unused stayed closed in the dock.
+    Opened again, it asks for the password, and the password opens it. A
+    window still showing the screen is left as it is."""
+    (tmp_path / "novnc").mkdir()
+    (tmp_path / "novnc" / "vnc.html").write_text(
+        "<!doctype html><html class=noVNC_connected><title>noVNC</title>"
+        "<p id=screen>the screen</p></html>", encoding="utf-8")
+    monkeypatch.setenv("PAPERPULL_NOVNC", str(tmp_path / "novnc"))
+    monkeypatch.setenv("PAPERPULL_SERVER", "1")
+    server_mode.set_password(PASSWORD)
+    base = "http://127.0.0.1:%d" % port
+    token = server_mode.new_session()
+    context = browser.new_context()
+    context.add_cookies([{"name": server_mode.SESSION_COOKIE, "value": token, "url": base}])
+    try:
+        tab = context.new_page()
+        tab.goto(base + "/")
+        tab.wait_for_selector("#view-home .acct")
+        dock = tab.frame_locator("#dockframe")
+        tab.click("#screenbtn")
+        assert dock.locator("#screen").inner_text(timeout=15000) == "the screen"
+        tab.get_by_role("button", name="Done", exact=True).click()
+        tab.frame(url=lambda u: "vnc.html" in u).evaluate("window.__kept = 1")
+        loads = []
+        tab.on("request", lambda r: loads.append(r.url) if "vnc.html" in r.url else None)
+        tab.click("#screenbtn")
+        # Long enough for the page to be asked for again from this computer,
+        # had the panel opened it again.
+        tab.wait_for_timeout(1500)
+        assert not loads, "a window showing the screen was opened again"
+        assert tab.frame(url=lambda u: "vnc.html" in u).evaluate("window.__kept") == 1
+        tab.get_by_role("button", name="Done", exact=True).click()
+
+        # The screen closed after going unused, and noVNC shows so.
+        server_mode._SESSIONS[token]["screen"] -= server_mode.SCREEN_IDLE_SECONDS + 1
+        tab.frame(url=lambda u: "vnc.html" in u).evaluate(
+            "document.documentElement.classList.remove('noVNC_connected')")
+        tab.click("#screenbtn")
+        assert "asks for your password again" in dock.locator("main").inner_text(timeout=15000)
+        dock.locator("#password").fill(PASSWORD)
+        dock.get_by_role("button", name="Open the sign-in window").click()
+        assert dock.locator("#screen").inner_text(timeout=15000) == "the screen"
+        assert server_mode.screen_open(token)
+    finally:
+        context.close()
+    assert json.dumps(server_mode._FAILS) == "{}"
