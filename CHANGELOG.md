@@ -18,19 +18,44 @@ All notable changes to PaperPull are recorded here. Versioning follows
   a month already saved. One Citi no longer lists is marked No Longer
   Listed rather than failed. The app still never submits a request itself.
   Thanks to @appchamp for the request and for recording the page (#103).
-- **PaperPull Server can run on a NAS whose kernel has no user
-  namespaces.** Chrome's usual sandbox needs them, so the sign-in window
-  was refused on such a kernel, since PaperPull never starts a browser
-  without its sandbox. Removing the `#` from two `cap_add: SYS_ADMIN`
-  lines in the compose file now has Chrome use its setuid sandbox instead,
-  which builds the same sandbox without user namespaces, and the self-test
-  accepts either. Every other installation is unchanged, with no
-  capability added and no setuid helper kept in the browser volume. It
-  has not yet been seen whole on a Synology. "On a Synology NAS" in
-  SERVER.md says how to tell whether a model can use it, and which models
-  cannot run PaperPull Server at all.
+- **PaperPull Server can run on a host whose kernel has seccomp but no
+  user namespaces.** Chrome's usual sandbox needs user namespaces, so the
+  sign-in window was refused on such a host, since PaperPull never starts
+  Chrome without its sandbox. Removing the `#` from two
+  `cap_add: SYS_ADMIN` lines in the compose file now has Chrome use its
+  setuid sandbox instead, which builds the same sandbox without user
+  namespaces, and the self-test, the container's log and the panel count
+  it as a sandbox. The helper is made setuid only where the kernel has
+  seccomp, so Chrome never gets half its sandbox through it, which leaves
+  out Synology's 4.4 kernels, built with neither. Every other installation
+  is unchanged, with no capability added and no setuid helper kept in the
+  browser volume. It has not yet been seen on a real NAS, see "On Synology"
+  in SERVER.md.
 
 ### Fixed
+- **Diagnose always writes its file, and Wells Fargo looks behind the
+  page's menu for Statements & Documents.** A Run All started from Wells
+  Fargo's accounts summary stopped at its first step because no
+  Statements & Documents link showed there, and Diagnose run on the same
+  page stopped the same way before it wrote anything, so there was no file
+  to send. Diagnose now writes its survey in every app when it stops
+  early, and Wells Fargo's Diagnose surveys the page the window shows and
+  says it could not open the documents page. When no Statements &
+  Documents link shows, Wells Fargo now opens a button named exactly Menu
+  to look for one, and presses nothing else. The failure file also counts
+  links drawn with no address, controls inside a shadow root and controls
+  named Statements & Documents, since Wells Fargo draws its links with no
+  address and the file had counted none. Thanks to @crazyhorse90210 for
+  the failure files (#27).
+- **Diagnose keeps its detailed file in fifteen more apps when it stops
+  early.** In Alpaca, Bilt, Chase Business, First Horizon, IRS, SDG&E,
+  Shelby County Trustee, Simmons Bank, Spectrum, Venmo, Best Buy,
+  Coinbase, M&T Bank, Nelnet and Optum Bank, a Diagnose that stopped at a
+  page it could not open, or at a press it would not make, left before it
+  wrote its detailed file, so only the survey was there to send. Each now
+  writes it the way Wells Fargo does. It surveys the page the window shows
+  without following any link and says where and why it stopped, and the
+  survey beside it says so too.
 - **The transactions export no longer stops at half of an emoji.** A
   statement's text can carry half of an emoji, from a font that names its
   characters in an unusual way, and a CSV has no way to write half a
@@ -75,14 +100,50 @@ All notable changes to PaperPull are recorded here. Versioning follows
   other look alone could set the purchase down as gone. A look that sees
   no list now counts as not finding the purchase gone, and it stays to be
   looked for again.
+- **E*TRADE no longer saves one account's statement for a statement the
+  list gives no account (#96).** On a sign-in with several accounts, the
+  list can leave a statement's account blank. Every check that compares
+  accounts let such a statement through, so of several accounts'
+  statements of one title and day, the one row the page showed was saved
+  for it, whichever account it belonged to, and Discover kept only one of
+  those statements and left the rest unlisted. Each one is listed now, and
+  one with no account on a day the list gives its title more than once
+  goes to Manual Review with nothing pressed. A statement is also left
+  alone when the page shows fewer rows of its title and day than the list
+  gave, since the one row shown may be another account's, and that goes
+  for statements with an account too. A new download that is byte for
+  byte the same file as another document of that day goes to Manual
+  Review rather than being kept, and under a naming pattern that leaves
+  the account out, a second account's file now ends in that account's
+  last digits rather than " (2)". A sign-in of one account keeps every
+  record and file name it had, and no saved file is renamed. No E*TRADE
+  PDF has been seen yet. Thanks to @appchamp for the report.
+- **Chase Business saves the business card's statements.** A business
+  card's statement row has no "Opens menu to save document" menu, only an
+  "opens document" link and a "Saves document" link, so every card
+  statement went to Manual Review with "Could not capture the document
+  PDF". The app now presses the row's own "Saves document" once and keeps
+  the one PDF Chase sends, when it prints the card's last four and the
+  row's date as its statement date. "opens document" is never pressed, checking
+  statements are saved through their menu as before, and a row that shows
+  both or neither is left for review.
+- **PaperPull Server says why Chrome cannot start on a host without user
+  namespaces (#110).** Chrome builds its sandbox from user namespaces and
+  seccomp, and Synology DSM's kernel has neither. PaperPull never starts
+  Chrome without its sandbox, so Chrome stopped the moment it started and
+  the Browser Screen stayed black with nothing saying why. A sign-in waited
+  twenty seconds, said to close every Chrome window and to install Chrome
+  or Edge, and the self-test spoke only of a debugging port. The server
+  now asks the kernel at its start and says in one line of the
+  container's log whether this host can give Chrome its sandbox, and why
+  not. The panel shows the reason at the top of every page, the
+  self-test's sandbox line names it, and a sign-in says it at once. A
+  container whose security profile was left out is told to check it. The
+  sandbox is never turned off. SERVER.md has a new On Synology section,
+  with a Debian 12 virtual machine or the desktop app as the ways that
+  work. Thanks to @akcamperdude for the report.
 
 ### Security
-- **PaperPull Server does not start on a kernel without seccomp.** Chrome's
-  sandbox needs the kernel's seccomp for its second layer, and on a kernel
-  built without it, as Synology's 4.4 kernels are, Chrome started with half
-  its sandbox and only the self-test said so. Docker refuses the server's
-  security profile on such a kernel, so this took removing the profile by
-  hand, and the container now stops at start and says why instead.
 - **A Diagnose file no longer names your cards or accounts.** The detailed
   file Diagnose writes kept a word whenever it was on PaperPull's fixed
   list, and a card's product name is made of ordinary words, so Citi's

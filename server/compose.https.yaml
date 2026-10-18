@@ -58,7 +58,7 @@ services:
     # be. Remove the # from the next two lines and Chrome uses its setuid
     # sandbox instead, which builds the same sandbox without user namespaces.
     # The sandbox stays on either way. This is not --no-sandbox, and not
-    # privileged. "On a Synology NAS" in SERVER.md says how to tell, and
+    # privileged. "On Synology" in SERVER.md says how to tell, and
     # which kernels cannot run PaperPull Server at all.
     #cap_add:
     #  - SYS_ADMIN

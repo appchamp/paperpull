@@ -30,13 +30,25 @@ given_sys_admin() {
   [ $(( (0x$bnd >> 21) & 1 )) -eq 1 ]
 }
 
+# The seccomp-bpf filter, the other half of Chrome's sandbox, asked of the
+# server's own host check (paperpull_core.host_sandbox), so there is one
+# probe. Anything but a yes counts as no.
+kernel_has_seccomp() {
+  python -c "import sys; from paperpull_core.host_sandbox import check; sys.exit(0 if check().seccomp_bpf == 'yes' else 1)" 2>/dev/null
+}
+
 SETUID_SANDBOX=0
 if given_sys_admin; then
-  SETUID_SANDBOX=1
-  say "The container has SYS_ADMIN, so Chrome's setuid sandbox helper is set up, for a kernel without user namespaces."
-  if awk '$2 == "/browser" {print $4}' /proc/mounts | grep -qw nosuid; then
-    say "But /browser is mounted nosuid, so the kernel ignores the helper's setuid bit, and where"
-    say "the kernel has no user namespaces Chrome will refuse to start. Mount it without nosuid."
+  if kernel_has_seccomp; then
+    SETUID_SANDBOX=1
+    say "The container has SYS_ADMIN, so Chrome's setuid sandbox helper is set up, for a kernel without user namespaces."
+    if awk '$2 == "/browser" {print $4}' /proc/mounts | grep -qw nosuid; then
+      say "But /browser is mounted nosuid, so the kernel ignores the helper's setuid bit, and where"
+      say "the kernel has no user namespaces Chrome will refuse to start. Mount it without nosuid."
+    fi
+  else
+    say "The container has SYS_ADMIN, but this kernel has no seccomp, so Chrome's setuid sandbox helper"
+    say "is not set up, since Chrome would have only half its sandbox. See \"On Synology\" in SERVER.md."
   fi
 fi
 
@@ -66,8 +78,9 @@ readable() {
 # bit. Some NAS kernels, Synology's among them, have no user namespaces at
 # all, and there Chrome builds the same sandbox through this helper, which
 # needs CAP_SYS_ADMIN to make the sandbox's namespaces. So in a container
-# given SYS_ADMIN with cap_add, see "On a Synology NAS" in SERVER.md, the
-# helper of the Chrome in use ($1) is made setuid root, and every other copy
+# given SYS_ADMIN with cap_add, on a kernel with seccomp, see "On Synology"
+# in SERVER.md, the helper of the Chrome in use ($1) is made setuid root,
+# and every other copy
 # loses the bit, so taking SYS_ADMIN away again, or an older Chrome kept
 # beside the new one, leaves none behind. The sandbox is on either way, this
 # is never --no-sandbox. Runs after the recursive chmod above, the owner is

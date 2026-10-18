@@ -80,7 +80,7 @@ class Document:
 
     def __init__(self, title="", category="", summary="", date="", period="",
                  href="", row_index=-1, confidence="", account="",
-                 date_text="", document_id="", guid="", whole_label=False, **kw):
+                 date_text="", document_id="", guid="", whole_label=False, entry="", **kw):
         self.title = title
         # What the list's Account column shows for the document, kept whole
         # for {account} and, when the sign-in has more than one account, the
@@ -93,6 +93,10 @@ class Document:
         # set when another label shows the same tail on a document of the
         # same date and title, where the tail cannot keep the keys apart.
         self.whole_label = bool(whole_label)
+        # What tells a document the list gave no account from another of
+        # the same date and title it gave none, set only then, so every
+        # other key stays what it was (site.RawDoc.entry, #96).
+        self.entry = entry
         self.category = category
         self.summary = summary
         self.date = date
@@ -112,6 +116,13 @@ class Document:
         self.pdf_path = kw.get("pdf_path", "")
         self.pdf_size = kw.get("pdf_size", "")
         self.pdf_pages = kw.get("pdf_pages", "")
+        # What the saved PDF's bytes hash to, so another record's document
+        # of the same date with the same bytes is known for what it is even
+        # once this file has been deleted (#96).
+        self.pdf_sha256 = kw.get("pdf_sha256", "")
+        # What the download told this file apart by, written when it is
+        # saved, so Rename tells it apart the same way (told_apart_by).
+        self.told_apart = kw.get("told_apart", "")
         self.notes = kw.get("notes", "")
         self.discovered_at = kw.get("discovered_at", now_iso())
 
@@ -131,10 +142,17 @@ class Document:
         (whole_label), so the two never share a key. Until #96 the account never reached the record,
         so every key ended in "Unnamed", and adopt_account_keys moves those
         for a sign-in of one account, and relabel_by_statement, by what
-        each one's saved PDF shows, for a sign-in of several."""
+        each one's saved PDF shows, for a sign-in of several.
+
+        A document the list gave no account, whose date and title another
+        such document shares, adds a digest of its entry, "Unnamed#<12 hex>",
+        since otherwise they had one key and all but one were dropped (#96).
+        Every other document has no entry and keeps its key."""
         if self.document_id:
             return f"id:{self.document_id}"
         acct = account_key(self.account, whole=self.whole_label)
+        if self.entry and not (self.account or "").strip():
+            acct = "%s#%s" % (acct, hashlib.sha256(self.entry.encode("utf-8")).hexdigest()[:12])
         return f"{self.category}:{self.date}:{sanitize_component(self.title)[:60]}:{acct}"
 
     def to_dict(self) -> dict:
@@ -181,6 +199,20 @@ def whole_label_key(label: str) -> str:
         return whole
     digest = hashlib.sha256(tidy.encode("utf-8")).hexdigest()[:12]
     return "%s#%s" % (whole[:40].rstrip(), digest)
+
+
+def told_apart_by(record: dict) -> str:
+    """What a document's file adds to its name when another file already
+    has that name, the same on every run. The last six characters of the
+    id a record keeps, which an E*TRADE record never has, else what the
+    download wrote down when it saved the file, the masked digits of its
+    account, so of two accounts' statements under a pattern that leaves the
+    account out, the second says whose it is rather than " (2)" (#96). A
+    file saved before was told apart by " (2)" and its record says nothing,
+    so Rename leaves it so. The download and Rename both ask this, so a
+    rename tells a file apart the way its download did."""
+    record = record if isinstance(record, dict) else {}
+    return str(record.get("document_id") or "")[-6:] or str(record.get("told_apart") or "")
 
 
 def legacy_key(doc: "Document") -> str:
@@ -694,7 +726,8 @@ class App:
         return Document(title=title, category=category, summary=summary,
                         date=date, confidence=confidence, source_url=source_url,
                         account=account, guid=getattr(r, "guid", "") or "",
-                        whole_label=bool(account) and site.account_form(account) in twins)
+                        whole_label=bool(account) and site.account_form(account) in twins,
+                        entry="" if account else getattr(r, "entry", "") or "")
 
     def _record_rawdoc(self, r, source_url: str, several: bool = False, twins=frozenset()) -> int:
         """Record one scraped document (a RawDoc) from a E*TRADE page.
@@ -918,12 +951,14 @@ class App:
         own control and catches what arrives."""
         self.check_session(page)
         folder = self.paths.folder_for(doc.category)
-        # The last of the document id, used only if the name is taken.
+        # The account's masked digits, used only if the name is taken.
         # Two documents on one day used to differ by " (2)", which says
         # nothing about which is which and moves between them when a file
-        # is deleted (#49, and the same complaint on #43).
+        # is deleted (#49, and the same complaint on #43). Written down
+        # with the file, so Rename tells it apart the same way (#96).
+        doc.told_apart = "+".join(site.account_tails(doc.account))
         out_path = unique_path(folder, filename, self.config["max_path_length"],
-                               distinguisher=(doc.document_id or "")[-6:])
+                               distinguisher=told_apart_by(doc.to_dict()))
         if out_path.name != filename:
             self.stats["duplicate_filenames"] += 1
 
@@ -950,6 +985,18 @@ class App:
                 "landed_on": site.mask_href(page.url or ""),
                 "responses": trace[:80]}, words_for('ETRADE', site))
             print(f"  What the site answered is in {attempt}, attach it to the issue.")
+            if any(isinstance(t, dict) and t.get("why") == site.SHARED_WITH_NO_ACCOUNT for t in trace):
+                # The list gave it no account, and gave its date and title
+                # more than one document, so nothing was pressed. Taken, it
+                # saved whichever account's statement the page showed (#96).
+                self._record(doc, State.NEEDS_MANUAL_REVIEW, notes=self.NO_ACCOUNT)
+                self._write_row(doc, "Account not known", "Needs Manual Review")
+                self.write_failure('choose the document', 'the list gave the document no account')
+                self.stats["manual_review"] += 1
+                print("  E*TRADE's list gave this document no account, and more than one document")
+                print("  of its date and title, so which one it is cannot be told. Nothing was")
+                print("  pressed, and it is marked for manual review.")
+                return
             self._record(doc, State.NEEDS_MANUAL_REVIEW,
                          notes="Could not capture the document PDF")
             self._write_row(doc, "Capture failed", "Needs Manual Review")
@@ -973,6 +1020,28 @@ class App:
                 return
             out_path = opened.pdf
             log.info("Opened the ZIP for %s", doc.title)
+
+        # The same bytes as another record's document of this date is that
+        # document, taken again for this one from a page that showed only
+        # it, so the new copy goes to Manual Review and is not kept as this
+        # record's. The other record keeps its file (#96).
+        digest = hashlib.sha256(out_path.read_bytes()).hexdigest()
+        if self._same_bytes_elsewhere(doc, digest, out_path):
+            quarantine = unique_path(self.paths.manual_review, out_path.name,
+                                     self.config["max_path_length"])
+            try:
+                out_path.replace(quarantine)
+            except OSError:
+                quarantine = out_path
+            doc.pdf_path, doc.pdf_filename, doc.pdf_sha256 = str(quarantine), quarantine.name, digest
+            self._record(doc, State.NEEDS_MANUAL_REVIEW, notes=self.SAME_PDF)
+            self._write_row(doc, "Same PDF as another document's", "Needs Manual Review")
+            self.write_failure('save the document', 'two documents gave the same file')
+            self.stats["manual_review"] += 1
+            print("  !! This is the same PDF as another document of this date already saved.")
+            print("     The new copy is in Manual Review, for a person to tell apart.")
+            return
+        doc.pdf_sha256 = digest
 
         doc.pdf_path, doc.pdf_filename = str(out_path), out_path.name
         self._record(doc, State.PDF_SAVED)
@@ -1014,6 +1083,37 @@ class App:
         print(f"  Saved: {out_path.name}")
 
     # -- records -----------------------------------------------------------
+
+    NO_ACCOUNT = ("The list gave this document no account and more than one document of its "
+                  "date and title, so nothing was pressed")
+    SAME_PDF = "The same PDF as another document of this date"
+
+    def _same_bytes_elsewhere(self, doc: Document, digest: str, out_path: Path) -> bool:
+        """Whether another record of this document's date holds a saved file
+        of these bytes, by the digest it kept, or for a record saved before
+        digests were kept, by its file's own bytes. A record naming the very
+        file just saved is not one, as when its own file was deleted and the
+        name is free again. Nor, for a document of one account, is the
+        record kept before 0.53.0 of its date and title, saved once for
+        every account's statement of the day. Its bytes being this
+        account's say only that it held this account's (#96)."""
+        legacy = legacy_key(doc) if (doc.account or "").strip() else None
+        for key, rec in self.progress.data.items():
+            if key in (doc.key, legacy) or not isinstance(rec, dict) or rec.get("date") != doc.date:
+                continue
+            if rec.get("pdf_sha256"):
+                if rec["pdf_sha256"] == digest:
+                    return True
+                continue
+            saved = Path(str(rec.get("pdf_path") or ""))
+            try:
+                if not rec.get("pdf_path") or not saved.is_file() or saved.resolve() == out_path.resolve():
+                    continue
+                if hashlib.sha256(saved.read_bytes()).hexdigest() == digest:
+                    return True
+            except OSError:
+                continue
+        return False
 
     def _record(self, doc: Document, state: State, notes: str = ""):
         doc.state = state.value
@@ -1135,7 +1235,8 @@ class App:
         nothing is asked of the provider here (#43, #49). A preview
         unless --apply is given."""
         self.stats["mode"] = "rename"
-        renaming.run_for(self, apply_changes=bool(getattr(self.args, "apply", False)))
+        renaming.run_for(self, apply_changes=bool(getattr(self.args, "apply", False)),
+                         told_apart=told_apart_by)
 
     def cmd_verify(self):
         self.stats["mode"] = "verify"

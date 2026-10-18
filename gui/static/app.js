@@ -277,6 +277,11 @@ async function load() {
   $('samplebar').hidden = !inSample();
   $('serverbadge').hidden = !SERVER;
   if (SERVER && $('paperlesspill')) $('paperlesspill').hidden = !(META.server && META.server.paperless);
+  // A host that cannot give Chrome its sandbox opens no sign-in window, so
+  // the panel says why at the top of every page (#110).
+  const sandbox = (SERVER && META.server && META.server.sandbox) || '';
+  $('sandboxtext').textContent = sandbox;
+  $('sandboxbar').hidden = !sandbox;
   const fresh = Object.keys(META.refreshed || {});
   if (fresh.length) {
     notice("Updated to this version's code, " + fresh.join(', ') +

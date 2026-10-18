@@ -169,3 +169,19 @@ def test_the_names_the_setup_says_the_panel_answers_to_are_the_panels():
 ])
 def test_the_desktop_pages_point_to_the_servers(page, server_page):
     assert "(%s)" % server_page in (REPO / page).read_text(encoding="utf-8")
+
+
+def test_the_places_the_sandbox_check_points_to_are_there():
+    """The container's log, the panel, the self-test and a sign-in all say
+    why Chrome has no sandbox on a host that cannot give it one, and name
+    where SERVER.md says what to do (#110). A name that is not there leaves
+    the person at the black screen they started from."""
+    from paperpull_core import host_sandbox
+    text = (REPO / "SERVER.md").read_text(encoding="utf-8")
+    assert "\n### On Synology\n" in text
+    assert host_sandbox.SECTION == '"On Synology" in SERVER.md'
+    assert "- **Chrome does not start.**" in text
+    assert host_sandbox.PROFILE_SECTION == '"Chrome does not start" in SERVER.md'
+    assert "Synology should work the same way" not in text
+    flat = " ".join(text.split())
+    assert "starts with `[sandbox]`" in flat and "self-test's `sandbox` line" in flat

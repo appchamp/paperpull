@@ -139,7 +139,7 @@ password manager.
   Chrome's namespace sandbox unable to start, and the browser is refused
   rather than run without one. Its setuid sandbox is offered there
   instead, as an opt-in, two commented `cap_add: SYS_ADMIN` lines in the
-  compose files, see "On a Synology NAS" in [SERVER.md](SERVER.md). With
+  compose files, see "On Synology" in [SERVER.md](SERVER.md). With
   them, Chrome's setuid helper in the browser volume is made setuid root at
   each start, and without them the bit is taken off every copy. That one
   capability lets this small, long-trusted helper build the sandbox's
@@ -147,13 +147,17 @@ password manager.
   up and drops every privilege before the page runs, so the page is still a
   page with no powers, behind the chroot, the namespaces and the seccomp
   filter. The capability is the container's, never a page's, and the default
-  setup is given neither it nor the setuid bit. Do not pair it with
+  setup is given neither it nor the setuid bit. What it costs is that
+  anything that becomes root inside the container holds it as well, and it
+  reaches much further into the host than a container's usual powers, so a
+  break-out of the container would go further. The helper is itself a
+  program that runs as root, so a flaw in it would be one way to that root.
+  Either first takes running code inside the container, past Chrome's
+  sandbox or the panel's password. Do not pair it with
   `privileged`, which grants far more than the sandbox needs, nor with
-  `no-new-privileges`, which would turn the setuid bit off. A kernel built
-  without seccomp, as Synology's 4.4 kernels are, could give Chrome only
-  half its sandbox, so the container does not start on one at all.
-  `server/kernel_check.py` asks the kernel before anything else, the way
-  Chrome asks it.
+  `no-new-privileges`, which would turn the setuid bit off. On a kernel
+  built without seccomp, as Synology's 4.4 kernels are, the helper is never
+  set up, since Chrome would have only half its sandbox there.
 - **Only the panel is on the network.** Each provider's browser debugging
   port and the screen sharing server listen inside the container only. The
   sign-in window reaches you through the panel, behind the password, on the

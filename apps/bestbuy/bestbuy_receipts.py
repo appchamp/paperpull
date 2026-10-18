@@ -1248,7 +1248,7 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send.
 
         Diagnose writes a detailed file for repairing this provider, and
@@ -1266,27 +1266,55 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='Best Buy')
+            provider='Best Buy',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         """Inspect one purchase per type and record local diagnostics."""
         self.stats["mode"] = "diagnose"
         words = words_for('Best Buy', site)
         page = self.page()
+        stopped = None
         if not self.discovery.data:
             # A survey goes on whatever the history does, since a history
             # that does not come is what one is for.
-            self.cmd_discover(quiet=True, finish=False, need_history=False)
+            try:
+                self.cmd_discover(quiet=True, finish=False, need_history=False)
+            except pressing.Stop as stop:
+                # A press on the year menu it would not make. The look below
+                # would meet the same press, so it is not made again.
+                stopped = stop
         # The history first, every year of it, since a purchase missing
         # from the list is invisible from any one receipt.
+        history, opened, offered, query = None, False, [], None
         try:
             from datetime import date as _date
-            site.goto_orders(page)
-            offered = site.year_choices(page)
-            query = site.capture_history_query(page, offered[0] if offered else str(_date.today().year))
+            if stopped is None:
+                opened = site.goto_orders(page)
+                try:
+                    offered = site.year_choices(page)
+                    query = site.capture_history_query(
+                        page, offered[0] if offered else str(_date.today().year))
+                except pressing.Stop as stop:
+                    # Something over the year menu, say. Nothing past the
+                    # stop is pressed.
+                    stopped = stop
             this_year = _date.today().year
+            # With no query no year is asked for, so after a stop the survey
+            # is of the page as it shows.
             history = site.history_survey(page, query, range(this_year, this_year - 8, -1))
             history["years_offered"] = offered
+        except pressing.Stop as stop:
+            stopped = stop
+        except Exception as e:
+            print(f"  Could not survey the purchase history: {shape_label(str(e), words)}")
+        if stopped is not None:
+            # The file says the history was not read and why, in the stop's
+            # own words.
+            stop = stopped
+            history = dict(history or {}, documents_page_opened=bool(opened),
+                           stopped={"step": stop.step, "reason": stop.reason, "facts": stop.facts})
+        if history is not None:
             counted = [h for k, h in history.items() if k.isdigit()]
             after = {"cards_collected": sum(h.get("entries", 0) for h in counted),
                      "became_purchases": sum(h.get("entries", 0) for h in counted)}
@@ -1302,8 +1330,12 @@ class App:
             print(f"  Purchase history: {shape_tree(after.get('cards_collected'), words)} "
                   f"card(s) collected, {shape_tree(after.get('became_purchases'), words)} "
                   f"became purchases.")
-        except Exception as e:
-            print(f"  Could not survey the purchase history: {shape_label(str(e), words)}")
+        if stopped is not None:
+            # Nothing past the stop is pressed, so no purchase is opened, and
+            # the survey main() writes next carries the stop.
+            self._diagnose_stopped = stopped
+            pressing.say(stopped)
+            return
 
         for ptype in [IN_STORE, ONLINE]:
             candidates = self._select_purchases(ptype, limit=1)

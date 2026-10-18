@@ -104,7 +104,7 @@ COPY tools/add_account.py /opt/paperpull/tools/add_account.py
 # Export history and Import history, so a desktop's history comes across (#67).
 COPY tools/migrate.py /opt/paperpull/tools/migrate.py
 COPY packaging/paperpull.ico /opt/paperpull/packaging/paperpull.ico
-COPY server/entrypoint.sh server/chrome.sh server/start.sh server/selftest.py server/kernel_check.py \
+COPY server/entrypoint.sh server/chrome.sh server/start.sh server/selftest.py \
      server/reset_password.py /opt/paperpull/server/
 COPY server/plugins /opt/paperpull/server/plugins
 # Built with the setuptools from the lock, not one fetched for the build.

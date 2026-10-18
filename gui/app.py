@@ -865,8 +865,10 @@ def api_apps():
     return {"apps_root": str(apps_root()), "root_source": root_source(), "actions": {k: v["label"] for k, v in ACTIONS.items()},
             "more_actions": list(MORE_ACTIONS), "redownload_actions": list(REDOWNLOAD_ACTIONS),
             "apps": apps, "refreshed": refreshed,
-            # What the server's header says about where new documents go.
-            "server": ({"paperless": server_mode.paperless_connected()}
+            # What the server's header says about where new documents go, and
+            # why this host cannot give Chrome its sandbox, if it cannot.
+            "server": ({"paperless": server_mode.paperless_connected(),
+                        "sandbox": server_mode.sandbox_problem()}
                        if server_mode.enabled() else None)}
 
 

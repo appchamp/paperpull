@@ -62,7 +62,9 @@ pages listed it, and the SHA-256 digests of the saved file and of its text,
 which say nothing of what the file holds. For American Family they include each document's
 date, the masked last four of the account or policy its bill is told by and
 the saved file's digest, so a statement with the bytes of another bill's is
-still caught. For AT&T they include each bill's kind, date and account,
+still caught. For E*TRADE they include each document's date and the saved
+file's digest, so a download with the bytes of another document of that
+day is still set aside. For AT&T they include each bill's kind, date and account,
 which is only Wireless or Internet, all three in its key already, and the
 saved file's size and page count, so a bill 0.34.0 saved under the wrong
 year is still found and fetched again. For Optum Bank a tax form, and
@@ -159,7 +161,9 @@ SKIP_FIELDS = ("state", "downloaded_ok", "pdf_path", "discovered_at", "updated_a
 # neither copy when a statement it takes has the very bytes of another bill's
 # statement of that date, found by each saved one's digest, date and account
 # part, the masked last four of the bill's account or policy, which its key
-# and file name hold too (download_one). AT&T clears the marker of a bill
+# and file name hold too (download_one). E*TRADE sets a new download aside
+# when it has the very bytes of another document of its date, found by each
+# saved one's digest and date (_same_bytes_elsewhere, #96). AT&T clears the marker of a bill
 # 0.34.0 saved under the wrong year as it loads, one found by the same date
 # a year later on a bill of the same kind and account, Wireless or
 # Internet, saved with the same size and page count (#26,
@@ -173,6 +177,7 @@ SKIP_FIELDS = ("state", "downloaded_ok", "pdf_path", "discovered_at", "updated_a
 PROVIDER_SKIP_FIELDS = {"Robinhood": ("undated_key", "source_url", "category", "date",
                                       "title", "account", "pdf_sha256", "text_sha256"),
                         "American Family": ("pdf_sha256", "date", "account"),
+                        "ETRADE": ("pdf_sha256", "date"),
                         "AT&T": ("category", "date", "account", "pdf_size", "pdf_pages"),
                         "Target": ("invoices",),
                         # A requested statement of a card's month already

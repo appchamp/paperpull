@@ -963,7 +963,7 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send.
 
         Diagnose writes a detailed file for repairing this provider, and
@@ -981,7 +981,8 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='IRS')
+            provider='IRS',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         """Survey the transcript and notice lists and write a file a tester
@@ -995,15 +996,28 @@ class App:
         info = {"timestamp": now_iso(),
                 "note": Fixed("A survey of the IRS Online Account transcript and notice lists. "
                               "It is what the site layer's assumptions are checked against.")}
+        stopped = None
         try:
-            found = site.goto_documents(page)
+            try:
+                found = site.goto_documents(page)
+            except pressing.Stop as stop:
+                # The page would not open, and nothing past the stop was
+                # pressed. What the window shows is surveyed all the same,
+                # and no link on it is followed.
+                stopped = stop
+                found = False
+                info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
             info["documents_page_found"] = found
+            info["documents_page_opened"] = bool(found)
             where = page.url or ""
             if site.address_signed_out(where):
                 # A sign-in page (ID.me, Login.gov or the IRS's own) or
                 # another site: nothing on it is read, not even a count.
                 info["signed_out"] = True
+                self._diagnose_stopped = stopped
                 write_shaped(self.paths.diagnostics / "diagnose-documents.json", info, words)
+                if stopped is not None:
+                    pressing.say(stopped)
                 print("The browser tab is on a sign-in page or off the IRS Online Account,")
                 print("so nothing was read. Sign in yourself, then run Diagnose again.")
                 return False
@@ -1036,10 +1050,20 @@ class App:
                     "title": d.title[:90], "href": (d.href or "")[:100],
                     "text": (d.text or "").replace("\n", " | ")[:160],
                     "category": cat, "summary": summ, "date": date, "period": period})
+        except pressing.Stop as stop:
+            # A press past the documents page it would not make ends the
+            # look there, and the file still says what was seen and why it
+            # stopped.
+            stopped = stop
+            info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
         except Exception as e:
             info["error"] = type(e).__name__
+        self._diagnose_stopped = stopped
         out = self.paths.diagnostics / "diagnose-documents.json"
         write_shaped(out, info, words)
+        if stopped is not None:
+            # The stop's own words, as a run says them (pressing.say).
+            pressing.say(stopped)
         print(f"Wrote {out}")
         print("  That is the detailed file, for repairing this provider. Any word")
         print("  in it that is not on PaperPull's fixed list is written as its")

@@ -134,6 +134,10 @@ def test_the_setuid_helper_follows_the_capability():
     the same in a running container."""
     script = (SERVER / "chrome.sh").read_text(encoding="utf-8")
     assert "/^CapBnd:/" in script and ">> 21) & 1" in script
+    # Only beside the seccomp-bpf filter, asked of the server's one host
+    # check, so Chrome never gets half its sandbox through the helper.
+    gate = script.index("check().seccomp_bpf == 'yes'")
+    assert gate < script.index("if kernel_has_seccomp; then") < script.index("SETUID_SANDBOX=1")
     helpers = script[script.index("sandbox_helpers() {"):]
     assert helpers.index('chown 0:0 "$helper"') < helpers.index('chmod 4755 "$helper"')
     assert 'chmod 0755 "$helper"' in helpers and '[ ! -L "$helper" ]' in helpers
