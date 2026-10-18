@@ -37,6 +37,8 @@ OWN = {
     ("classification.py", "load_rules"): "rules packaged with the app",
     ("doc_types.py", "load_rules"): "rules packaged with the app",
     ("export_transactions.py", "statement_name"): "a list of folders the core wrote itself",
+    ("host_sandbox.py", "probe"): "the host check's own child, which asks the kernel, "
+                                  "never a provider",
     ("export_transactions.py", "__init__"): "the tool's own cache, whose paths stay as the "
                                             "disk gave them and whose text is made whole",
     ("listing.py", "_before"): "the note this core wrote itself",
