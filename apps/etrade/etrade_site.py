@@ -587,6 +587,11 @@ class RawDoc:
     kind: str = "doc"
     # The list's own ids for the document, "<documentGuid>|<documentId>".
     guid: str = ""
+    # What tells a document the list gave no account from another of the
+    # same date and title it gave none, the list's ids or the entry's place,
+    # and "" for every other document, so their keys stay what they were
+    # (#96).
+    entry: str = ""
 
 
 # The date a bill control belongs to. The control's own name first, then
@@ -1365,18 +1370,45 @@ _LISTED_TITLES: dict = {}
 # only a link naming this document's own account is its own (#96).
 _LISTED_ACCOUNTS: dict = {}
 
+# How many documents each date and title carried in those lists, by (date,
+# the title as _norm writes it), the most any one list held. The accounts
+# alone cannot say it, since the list can give several accounts' statements
+# no account at all, and then their labels are one empty label (#96).
+_LISTED_DOCS: dict = {}
+
 
 def _note_listed(bodies) -> None:
-    """Count the documents per date in searchItems answers, and keep their
-    titles and the accounts of each title."""
+    """Count the documents per date, and per date and title, in searchItems
+    answers, and keep their titles and the accounts of each title."""
     for body in bodies or []:
         counts: dict = {}
+        per_title: dict = {}
         for d in _docs_from_api(body):
             counts[d["date"]] = counts.get(d["date"], 0) + 1
+            day_title = (d["date"], _norm(d["title"]))
+            per_title[day_title] = per_title.get(day_title, 0) + 1
             _LISTED_TITLES.setdefault(d["date"], set()).add(d["title"])
-            _LISTED_ACCOUNTS.setdefault((d["date"], _norm(d["title"])), set()).add(_norm(d["account"]))
+            _LISTED_ACCOUNTS.setdefault(day_title, set()).add(_norm(d["account"]))
         for day, n in counts.items():
             _LISTED[day] = max(_LISTED.get(day, 0), n)
+        for day_title, n in per_title.items():
+            _LISTED_DOCS[day_title] = max(_LISTED_DOCS.get(day_title, 0), n)
+
+
+def _listed_docs(iso_date: str, title: str) -> int:
+    """How many documents the lists gave this date and title, 0 when they
+    gave none or were not read."""
+    return int(_LISTED_DOCS.get((iso_date, _norm(title)), 0))
+
+
+def _shared_with_no_account(iso_date: str, title: str) -> bool:
+    """Whether a document the lists gave no account may be any one of
+    several, the lists having given its date and title more than one
+    document, or to more than one label. Which of them a row is cannot be
+    told without an account, so such a document is never taken (#96)."""
+    if not title:
+        return False
+    return _listed_docs(iso_date, title) > 1 or len(_LISTED_ACCOUNTS.get((iso_date, _norm(title)), ())) > 1
 
 
 def _norm(text) -> str:
@@ -1437,6 +1469,20 @@ def _names_another(texts, title: str, iso_date: str) -> bool:
     return False
 
 
+def _entries_only_where_shared(docs) -> None:
+    """Keep the entry, what tells one document with no account from the
+    next, only on a document the list gave no account whose date and title
+    another such document shares. Every other one keeps the key it always
+    had, so nothing a sign-in of one account saved is taken again (#96)."""
+    shared: dict = {}
+    for d in docs:
+        if not d.account:
+            shared[(d.date_text, d.title)] = shared.get((d.date_text, d.title), 0) + 1
+    for d in docs:
+        if not d.account and shared.get((d.date_text, d.title), 0) < 2:
+            d.entry = ""
+
+
 def collect_download_docs(page) -> List[RawDoc]:
     """Every document the Documents page lists, from the API answers the
     page loads for its default period and for every period the picker is
@@ -1449,6 +1495,7 @@ def collect_download_docs(page) -> List[RawDoc]:
     _LISTED.clear()
     _LISTED_TITLES.clear()
     _LISTED_ACCOUNTS.clear()
+    _LISTED_DOCS.clear()
     if goto_docs_capturing(page, bodies):
         trace.append({"note": "default list", "lists": len(bodies),
                       "dates": sorted({d["date"] for b in bodies for d in _docs_from_api(b)},
@@ -1461,18 +1508,30 @@ def collect_download_docs(page) -> List[RawDoc]:
         bodies = bodies + wider
         _note_listed(bodies)
         for body in bodies:
+            unlabeled: dict = {}
             for d in _docs_from_api(body):
                 # Two accounts can each have a statement of one title on one
                 # day. Kept by date and title alone, the second account's
                 # was dropped here and never listed (#96).
                 key = (d["date"], d["title"], _norm(d["account"]))
+                entry = ""
+                if not d["account"]:
+                    # With no account, by the list's own ids, else its place
+                    # among this list's entries of that date and title with
+                    # none. Five accounts' statements the list gave no
+                    # account were one record here, and four were never
+                    # listed (#96).
+                    unlabeled[key] = unlabeled.get(key, 0) + 1
+                    entry = d["guid"] if re.search(r"[0-9A-Za-z]", d["guid"]) else "#%d" % unlabeled[key]
+                    key += (entry,)
                 if key in seen:
                     continue
                 seen.add(key)
                 tax = bool(re.search(r"1099|1098|5498|tax", d["title"] + " " + d["kind"], re.I))
                 docs.append(RawDoc(title=d["title"], account=d["account"], date_text=d["date"],
                                    href=d["hint"], text=f"E*TRADE {d['title']} {_human_date(d['date'])}",
-                                   kind="tax" if tax else "statement", guid=d["guid"]))
+                                   kind="tax" if tax else "statement", guid=d["guid"], entry=entry))
+        _entries_only_where_shared(docs)
         trace.append({"note": "discovery result", "documents": len(docs),
                       "dates": sorted({d.date_text for d in docs}, reverse=True)[:60]})
         if docs:
@@ -1543,8 +1602,21 @@ def collect_download_docs(page) -> List[RawDoc]:
 # statement (second survey).
 _INSERT_RE = re.compile(r"insert|client\s+re", re.I)
 
+# A document the lists gave no account, on a day they gave its title more
+# than once, which download_bill refuses before anything is pressed, and
+# which the docs side sends to Manual Review saying so (#96).
+SHARED_WITH_NO_ACCOUNT = "the document names no account and the lists gave its title more than once that day"
+
+# Fewer rows of the date naming the document, for any account, than the
+# lists gave documents of its date and title. The others are on another
+# page of the list, behind a filter, not drawn yet, or worded some other
+# way, and the one row shown may be any of them (#96).
+FEWER_NAMED = "not as many rows name this document as the lists gave"
+
 # Why a lookup refused, in the only words that may say so.
 _REFUSALS = (
+    SHARED_WITH_NO_ACCOUNT,
+    FEWER_NAMED,
     "more than one row of this date names this document",
     "no row of this date names this document",
     "more than one row carries this date",
@@ -1944,6 +2016,18 @@ def _control_for(page, iso: str, title: str = "", trace: Optional[list] = None):
         named = [m for m in matches if any(names_title(w, title) for w in m[2])
                  and _account_ok(m[2], title) and _guard_allows(m[2], title)]
         if len(named) == 1:
+            # Every document the lists gave its date and title has to have a
+            # row here with a control naming it, whatever its account, or
+            # the one naming this account's may be another's (#96).
+            listed = _listed_docs(iso, title)
+            if listed > 1:
+                rows, rows_unread = _rows_naming_any(matches, title)
+                if rows_unread:
+                    _refuse(trace, "control", "a control on the page could not be read", iso, len(matches), 1)
+                    return None, ""
+                if rows < listed:
+                    _refuse(trace, "control", FEWER_NAMED, iso, len(matches), rows)
+                    return None, ""
             around = _around(named[0][0], title)
             if not around:
                 _refuse(trace, "control", "a control on the page could not be read", iso, len(matches), 1)
@@ -1987,6 +2071,25 @@ def _control_for(page, iso: str, title: str = "", trace: Optional[list] = None):
     _refuse(trace, "control", "no control of this date names this document" if title
             else "more than one control carries this date", iso, len(matches), 0)
     return None, ""
+
+
+def _rows_naming_any(matches, title: str) -> Tuple[int, int]:
+    """How many rows hold a control of `matches` naming the document, for
+    any account, each row counted once however many such controls it
+    holds, and how many of those controls' rows could not be read. A row
+    that could not be read may have been one of them, so the caller takes
+    nothing then."""
+    rows, unread = set(), 0
+    for el, _name, words in matches:
+        if not any(_names_any(w, title) for w in words):
+            continue
+        try:
+            where = (el.evaluate(_ROW_KEY_JS) or [""])[0]
+        except Exception:
+            unread += 1
+            continue
+        rows.add(where or "control %d" % len(rows))
+    return len(rows), unread
 
 
 def _around(el, title: str) -> dict:
@@ -2666,11 +2769,15 @@ def _named_link(row, title: str, trace: Optional[list] = None):
     document, so the caller does not count this row as naming nothing. It
     used to be passed over, and of two rows naming the document the other
     one's link would be pressed as the only one (found beside CI run
-    36792330947)."""
+    36792330947).
+
+    Third, whether a visible link in the row names the document for any
+    account, insert aside, so the caller can count the rows holding one of
+    the documents the lists gave its date and title (#96)."""
     looks = (row.get_by_role("link", name=_title_name_re(title)),
              row.get_by_role("link").filter(has_text=re.compile(
                  "^\\s*" + escape_for_locator(title.strip()) + "\\s*$", re.I)))
-    unread, unmade = False, 0
+    unread, unmade, names_any = False, 0, False
     for loc in looks:
         # A look that cannot be made at all gives way to the next one. Only
         # when no look could be made is the row unread.
@@ -2694,6 +2801,7 @@ def _named_link(row, title: str, trace: Optional[list] = None):
                 continue
             if _is_insert_text((shows,), title, labels):
                 continue
+            names_any = True
             # The link has to be this account's by every word it carries, its
             # label as well as what it shows (#96).
             if not _account_ok((shows,) + labels, title):
@@ -2717,8 +2825,8 @@ def _named_link(row, title: str, trace: Optional[list] = None):
                     trace.append({"note": "a link naming this document sits in a row that may be "
                                           "another account's, so it was passed over"})
                 continue
-            return el, False
-    return None, unread or unmade == len(looks)
+            return el, False, True
+    return None, unread or unmade == len(looks), names_any
 
 
 def _may_press_unnamed(cands, row_names_it: bool) -> List[bool]:
@@ -2785,16 +2893,24 @@ def _row_link_for(page, iso_date: str, title: str, trace: Optional[list] = None)
                     shown.append(rows.nth(i))
             except Exception:
                 unread += 1
-        named = []
+        named, named_any = [], 0
         if title:
             for row in shown:
-                link, missed = _named_link(row, title, trace)
+                link, missed, any_account = _named_link(row, title, trace)
                 if missed:
                     unread += 1
                 if link is not None:
                     named.append(link)
+                named_any += bool(any_account)
         if unread:
             _refuse(trace, "row link", unread_why, iso_date, len(shown), len(named))
+            return None, ""
+        # Every document the lists gave its date and title has to have its
+        # row here, whatever its account, or the one naming it may be
+        # another's, the rest on another page of the list (#96).
+        listed = _listed_docs(iso_date, title)
+        if len(named) == 1 and listed > 1 and named_any < listed:
+            _refuse(trace, "row link", FEWER_NAMED, iso_date, len(shown), named_any)
             return None, ""
         if len(named) == 1:
             return named[0], title
@@ -3099,19 +3215,19 @@ _PRESS_JS = r"""
 # the date and ignore the title, and on a date with two documents that
 # clicked the other one's control (#36, review). When it cannot tell which
 # row is the document's it says so in counts and chooses nothing.
-_ROW_BY_DATE_JS = r"""([dates, docName, alone]) => {""" + _PRESS_JS + r"""
+_ROW_BY_DATE_JS = r"""([dates, docName, alone, expected]) => {""" + _PRESS_JS + r"""
   const forms = dates.filter(Boolean);
   const dateRes = forms.map(d => new RegExp('(^|[^0-9/])' + esc(d) + '($|[^0-9/])'));
   const anyDate = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/gi;
   // The innermost visible elements under `root` that print the title, to
   // choose the row by. What is pressed in it is decided by namesTitle.
-  const titled = (root) => {
+  const titledBy = (root, prints) => {
     const found = new Set();
     const go = (el, d) => {
       if (d > 20) return;
       for (const c of inside(el)) {
         if (!c.getAttribute) continue;
-        if (printsTitle(c) && shown(c)) found.add(c);
+        if (prints(c) && shown(c)) found.add(c);
         go(c, d + 1);
       }
     };
@@ -3119,6 +3235,12 @@ _ROW_BY_DATE_JS = r"""([dates, docName, alone]) => {""" + _PRESS_JS + r"""
     const list = Array.from(found);
     return list.filter(a => !list.some(b => b !== a && a.contains(b)));
   };
+  const titled = (root) => titledBy(root, printsTitle);
+  // An element printing the title for any account, its whole words, its
+  // label or its own text nodes, to count the rows of the date that hold
+  // one of the documents the lists gave its date and title (#96).
+  const printsAnyAccounts = (el) => !!titleRe && !!el.getAttribute && (titleRe.test(wordsIn(el).length < 200 ? wordsIn(el) : '')
+    || titleRe.test((el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim()) || titleRe.test(own(el)));
   // A container that prints some other date holds more than one row.
   const otherDates = (el) => ((el.innerText || '').match(anyDate) || []).some(m => !forms.includes(m.replace(/\s+/g, ' ')));
   // The row around a date. A table row, a list item or a role=row element,
@@ -3145,11 +3267,17 @@ _ROW_BY_DATE_JS = r"""([dates, docName, alone]) => {""" + _PRESS_JS + r"""
   for (const h of hits) { const r = rowOf(h); if (r && !found.includes(r)) found.push(r); }
   const rows = found.filter(r => !found.some(o => o !== r && r.contains(o)));
   const named = rows.filter(r => titled(r).length > 0);
+  // When the lists gave its date and title more than one document, every
+  // one of them has to have a row here naming it, whatever its account.
+  // The one row naming it among fewer may be another document's, on a page
+  // that shows only some of them (#96).
+  const namedAny = titleRe ? rows.filter(r => titledBy(r, printsAnyAccounts).length > 0).length : 0;
   let row = null, why = '';
   if (!titleRe) {
     if (rows.length === 1) row = rows[0];
     else why = rows.length ? 'more than one row carries this date' : 'no row around this date';
-  } else if (named.length === 1) row = named[0];
+  } else if (named.length === 1 && expected > 1 && namedAny < expected) why = '""" + FEWER_NAMED + r"""';
+  else if (named.length === 1) row = named[0];
   else if (named.length > 1) why = 'more than one row of this date names this document';
   else if (rows.length === 1 && alone) row = rows[0];
   else why = rows.length ? 'no row of this date names this document' : 'no row around this date';
@@ -3283,7 +3411,8 @@ def _row_by_date(page, iso_date: str, title: str):
     dates = [f"{m}/{d}/{y}", f"{m}/{d}/{y[2:]}", _human_date(iso_date),
              f"{int(m)}/{int(d)}/{y}", f"{int(m)}/{int(d)}/{y[2:]}"]
     try:
-        h = page.evaluate_handle(_ROW_BY_DATE_JS, [dates, _js_title(title), _alone_that_day(iso_date, title)])
+        h = page.evaluate_handle(_ROW_BY_DATE_JS, [dates, _js_title(title), _alone_that_day(iso_date, title),
+                                                   _listed_docs(iso_date, title)])
         props = h.get_properties()
         if not props:
             return None
@@ -3771,11 +3900,20 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     exactly is, "<title> PDF for <account>" (names_title, _account_ok). Two
     accounts' statements of one day were one document, and of two rows
     naming it the download refused both, or took whichever one the page
-    showed (#96)."""
+    showed (#96).
+
+    With no account, on a day the lists gave its title more than once or
+    to more than one label, nothing is pressed (SHARED_WITH_NO_ACCOUNT).
+    Every guard that reads the account passes a document of none, so of
+    several accounts' statements of one title and day, the one row the page
+    showed was taken for it, whichever account's it was (#96)."""
     _FOR.clear()
     if account and title:
         _FOR.update(date=iso_date, title=_norm(title), account=_norm(account))
     try:
+        if not account and _shared_with_no_account(iso_date, title):
+            _refuse(trace, "listed document", SHARED_WITH_NO_ACCOUNT, iso_date, 0, 0)
+            return False
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # Every control pressed for this document, through every attempt below.

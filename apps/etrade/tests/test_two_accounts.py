@@ -71,9 +71,17 @@ def test_the_list_keeps_each_accounts_label_whole():
     assert [d["guid"] for d in got] == ["g1|id-g1", "g2|id-g2"]
 
 
+def _lists_of_this_test(monkeypatch):
+    """What discovery reads into the lists' module state stays with the
+    test that reads it."""
+    for name in ("_LISTED", "_LISTED_TITLES", "_LISTED_ACCOUNTS", "_LISTED_DOCS"):
+        monkeypatch.setattr(site, name, {})
+
+
 def test_two_accounts_statements_of_one_day_are_both_listed(monkeypatch):
     """Kept by date and title alone, the second account's was dropped."""
-    body = {"defaultDocumentList": [_entry(BROKERAGE, FIRST, "g1"), _entry(BROKERAGE, SECOND, "g2")]}
+    _lists_of_this_test(monkeypatch)
+    body ={"defaultDocumentList": [_entry(BROKERAGE, FIRST, "g1"), _entry(BROKERAGE, SECOND, "g2")]}
 
     def capturing(page, capture):
         capture.append(body)
@@ -1010,6 +1018,7 @@ def _lists(monkeypatch, *accounts, title=BROKERAGE, titles=None):
     monkeypatch.setattr(site, "_LISTED_TITLES", {DAY: set(titles or [title])})
     monkeypatch.setattr(site, "_LISTED_ACCOUNTS", {(DAY, title.lower()): {a.lower() for a in accounts}},
                         raising=False)
+    monkeypatch.setattr(site, "_LISTED_DOCS", {(DAY, title.lower()): len(accounts)}, raising=False)
 
 
 def _says_no_account(trace):
@@ -1186,3 +1195,312 @@ def test_a_row_showing_another_accounts_label_is_never_taken_when_neither_shows_
     brings.add("g-family")
     got, out, trace = download(page, joint)
     assert not got and hits == [], (hits, trace)
+
+
+# --- a document the list gives no account ------------------------------------------
+#
+# The second report on #96, five accounts. The list can give a document no
+# account, an empty displayMultipleAccounts. Every guard that reads the
+# account passed such a document, so of several accounts' statements of
+# one title and day, the one row the page showed was taken for it,
+# whichever account's it was, and discovery kept one of them and dropped
+# the rest.
+
+_REAL_COLLECT = site.collect_download_docs
+
+
+def _listing_of(monkeypatch, *bodies):
+    """The documents discovery's own parse reads from searchItems answers,
+    the first as the default list and the rest as wider ones."""
+    first, wider = bodies[0], bodies[1:]
+    _lists_of_this_test(monkeypatch)
+
+    def capturing(page, capture):
+        capture.append(first)
+        return True
+
+    def widen(page, more, trace=None):
+        more.extend(wider)
+        return bool(wider)
+    monkeypatch.setattr(site, "goto_docs_capturing", capturing)
+    monkeypatch.setattr(site, "widen_date_filter", widen)
+    return _REAL_COLLECT(None)
+
+
+def _body(*entries):
+    return {"defaultDocumentList": list(entries)}
+
+
+def _no_ids(title, day=DAY):
+    """An entry of the list with no account and no ids of its own."""
+    return {"documentTypeName": "STATEMENTS", "documentTitle": title, "documentDate": day + "T00:00:00.000Z"}
+
+
+def test_five_accounts_statements_the_list_gave_no_account_are_five_records(app, monkeypatch):
+    """They were one record, under the key of no account, and four were
+    never listed."""
+    raws = _listing_of(monkeypatch, _body(*[_entry(BROKERAGE, None, "g%d" % i) for i in range(5)]))
+    assert len(raws) == 5 and len({r.entry for r in raws}) == 5
+    app.listing(*raws)
+    assert len(app.discovery.data) == 5, sorted(app.discovery.data)
+    assert all(k.startswith(_legacy_key(BROKERAGE) + "#") for k in app.discovery.data), sorted(app.discovery.data)
+    assert {r["account"] for r in app.discovery.data.values()} == {""}
+    assert site._LISTED_DOCS[(DAY, "brokerage statement")] == 5
+    assert site._LISTED_ACCOUNTS[(DAY, "brokerage statement")] == {""}
+
+
+def test_statements_with_and_without_an_account_are_each_kept(app, monkeypatch):
+    raws = _listing_of(monkeypatch, _body(
+        _entry(BROKERAGE, FIRST, "g1"), _entry(BROKERAGE, SECOND, "g2"), _entry(BROKERAGE, None, "g3"),
+        _entry(BROKERAGE, "", "g4"), _entry(RETIREMENT, None, "g5")))
+    assert len(raws) == 5
+    app.listing(*raws)
+    keys = sorted(app.discovery.data)
+    assert {_key(BROKERAGE, "1111"), _key(BROKERAGE, "2222"), _legacy_key(RETIREMENT)} <= set(keys), keys
+    assert len([k for k in keys if k.startswith(_legacy_key(BROKERAGE) + "#")]) == 2, keys
+    assert len(keys) == 5
+
+
+def test_entries_with_no_ids_are_told_apart_by_their_place_and_counted_once_across_lists(monkeypatch):
+    """The default list and a wider one both hold the two entries."""
+    both = _body(_no_ids(BROKERAGE), _no_ids(BROKERAGE))
+    raws = _listing_of(monkeypatch, both, both)
+    assert sorted(r.entry for r in raws) == ["#1", "#2"]
+
+
+@pytest.mark.parametrize("ids", [True, False], ids=["with ids", "with none"])
+def test_a_sign_in_of_one_account_the_list_gives_no_account_keeps_every_key(app, monkeypatch, ids):
+    """One document of each date and title, so nothing is added to its key,
+    and what it saved before stays saved and is not taken again."""
+    days = ("2025-07-31", DAY)
+    for day in days:
+        _saved_before(app, BROKERAGE, "%s ETRADE Account Statement.pdf" % day, day=day)
+    before = json.loads(json.dumps(app.progress.data))
+    entries = [_entry(BROKERAGE, None, "g-" + day, day=day) if ids else _no_ids(BROKERAGE, day=day)
+               for day in days]
+    raws = _listing_of(monkeypatch, _body(*entries))
+    assert [r.entry for r in raws] == ["", ""]
+    app.listing(*raws)
+    assert app.progress.data == before
+    assert sorted(app.discovery.data) == sorted(_legacy_key(BROKERAGE, day) for day in days)
+    assert [d for d in app._select() if not app._already_done(d)] == []
+
+
+def _lists_no_label(monkeypatch, n=2):
+    """What the lists held on DAY when they gave its `n` Brokerage
+    Statements no account."""
+    monkeypatch.setattr(site, "_LISTED", {DAY: n})
+    monkeypatch.setattr(site, "_LISTED_TITLES", {DAY: {BROKERAGE}})
+    monkeypatch.setattr(site, "_LISTED_ACCOUNTS", {(DAY, BROKERAGE.lower()): {""}})
+    monkeypatch.setattr(site, "_LISTED_DOCS", {(DAY, BROKERAGE.lower()): n})
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("labels", ["two accounts", "no labels"])
+@pytest.mark.parametrize("rows", ["one of two shown", "a bare title shown", "both shown"])
+def test_a_document_of_no_account_is_never_taken_on_a_day_its_title_is_shared(
+        page, run, monkeypatch, shape, labels, rows):
+    """The lists held two documents of its date and title, with accounts or
+    with none. The one row the page showed was taken for it, whichever
+    account's it was, and with two shown both were refused."""
+    if labels == "two accounts":
+        _lists(monkeypatch, FIRST, SECOND)
+    else:
+        _lists_no_label(monkeypatch)
+    shown = {"one of two shown": BOTH[1:], "a bare title shown": [(BROKERAGE, SECOND, "", "g-second")],
+             "both shown": BOTH}[rows]
+    page.set_content(_table(shown) if shape == "table" else _divs(shown, shape))
+    hits, brings, download = run
+    brings.update({"g-first", "g-second"})
+    got, out, trace = download(page, "")
+    assert not got and not out.exists() and hits == [], (hits, trace)
+    assert [t["why"] for t in trace if "why" in t] == [site.SHARED_WITH_NO_ACCOUNT], trace
+    _says_no_account(trace)
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_a_document_of_no_account_the_lists_held_alone_that_day_is_still_taken(page, run, monkeypatch, shape):
+    """The positive twin, a sign-in of one account the list gives no
+    account."""
+    _lists_no_label(monkeypatch, n=1)
+    rows = [(BROKERAGE, "", "", "g-only")]
+    page.set_content(_table(rows) if shape == "table" else _divs(rows, shape))
+    hits, brings, download = run
+    brings.add("g-only")
+    got, out, trace = download(page, "")
+    assert got and hits == ["g-only"], (hits, trace)
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_the_one_row_naming_its_account_is_refused_when_the_page_shows_fewer_than_the_lists_gave(
+        page, run, monkeypatch, shape):
+    """The lists held both accounts' statements and the page shows only the
+    second's, so the rows it shows are not every document of the day. With
+    both shown each account's is taken
+    (test_each_account_takes_the_link_naming_its_own_account)."""
+    _lists(monkeypatch, FIRST, SECOND)
+    rows = BOTH[1:]
+    page.set_content(_table(rows) if shape == "table" else _divs(rows, shape))
+    hits, brings, download = run
+    brings.update({"g-first", "g-second"})
+    got, out, trace = download(page, SECOND)
+    assert not got and not out.exists() and hits == [], (hits, trace)
+    assert site.FEWER_NAMED in {t.get("why") for t in trace}, trace
+    _says_no_account(trace)
+
+
+def test_each_step_counts_the_rows_the_lists_gave(page, monkeypatch, tmp_path):
+    """The row link, the control and the row walk each count the rows naming
+    the document, so none of them takes the one row shown when an earlier
+    one refuses it."""
+    _lists(monkeypatch, FIRST, SECOND)
+    monkeypatch.setattr(site, "_FOR", {"date": DAY, "title": BROKERAGE.lower(), "account": SECOND.lower()},
+                        raising=False)
+    trace: list = []
+    page.set_content(_table(BOTH[1:]))
+    assert site._row_link_for(page, DAY, BROKERAGE, trace) == (None, "")
+    page.set_content(_divs(BOTH[1:]))
+    assert site._control_for(page, DAY, BROKERAGE, trace) == (None, "")
+    pressed: list = []
+    monkeypatch.setattr(site, "_catch_pdf", lambda pg, el, *a, **k: pressed.append(el) or True)
+    page.set_content(_divs(BOTH[1:], "li"))
+    assert not site._try_every_way(page, tmp_path, DAY, tmp_path / "out.pdf", BROKERAGE, trace)
+    assert pressed == []
+    assert [t["way"] for t in trace if t.get("why") == site.FEWER_NAMED] == ["row link", "control", "row by date"]
+
+
+# --- what the docs side does with what is saved, and with a refusal -----------------
+
+def _taking(app, monkeypatch, handed):
+    """download_one with the site layer handing over handed[account] as
+    the PDF of each document, and what it wrote down."""
+    failures: list = []
+
+    def download_bill(page, dl_dir, iso, out_path, title="", trace=None, account=""):
+        Path(out_path).write_bytes(handed[account])
+        return True
+    monkeypatch.setattr(site, "download_bill", download_bill)
+    app._dl_dir = app.paths.root / "dl"
+    app.write_failure = lambda *a, **k: failures.append(a)
+    app._journal = SimpleNamespace(checkpoint=lambda *a, **k: None, op=lambda *a, **k: None)
+    app.stats.update(manual_review=0, duplicate_filenames=0, validation_failures=0, new_files=[], dates=[],
+                     statements=0, tax_documents=0, insurance_documents=0, other=0)
+
+    def take(doc):
+        app.download_one(SimpleNamespace(url=""), doc,
+                         storage.build_pdf_filename(doc.date, doc.summary, "", record=doc))
+        return app.progress.data[doc.key]
+    return take, failures
+
+
+def _doc_of(app, account, title=BROKERAGE):
+    return next(d for d in app._select() if d.account == account and d.title == title)
+
+
+def test_a_document_of_no_account_on_a_shared_day_goes_to_manual_review_and_nothing_is_pressed(app, monkeypatch):
+    raws = _listing_of(monkeypatch, _body(_entry(BROKERAGE, None, "g1"), _entry(BROKERAGE, None, "g2")))
+    app.listing(*raws)
+    take, failures = _taking(app, monkeypatch, {})
+    pressed: list = []
+    monkeypatch.setattr(site, "download_bill", _REAL_DOWNLOAD)
+    monkeypatch.setattr(site, "_row_link_for", lambda *a, **k: pressed.append(a) or (None, ""))
+    for doc in app._select():
+        rec = take(doc)
+        assert (rec["state"], rec.get("downloaded_ok", False)) == ("Needs Manual Review", False), rec
+        assert etrade_docs.App.NO_ACCOUNT in rec["notes"]
+    assert pressed == [] and app.stats["manual_review"] == 2
+    assert failures and failures[0] == ("choose the document", "the list gave the document no account")
+    assert not any(app.paths.folder_for("Statement").iterdir())
+    attempt = json.loads((app.paths.diagnostics / "download-attempt.json").read_text(encoding="utf-8"))
+    assert site.SHARED_WITH_NO_ACCOUNT in json.dumps(attempt)
+
+
+_REAL_DOWNLOAD = site.download_bill
+
+
+def test_a_pdf_the_same_as_another_records_of_that_day_is_set_aside(app, monkeypatch):
+    """Two accounts' records of one day handed one PDF. The second is that
+    same document taken again, and was kept as its own."""
+    app.listing(_raw(BROKERAGE, FIRST, "g1"), _raw(RETIREMENT, SECOND, "g2"))
+    same = testkit.text_pdf(_statement("Account Number: XXXX-2222"))
+    take, failures = _taking(app, monkeypatch, {FIRST: same, SECOND: same})
+    second = take(_doc_of(app, SECOND, RETIREMENT))
+    assert second["downloaded_ok"] is True and Path(second["pdf_path"]).exists()
+    first = take(_doc_of(app, FIRST))
+    assert (first["state"], first.get("downloaded_ok")) == ("Needs Manual Review", False), first
+    assert etrade_docs.App.SAME_PDF in first["notes"]
+    assert Path(first["pdf_path"]).parent == app.paths.manual_review and Path(first["pdf_path"]).exists()
+    assert app.progress.data[_key(RETIREMENT, "2222")] == second
+    assert failures == [("save the document", "two documents gave the same file")]
+    # Set aside, it is not taken again on the next run while its copy is there.
+    assert app._already_done(_doc_of(app, FIRST))
+
+
+def test_a_pdf_the_same_as_a_file_saved_before_digests_were_kept_is_set_aside(app, monkeypatch):
+    path = _saved_before(app, RETIREMENT, "%s ETRADE Account Statement.pdf" % DAY,
+                         prints=_statement("Account Number: XXXX-1111"))
+    app.listing(_raw(BROKERAGE, FIRST, "g1"), _raw(RETIREMENT, FIRST, "g2"))
+    assert not app.progress.data[_key(RETIREMENT, "1111")].get("pdf_sha256")
+    take, _failures = _taking(app, monkeypatch, {FIRST: path.read_bytes()})
+    rec = take(_doc_of(app, FIRST))
+    assert rec["state"] == "Needs Manual Review" and etrade_docs.App.SAME_PDF in rec["notes"], rec
+
+
+def test_two_different_pdfs_of_one_day_are_both_kept(app, monkeypatch):
+    app.listing(_raw(BROKERAGE, FIRST, "g1"), _raw(BROKERAGE, SECOND, "g2"))
+    take, _failures = _taking(app, monkeypatch, {FIRST: testkit.text_pdf(_statement("Account Number: XXXX-1111")),
+                                                 SECOND: testkit.text_pdf(_statement("Account Number: XXXX-2222"))})
+    assert all(take(_doc_of(app, a))["downloaded_ok"] is True for a in (FIRST, SECOND))
+
+
+def test_a_statement_taken_again_the_same_as_the_record_kept_before_is_kept(app, monkeypatch):
+    """0.53.0 takes each account's statement of a day again beside the
+    record kept before, which held one of them. The one whose bytes are that
+    file's is that account's, and is kept."""
+    old = _saved_before(app, BROKERAGE, "%s ETRADE Account Statement.pdf" % DAY,
+                        prints=_statement("No account printed"))
+    _both_on_one_day(app)
+    take, _failures = _taking(app, monkeypatch, {FIRST: old.read_bytes()})
+    assert take(_doc_of(app, FIRST))["downloaded_ok"] is True
+
+
+def test_a_record_whose_file_was_deleted_holds_nothing_against_the_file_now_under_its_name(app, monkeypatch):
+    """Files are deleted once imported elsewhere, and the next statement of
+    that name takes it. The record kept before still names it."""
+    gone = _saved_before(app, RETIREMENT, "%s ETRADE Account Statement.pdf" % DAY)
+    gone.unlink()
+    app.listing(_raw(BROKERAGE, FIRST, "g1"), _raw(RETIREMENT, FIRST, "g2"))
+    take, _failures = _taking(app, monkeypatch, {FIRST: testkit.text_pdf(_statement("Invented"))})
+    rec = take(_doc_of(app, FIRST))
+    assert rec["downloaded_ok"] is True and rec["pdf_path"] == str(gone), rec
+
+
+def test_a_second_accounts_file_says_whose_it_is_when_the_pattern_leaves_the_account_out(app, monkeypatch):
+    """It was told apart by " (2)", which says nothing about which account's
+    it is. Rename tells it apart the same way."""
+    monkeypatch.setattr(core_storage, "_FILENAME_PATTERN", "{date:yyyy-mm-dd} {kind}")
+    app.listing(_raw(BROKERAGE, FIRST, "g1"), _raw(BROKERAGE, SECOND, "g2"))
+    take, _failures = _taking(app, monkeypatch, {FIRST: testkit.text_pdf(_statement("Account Number: XXXX-1111")),
+                                                 SECOND: testkit.text_pdf(_statement("Account Number: XXXX-2222"))})
+    first, second = take(_doc_of(app, FIRST)), take(_doc_of(app, SECOND))
+    assert Path(second["pdf_path"]).name == Path(first["pdf_path"]).stem + " 2222.pdf", (first, second)
+    assert second["told_apart"] == "2222"
+    folder = app.paths.folder_for("Statement")
+    names = sorted(p.name for p in folder.iterdir())
+    app.args.apply = True
+    app.cmd_rename()
+    assert sorted(p.name for p in folder.iterdir()) == names
+
+
+def test_a_file_told_apart_by_a_number_before_keeps_its_name(app):
+    """A sign-in of one account, two statements of one day saved before
+    #96, the second as " (2)". Its record now holds the account, whose
+    digits the download tells a file apart by today, and Rename leaves
+    the name it was saved under."""
+    files = [_saved_before(app, BROKERAGE, "%s ETRADE Account Statement.pdf" % DAY),
+             _saved_before(app, RETIREMENT, "%s ETRADE Account Statement (2).pdf" % DAY)]
+    app.listing(_raw(BROKERAGE, FIRST, "g1"), _raw(RETIREMENT, FIRST, "g2"))
+    assert app.progress.data[_key(RETIREMENT, "1111")]["account"] == FIRST
+    app.args.apply = True
+    app.cmd_rename()
+    assert all(p.exists() for p in files)
