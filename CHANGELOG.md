@@ -176,6 +176,20 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the same run. A refusal never deletes or writes over a document already
   in the archive. The limits are in one place, paperpull_core/intake.py,
   and every refusal names the one it met and says it is raised there.
+- **Best Buy and M&T press their year controls only when the control reads
+  as one, and M&T never calls a list whole with a year left closed.** Best
+  Buy's year menu and the year in it were pressed without a guard of their
+  own, and M&T pressed a year heading whatever else it said. Best Buy now
+  presses the menu only when it reads Past 3 Years or a year, and a year
+  only when it is exactly the year wanted among those the opened menu
+  showed, through the core's press checks, and a menu that reads otherwise
+  stops the run saying so. M&T presses a heading only when it reads as a
+  year heading, and when a year stays closed or opens and lists nothing,
+  the run stops rather than marking the list whole with that year missing.
+  A new test fails when an app defines a guard its run never asks, and the
+  app pages and SECURITY.md no longer say that ADP, Best Buy, eBay, Meijer,
+  PayPal or Discover clicks nothing, or that a Diagnose clicks only a
+  documents link, where they press more.
 
 ## [0.55.0] - 2026-10-17
 
