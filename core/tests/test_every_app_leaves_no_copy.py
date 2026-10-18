@@ -200,9 +200,18 @@ def check(app, got, provider, out, staging):
         "%s asked the provider %d times for one document the browser already had"
         % (app, len(provider.served)))
     assert out.read_bytes() == provider.served[0], "%s saved something else" % app
-    copies = [p.name for p in staging.iterdir()
-              if p.is_file() and p.read_bytes() == provider.served[0]]
+    copies = [p.name for p in staging.iterdir() if holds(p, provider.served[0])]
     assert not copies, "%s left the document in its download folder as %s" % (app, copies)
+
+
+def holds(path: Path, data: bytes) -> bool:
+    """Whether the file holds exactly `data`. The browser deletes a download
+    it let go in its own time, so a file can be listed and gone before it
+    is read, and one that went is no copy."""
+    try:
+        return path.is_file() and path.read_bytes() == data
+    except FileNotFoundError:
+        return False
 
 
 # -- the model this rests on --------------------------------------------------

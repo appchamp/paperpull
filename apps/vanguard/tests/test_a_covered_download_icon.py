@@ -160,7 +160,19 @@ def _download(page, tmp_path):
 
 
 def _listing(folder: Path):
-    return sorted((p.name, p.stat().st_size) for p in folder.iterdir()) if folder.exists() else []
+    """Each file in the folder with its size. Chrome deletes a download it
+    canceled in its own time, so a .crdownload can be listed and gone
+    before its size is read, and one that went is not in the folder. On CI
+    on 2026-10-18 the stat of such a file raised FileNotFoundError."""
+    if not folder.exists():
+        return []
+    found = []
+    for p in folder.iterdir():
+        try:
+            found.append((p.name, p.stat().st_size))
+        except FileNotFoundError:
+            continue
+    return sorted(found)
 
 
 def test_an_icon_with_a_bubble_over_its_middle_is_never_pressed(launched, vanguard, tmp_path):
