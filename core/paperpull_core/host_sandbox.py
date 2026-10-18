@@ -19,6 +19,14 @@ changes this one. It is said once at the container's start (server/start.sh),
 in the panel (gui/server_mode.py), by the self-test, and at a sign-in whose
 Chrome did not start (paperpull_core.browser). Nothing here turns the
 sandbox off or asks for less of it. It only says why it cannot start.
+
+Without the seccomp-bpf filter Chrome does not stop by itself. It starts
+with the namespace half of its sandbox and nothing limiting its system
+calls, which a kernel with user namespaces and no seccomp allows once the
+container's profile is removed by hand. So there the server does not start
+Chrome at all (refuses_chrome), at a sign-in, in a browser of an app's own,
+in the receipt renderer and in the self-test, and says why, while the panel
+stays up.
 """
 from __future__ import annotations
 
@@ -188,11 +196,20 @@ def stops_chrome(found: Sandbox) -> bool:
     """Whether what was found stops Chrome before it opens a window. With no
     user namespace to be had it ends at once, measured with Chrome 154 in
     the server image. Without seccomp-bpf alone it still starts, with the
-    namespace half of its sandbox only. A ready setuid helper beside the
-    filter stands in for user namespaces."""
+    namespace half of its sandbox only, which refuses_chrome is for. A
+    ready setuid helper beside the filter stands in for user namespaces."""
     if stands_in(found):
         return False
     return found.userns in ("no", "refused", "limit")
+
+
+def refuses_chrome(found: Sandbox) -> bool:
+    """Whether the server must not start Chrome at all, since it would start
+    with half its sandbox. A kernel without the seccomp-bpf filter lets
+    Chrome run with its namespaces and nothing limiting its system calls,
+    and the setuid helper never makes up for it (stands_in asks for the
+    filter). A host that could not be told is not refused."""
+    return found.seccomp_bpf == "no" and not stands_in(found)
 
 
 def problem(found: Sandbox) -> str:
@@ -215,7 +232,9 @@ def problem(found: Sandbox) -> str:
                 "profile seccomp-chrome.json is not applied. See %s." % PROFILE_SECTION)
     if found.seccomp_bpf == "no":
         return ("This host's kernel has no seccomp-bpf filter, the other half of Chrome's "
-                "sandbox, so Chrome cannot run with its whole sandbox here. See %s." % SECTION)
+                "sandbox, so Chrome would run with only half its sandbox here, and PaperPull "
+                "will not start Chrome that way. Sign-in windows cannot open on this host. "
+                "See %s." % SECTION)
     return ""
 
 

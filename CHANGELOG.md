@@ -276,6 +276,16 @@ All notable changes to PaperPull are recorded here. Versioning follows
   app pages and SECURITY.md no longer say that ADP, Best Buy, eBay, Meijer,
   PayPal or Discover clicks nothing, or that a Diagnose clicks only a
   documents link, where they press more.
+- **PaperPull Server never starts Chrome on a host without seccomp-bpf.**
+  Chrome's sandbox has two halves, its namespaces and a seccomp-bpf filter
+  on its system calls. On a kernel with user namespaces and no seccomp,
+  with the container's security profile removed by hand, Chrome started
+  with only the namespace half, and the server said so and went on. Now no
+  Chrome starts on such a host, not the sign-in window, not an app's own
+  browser, not the receipt renderer and not the self-test's. The panel
+  stays up and says why at the top of every page, a sign-in says Chrome
+  was not started and why, and the self-test's sandbox line names it.
+  SERVER.md says so under On Synology and Chrome does not start.
 
 ## [0.55.0] - 2026-10-17
 

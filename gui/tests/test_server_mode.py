@@ -1139,6 +1139,12 @@ def test_a_host_that_cannot_give_chrome_its_sandbox_is_said_on_every_page(
     assert status == 200
     said = json.loads(body)["server"]["sandbox"]
     assert said == host_sandbox.problem(dsm) and "no user namespaces" in said
+    # A kernel with user namespaces and no seccomp-bpf, where the server
+    # starts no Chrome, is said the same way, and the panel stays up.
+    half = host_sandbox.Sandbox("yes", "no", "no-kernel")
+    monkeypatch.setattr(host_sandbox, "check", lambda: half)
+    said = json.loads(ask(base + "/api/apps", session=session)[2])["server"]["sandbox"]
+    assert said == host_sandbox.problem(half) and "will not start Chrome that way" in said
     monkeypatch.setattr(host_sandbox, "check",
                         lambda: host_sandbox.Sandbox("yes", "yes", "applied"))
     assert json.loads(ask(base + "/api/apps", session=session)[2])["server"]["sandbox"] == ""

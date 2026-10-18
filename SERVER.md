@@ -215,7 +215,11 @@ cat /proc/sys/user/max_user_namespaces
   black. The container's log says so in a line that starts with
   `[sandbox]`, and the panel says so at the top of every page. Docker also
   refuses the container's security profile there, saying seccomp is not
-  enabled in your kernel. Use one of the two ways below.
+  enabled in your kernel. Removing `security_opt` gets the container
+  started, but PaperPull still starts no Chrome on a kernel without
+  seccomp, not even one that has user namespaces, since Chrome would run
+  there with only half its sandbox. The panel stays up and says why, and
+  so does a sign-in. Use one of the two ways below.
 - **A `Seccomp` line and a number above `0`.** The setup above works as it
   is.
 - **A `Seccomp` line, and a `0` or "No such file or directory".** The kernel
@@ -506,6 +510,11 @@ docker exec paperpull python /opt/paperpull/server/selftest.py
   - If the host's kernel has no user namespaces, Chrome's usual sandbox
     cannot start on it, see [On Synology](#on-synology), which also says
     when Chrome's setuid sandbox can stand in.
+  - If the host's kernel has no seccomp-bpf filter, PaperPull does not
+    start Chrome at all, and a sign-in says Chrome was not started. Chrome
+    would run there with only the namespace half of its sandbox, and
+    nothing can stand in for the filter, so use another host, see
+    [On Synology](#on-synology).
 - **The first start ends at once.** It needs to reach `dl.google.com` once
   to download Chrome. After that it starts without a connection and uses
   the Chrome it has.
