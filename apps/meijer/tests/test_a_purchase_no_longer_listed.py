@@ -330,9 +330,15 @@ def fake_meijer(server):
     """Every address the app opens points at the made-up site, every wait is
     short, and today is TODAY. Held for the whole file, since a history of
     runs is read by several tests. A tab is given half a second to start
-    drawing once pressed and three seconds for its rows, a purchase's row is
-    looked for twice, and the rows count as settled after a second without
-    a change, or a second and a half once the list is scrolled to its end.
+    drawing once pressed and fifteen seconds for its rows, a purchase's row
+    is looked for twice, and the rows count as settled after a second
+    without a change, or a second and a half once the list is scrolled to
+    its end. A wait for rows ends as soon as they show, and on a busy
+    machine three seconds ran out before a look had pressed its tab, which
+    left one look where a test meant two. A test of a list that never stops
+    changing gives it three seconds itself, since such a wait always runs
+    to its end. A discovery that finds a tab with no rows waits the whole
+    fifteen, once.
 
     Every failure file the app is asked to write, and every purchase it
     takes to the receipt step, is noted as well."""
@@ -346,7 +352,7 @@ def fake_meijer(server):
         mp.setattr(site, "ORDERS_WAIT_MS", 800, raising=False)
         mp.setattr(site, "SETTLE_MS", 0, raising=False)
         mp.setattr(site, "CHALLENGE_WAIT_MS", 1500, raising=False)
-        mp.setattr(site, "LIST_WAIT_MS", 3000, raising=False)
+        mp.setattr(site, "LIST_WAIT_MS", 15000, raising=False)
         mp.setattr(site, "ROWS_STEADY_MS", 1000, raising=False)
         mp.setattr(site, "ROW_LOOKS", 2, raising=False)
         mp.setattr(site, "TAB_PAUSE_MS", 500, raising=False)
@@ -706,6 +712,7 @@ def test_a_list_that_never_stops_changing_is_never_read_as_whole(attached, tmp_p
     is watched the list was never seen whole, so the purchase is not said to
     have dropped off it. It is a failure, and the next run looks for it
     again."""
+    monkeypatch.setattr(site, "LIST_WAIT_MS", 3000, raising=False)
     SITE.orders = orders_page([GONE])
     run(tmp_path, attached, "--discover")
     SITE.orders = orders_page([], grows=True, endless=True)
@@ -957,6 +964,33 @@ def test_it_has_dropped_off_only_when_every_look_finds_so(attached, tmp_path, mo
     assert "Meijer no longer lists" not in took["out"]
     [attempt] = took["attempts"] or [{}]
     assert [n["earlier_than_every_row"] for n in judged(attempt)] == [False, True], attempt
+
+
+def test_a_look_whose_list_did_not_come_never_leaves_the_other_to_decide(attached, known,
+                                                                        tmp_path, monkeypatch):
+    """The first look's list does not come within its wait, the way a slow
+    page's does not, and the second finds the purchase gone from a list
+    that goes back past it. One look alone never decides that it has
+    dropped off, so it is a failure, and the next run looks for it again."""
+    real = site.show_list_for
+    looks = []
+
+    def first_look_gets_nothing(page, purchase_type, wait_ms=None, or_none=False):
+        if or_none:
+            return real(page, purchase_type, wait_ms, or_none)
+        looks.append(purchase_type)
+        if len(looks) == 1:
+            return {"opened": False, "rows": 0, "none": False}
+        return real(page, purchase_type, wait_ms, or_none)
+    monkeypatch.setattr(site, "show_list_for", first_look_gets_nothing)
+    start_from(tmp_path, known)
+    SITE.orders = orders_page([K1, K2])
+    took = run(tmp_path, attached, "--all", "--yes", *ONLY_C1)
+
+    kept_a_failure(took, C1)
+    [attempt] = took["attempts"] or [{}]
+    assert [n["rows"] for n in notes_in(attempt, "the purchase's tab")] == [0, 2], attempt
+    assert [n["earlier_than_every_row"] for n in judged(attempt)] == [True], attempt
 
 
 # -- reading the list ------------------------------------------------------------------------
