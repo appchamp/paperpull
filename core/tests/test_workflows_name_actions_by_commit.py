@@ -63,9 +63,13 @@ def test_the_tests_run_on_the_versions_the_windows_package_ships():
 
 def test_each_package_workflow_checks_the_python_it_installed():
     """The packaged interpreter is asked its version on the runner, after
-    the build, against the version the builder names."""
+    the build, against the version the builder names. The installed MSIX
+    is asked through its interpreter DLL's version, since a program inside
+    WindowsApps does not start by its path with its output read."""
     win = (REPO / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
     mac = (REPO / ".github" / "workflows" / "build-macos.yml").read_text(encoding="utf-8")
-    assert "build_windows.PY_VERSION" in win and 'python\\python.exe") -c "import platform' in win
+    assert "build_windows.PY_VERSION" in win and '-Filter "python3*.dll"' in win
+    assert "$dll.VersionInfo.ProductVersion" in win
+    assert 'python\\python.exe") -c' not in win, "WindowsApps refuses it"
     assert re.search(r"if \(\$have -ne \$want\) \{ throw ", win)
     assert "build_macos.PY_VERSION" in mac and 'test "$have" = "$want"' in mac
