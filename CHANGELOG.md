@@ -153,6 +153,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   SERVER.md has a new On Synology section, with a Debian 12 virtual
   machine or the desktop app as the ways that work. Thanks to
   @akcamperdude for the report.
+- **Meijer no longer waits for a receipt's download where it hears it.**
+  Everything listening for a download on the page hears it in turn, so
+  while Meijer waited there for the download to finish, up to twenty
+  seconds, the check of what the press brought heard nothing. Meijer now
+  only notes the download as it begins and waits for it afterward, still
+  canceling one that has not finished in twenty seconds, so everything
+  listening hears the download at once. A test now checks that no app
+  waits for a download where it hears one.
 
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed
@@ -260,7 +268,7 @@ All notable changes to PaperPull are recorded here. Versioning follows
   read wherever its length is declared, and one read inside the page or
   printed is stopped as soon as it passes the limit. A download is
   measured before it is copied, and one caught by the core's delivery is
-  cancelled when it takes longer than five minutes or grows past the
+  canceled when it takes longer than five minutes or grows past the
   limit in the download folder. A ZIP is opened only when it lists at most
   1,000 files, is stored or deflated, and its PDF unpacks to no more than
   100 times its packed size, and anything else is kept whole in Manual
@@ -271,15 +279,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the same run. A refusal never deletes or writes over a document already
   in the archive. The limits are in one place, paperpull_core/intake.py,
   and every refusal names the one it met and says it is raised there.
-- **A download an app waits for itself is cancelled after five minutes as
+- **A download an app waits for itself is canceled after five minutes as
   well.** Only a download caught by the core's delivery was given a time.
   An app that waited for its own, Ally, Chase, U.S. Bank, PG&E, AAFMAA,
   Target, Wealthfront and about twenty more, waited for as long as the
   provider kept sending, since saving a download, asking why it failed and
   deleting it each wait for it to finish. Each now waits five minutes at
-  most, and a download that has not finished by then is cancelled and
+  most, and a download that has not finished by then is canceled and
   refused, saying so and naming DOWNLOAD_SECONDS. A download the browser
-  writes into a download folder is cancelled as soon as it grows past
+  writes into a download folder is canceled as soon as it grows past
   100 MB there, as delivery's was. A tab that started a download and
   closed does not end the wait, and the wait no longer holds up anything
   else listening on the page, the check of what a press brought among

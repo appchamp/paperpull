@@ -27,7 +27,9 @@ its limit and nowhere else.
 A download's own file, a copy of it, why it failed and deleting it each
 wait in Playwright until it has finished, for as long as the provider
 sends, so intake asks for them only once intake.finish has waited its
-limit (test_intake_waits_for_a_download_only_through_finish).
+limit (test_intake_waits_for_a_download_only_through_finish). A listener
+that hears a download never waits for it, since every listener after it on
+the same event would wait with it (test_no_download_listener_waits_for_its_download).
 
 A snippet that reads a body in the page (ppRead, ppBlob) is run
 through intake.evaluate, which puts the reader in front of it with the
@@ -85,9 +87,10 @@ NOT_A_DOCUMENT = {
         "an order's id in a link, at most 80 characters, checked to be base64",
     ("apps/lowes/lowes_site.py", "pair_cards", "decode"):
         "an order's id in a link, at most 80 characters, checked to be base64",
-    ("apps/meijer/meijer_site.py", "on_download", "download_path"):
-        "waited for in the listener's own fiber, cancelled after twenty seconds, "
-        "the file then read through intake.read_file",
+    ("apps/meijer/meijer_site.py", "press_row_receipt", "download_path"):
+        "asked for only once intake.finish says the download finished, canceled after "
+        "twenty seconds, the file then read through intake.read_file "
+        "(test_a_download_file_asked_for_outside_intake_waits_through_finish_first)",
     ("apps/spectrum/spectrum_site.py", "decode_statement_id", "decode"):
         "a statement's id, which holds its account and date, not a document",
     ("apps/spectrum/spectrum_site.py", "pair", "decode"):
@@ -400,6 +403,211 @@ def test_intake_waits_for_a_download_only_through_finish():
             unheld.append("%s at line %s" % (fn, lines))
     assert not unheld, "a download waited for without finish():\n" + "\n".join(unheld)
     assert set(waits) == {"wait", "save_download_as", "failure", "discard"}, waits
+
+
+def _is_intake_finish(node) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+        and node.func.attr == "finish" and getattr(node.func.value, "id", "") == "intake"
+
+
+def _asked_before_finish(fn) -> list:
+    """Lines where a function asks for a download's own file other than in
+    the body of an `if intake.finish(...)` on that same download, where it
+    has finished."""
+    parents = {}
+    for node in ast.walk(fn):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    loose = []
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "path" and not node.args and not node.keywords):
+            continue
+        which = ast.unparse(node.func.value)
+        child, up = node, parents.get(node)
+        while up is not None and not (isinstance(up, ast.If) and _is_intake_finish(up.test)
+                                      and up.test.args and ast.unparse(up.test.args[0]) == which
+                                      and child in up.body):
+            child, up = up, parents.get(up)
+        if up is None:
+            loose.append(node.lineno)
+    return loose
+
+
+def test_a_download_file_asked_for_outside_intake_waits_through_finish_first():
+    """A download's own file named above with a reason, outside intake, is
+    asked for only once intake.finish says the download finished, so it is
+    never waited for longer than finish allows. Meijer's is."""
+    loose = []
+    for rel, fn, kind in NOT_A_DOCUMENT:
+        if kind != "download_path":
+            continue
+        tree, _ = _parsed(REPO / rel)
+        found = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn]
+        assert found, "%s has no %s" % (rel, fn)
+        for node in found:
+            loose.extend("%s:%d in %s" % (rel, line, fn) for line in _asked_before_finish(node))
+    assert not loose, "a download's file asked for before intake.finish:\n" + "\n".join(loose)
+
+
+def test_the_finish_first_check_finds_a_file_asked_for_too_soon():
+    soon = ast.parse("def take(dl, page):\n"
+                     "    dl.path()\n"
+                     "    if not intake.finish(dl, page):\n"
+                     "        dl.path()\n"
+                     "    if intake.finish(dl, page):\n"
+                     "        pass\n"
+                     "    else:\n"
+                     "        dl.path()\n"
+                     "    if intake.finish(other, page):\n"
+                     "        dl.path()\n").body[0]
+    assert _asked_before_finish(soon) == [2, 4, 8, 10]
+    held = ast.parse("def take(downloads, page):\n"
+                     "    if intake.finish(downloads[0], page, seconds=20):\n"
+                     "        try:\n"
+                     "            saved = downloads[0].path()\n"
+                     "        except Exception:\n"
+                     "            saved = None\n").body[0]
+    assert _asked_before_finish(held) == []
+
+
+# -- a listener that hears a download ---------------------------------------------
+#
+# Playwright's sync API runs every listener of one event in a single fiber,
+# one after another. A listener that waited there for its download to finish
+# held every listener after it for as long, pressing.press_once's ear for
+# what a press brought among them. Delivery's listener did, and Meijer's did
+# until both followed the download through intake.follow instead.
+
+# Calls that wait, for a download to finish, for something on a page or for
+# time to pass. Canceling does not, and intake.discard cancels first, so the
+# delete after it is at once (only where canceling raised, with the browser
+# gone, does it wait as finish allows).
+LISTENER_WAITS = {"path", "save_as", "failure", "delete", "finish", "waits_for",
+                  "save_download_as", "take_download", "save_download",
+                  "wait_for", "wait_for_timeout", "wait_for_event", "wait_for_load_state",
+                  "wait_for_selector", "wait_for_function", "wait_for_url",
+                  "expect_download", "expect_event", "expect_popup", "expect_page",
+                  "expect_navigation", "expect_request", "expect_response",
+                  "goto", "reload", "sleep"}
+
+
+def _is_download(node) -> bool:
+    return isinstance(node, ast.Constant) and node.value == "download"
+
+
+def _download_listeners(tree) -> list:
+    """Every listener handed to on("download") or once("download"), or
+    following "download" in a tuple listed among others, the way a loop over
+    events hands them out."""
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in ("on", "once") and len(node.args) >= 2 \
+                and _is_download(node.args[0]):
+            out.append(node.args[1])
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            for listed in node.elts:
+                if isinstance(listed, ast.Tuple):
+                    out.extend(b for a, b in zip(listed.elts, listed.elts[1:]) if _is_download(a))
+    return out
+
+
+def listeners_that_wait(paths=None, root: Path = REPO):
+    """Each wait inside a download listener, and each listener this cannot
+    read. A helper of the module's own that the listener calls, by its name
+    or as self's, is read as part of the listener."""
+    out = []
+    for path in paths if paths is not None else sources():
+        rel = path.relative_to(root).as_posix()
+        tree, _ = _parsed(path)
+        defs: dict = {}
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defs.setdefault(node.name, []).append(node)
+        for handler in _download_listeners(tree):
+            if isinstance(handler, ast.Lambda):
+                todo = [handler]
+            else:
+                name = handler.attr if isinstance(handler, ast.Attribute) \
+                    else getattr(handler, "id", "")
+                todo = list(defs.get(name, []))
+                if not todo:
+                    out.append("%s:%d a download listener this cannot read (%s)"
+                               % (rel, handler.lineno, ast.unparse(handler)))
+            read = set()
+            while todo:
+                body = todo.pop()
+                if id(body) in read:
+                    continue
+                read.add(id(body))
+                for call in ast.walk(body):
+                    if not isinstance(call, ast.Call):
+                        continue
+                    f = call.func
+                    name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+                    if name in LISTENER_WAITS:
+                        out.append("%s:%d %s() inside a download listener" % (rel, call.lineno, name))
+                    if isinstance(f, ast.Name) or (isinstance(f, ast.Attribute)
+                                                   and getattr(f.value, "id", "") == "self"):
+                        todo.extend(defs.get(name, []))
+    return sorted(set(out))
+
+
+def test_no_download_listener_waits_for_its_download():
+    left = listeners_that_wait()
+    assert not left, ("a download listener that waits holds every listener after it:\n"
+                      + "\n".join(left))
+
+
+LISTENING = (
+    "import time\n"
+    "from paperpull_core import intake\n"
+    "def keep(dl):\n"
+    "    return dl.path()\n"
+    "class Watch:\n"
+    "    def _on_download(self, dl):\n"
+    "        self._save(dl)\n"
+    "    def _save(self, dl):\n"
+    "        intake.save_download_as(dl, 'x')\n"
+    "    def arm(self, page):\n"
+    "        page.on('download', self._on_download)\n"
+    "def press(page, popup, handed):\n"
+    "    page.on('download', keep)\n"
+    "    page.once('download', lambda d: d.failure())\n"
+    "    def on_download(d):\n"
+    "        time.sleep(1)\n"
+    "    for event, fn in (('download', on_download), ('popup', keep)):\n"
+    "        popup.on(event, fn)\n"
+    "    page.on('download', handed)\n")
+
+
+def test_the_listener_census_finds_a_listener_that_waits(tmp_path):
+    sample = tmp_path / "apps" / "sample" / "sample_site.py"
+    sample.parent.mkdir(parents=True)
+    sample.write_text(LISTENING, encoding="utf-8")
+    found = listeners_that_wait([sample], tmp_path)
+    assert found == ["apps/sample/sample_site.py:14 failure() inside a download listener",
+                     "apps/sample/sample_site.py:16 sleep() inside a download listener",
+                     "apps/sample/sample_site.py:19 a download listener this cannot read (handed)",
+                     "apps/sample/sample_site.py:4 path() inside a download listener",
+                     "apps/sample/sample_site.py:9 save_download_as() inside a download listener"], \
+        found
+    good = sample.with_name("good_site.py")
+    good.write_text("from paperpull_core import intake\n"
+                    "def press(page, popup):\n"
+                    "    heard = []\n"
+                    "    def on_download(d):\n"
+                    "        heard.append(d)\n"
+                    "        intake.follow(d)\n"
+                    "    page.on('download', on_download)\n"
+                    "    page.on('download', lambda d: intake.discard(d))\n"
+                    "    for event, fn in (('download', on_download), ('popup', on_download)):\n"
+                    "        popup.on(event, fn)\n"
+                    "    if intake.finish(heard[0], page):\n"
+                    "        return heard[0].path()\n", encoding="utf-8")
+    assert listeners_that_wait([good], tmp_path) == []
 
 
 def test_every_reason_still_names_a_use_that_is_there():
