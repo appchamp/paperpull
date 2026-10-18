@@ -94,8 +94,6 @@ NOT_A_DOCUMENT = {
         "streams in and read under tools/migrate.py's own limits",
     ("gui/app.py", "api_aside_download", "zip"):
         "a ZIP of Manual Review the panel writes for a download, nothing read in",
-    ("packaging/build_windows.py", "stage_python", "zip"):
-        "python.org's embeddable Python, unpacked when a release is built",
     ("packaging/build_windows.py", "zip_it", "zip"):
         "the release's own ZIP, written when a release is built",
     ("server/selftest.py", "browser_checks", "decode"):
