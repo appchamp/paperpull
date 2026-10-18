@@ -7,7 +7,17 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.56.0] - 2026-10-18
+
+Citi downloads the older statements you requested, and Chase Business
+saves the business card's statements. E*TRADE no longer saves one
+account's statement for another's, U.S. Bank finds each statement it
+listed, Diagnose always writes its file, and PaperPull Server says why
+Chrome cannot start on a host such as Synology. The server can keep
+Chrome's whole sandbox on a kernel with seccomp but no user namespaces,
+starts no Chrome on one without seccomp, has an HTTPS setup, and ends
+idle sessions, and the Windows and Mac packages install only the files
+they were built with.
 
 ### Added
 - **Citi downloads the older statements you requested.** Statements older
