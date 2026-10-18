@@ -833,7 +833,11 @@ def open_signin_browser(profile_dir, port: str, url: str,
     # Nothing ANSWERED, which is not the same as nothing being installed. A
     # browser can be present and refuse a debugging port every time, and until
     # this point that ended the run with no way forward even though a download
-    # would have fixed it.
+    # would have fixed it. PaperPull Server's Chrome comes with the
+    # container, so a download there, or advice to install Chrome or Edge,
+    # never fits, and the launch has said what went wrong (#110).
+    if os.environ.get("PAPERPULL_SERVER") == "1":
+        return None
     if allow_fetch and mode != INSTALLED and not bundled_chromium_present():
         print()
         print("None of the browsers on this computer would open a debugging")
@@ -978,8 +982,11 @@ def _launch(exe: str, name: str, profile_dir, port: str,
     # Nothing of it is shown or kept. A Chromium that starts goes on writing
     # there until it closes, and the file goes with it. Their own browsers,
     # and the bundled one on every other system, still write to nowhere.
+    # PaperPull Server's Chrome writes there too, since a host that cannot
+    # give it its sandbox stops it the same way (#110).
+    on_server = os.environ.get("PAPERPULL_SERVER") == "1"
     said = None
-    if name == CHROMIUM and sys.platform not in ("win32", "darwin"):
+    if on_server or (name == CHROMIUM and sys.platform not in ("win32", "darwin")):
         said = _startup_log()
     gpu, gpu_env = server_gpu()
     try:
@@ -1020,14 +1027,36 @@ def _launch(exe: str, name: str, profile_dir, port: str,
             # administrator on Windows even relaunch themselves and open the
             # port from the relaunched copy a second later (crbug 435410220),
             # so no other browser and no other system ends the wait early.
+            # PaperPull Server's Chrome is ended early the same way, by any of
+            # the lines a Chrome without its sandbox writes there.
+            marks = SERVER_NO_SANDBOX if on_server else (_NO_SANDBOX,)
+
             def refused():
-                return proc.poll() is not None and _NO_SANDBOX in _read_quietly(said)
+                if proc.poll() is None:
+                    return False
+                wrote = _read_quietly(said)
+                return any(mark in wrote for mark in marks)
             answered = wait_for_debug_port(port, alive=lambda: not refused())
             if not answered and refused():
-                _say_sandbox_refused(port, explain_failure, mode)
+                if on_server:
+                    _say_server_sandbox(name, port)
+                else:
+                    _say_sandbox_refused(port, explain_failure, mode)
                 return None
     finally:
         _close_quietly(said)
+
+    if not answered and on_server and _server_sandbox_stops_chrome():
+        # Chrome said nothing known, but this host cannot give it its
+        # sandbox, which is the likelier reason than another Chrome running.
+        ended = proc.poll() is not None
+        if not ended:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        _say_server_sandbox(name, port, ended=ended)
+        return None
 
     if not answered:
         print(f"\nThe window opened, but no debugging port answered on {port}.")
@@ -1095,6 +1124,56 @@ def _say_sandbox_refused(port: str, explain_failure: bool, mode: str) -> None:
     else:
         print("Install Google Chrome or Microsoft Edge and run this again. This")
         print("tool then uses it, in a profile of its own.")
+
+
+# What PaperPull Server's Chrome writes before it stops without its sandbox.
+# Chrome 154 in the server image, run as pp with no user namespace to be
+# had, ended within a second saying its SUID sandbox helper "is not
+# configured correctly", since chrome.sh leaves the helper unset. That was
+# measured under Docker's own profile and under a profile answering as a
+# kernel built without user namespaces answers, as DSM's is. The namespace
+# line is what it writes when its namespaces are refused later on, and "No
+# usable sandbox" is Chromium's own for the rest.
+SERVER_NO_SANDBOX = (_NO_SANDBOX, "SUID sandbox helper", "Failed to move to new namespace")
+
+
+def _server_sandbox_problem() -> str:
+    """Why this host cannot give Chrome its sandbox, from the check run
+    before Chrome is (paperpull_core.host_sandbox), or ""."""
+    try:
+        from .host_sandbox import check, problem
+        return problem(check())
+    except Exception:
+        return ""
+
+
+def _server_sandbox_stops_chrome() -> bool:
+    """Whether that check found what stops Chrome before it opens a window,
+    no user namespace to be had. Without seccomp-bpf alone Chrome still
+    starts (measured), so that is no reason for a port that did not open."""
+    try:
+        from .host_sandbox import check, stops_chrome
+        return stops_chrome(check())
+    except Exception:
+        return False
+
+
+def _say_server_sandbox(name: str, port: str, ended: bool = True) -> None:
+    """What PaperPull Server says when its Chrome could not start its
+    sandbox. Until #110 it waited twenty seconds, said a window had opened,
+    to close every Chrome window, and then to install Chrome or Edge, none
+    of which a person at the server's panel can do anything with."""
+    import textwrap
+    if ended:
+        print("\n%s closed right after it started, before a debugging port" % name)
+        print("answered on %s." % port)
+    else:
+        print("\n%s did not open a debugging port on %s, and was closed." % (name, port))
+    why = _server_sandbox_problem() or (
+        "It could not start its sandbox, and PaperPull never starts a browser "
+        "without its sandbox. The self-test says why, see \"Chrome does not "
+        "start\" in SERVER.md.")
+    print(textwrap.fill(why, width=72))
 
 
 def _startup_log():
