@@ -428,6 +428,21 @@ def test_a_history_whose_page_makes_no_query_is_not_read_as_empty(attached, tmp_
     assert how_far_it_got(tmp_path)["stop"] == "no query"
 
 
+def test_a_year_menu_that_does_not_read_as_one_stops_the_run_and_says_so(attached, tmp_path,
+                                                                        capsys):
+    """Nothing is pressed, no history is asked for, and the run says it was
+    the menu, not bot protection or a sign-in, that stopped it."""
+    SITE.history = LISTED.replace(">Past 3 Years<", ">Pay Your Bill<")
+    out = stopped_run(tmp_path, attached, capsys, "--pilot")
+
+    said = folded(out)
+    assert "year menu does not read the way this app knows it" in said, said
+    assert "prove you are human" not in said and "Leave it for an hour" not in said, said
+    assert panel_reads(out)["stopped"] == 1
+    assert not SITE.asked and not known(tmp_path)
+    assert how_far_it_got(tmp_path)["stop"] == "control refused"
+
+
 def test_a_history_that_gets_no_answer_says_to_leave_best_buy_a_while(attached, tmp_path, capsys):
     """Best Buy stops answering a session that asks too quickly, and asking
     again straight away only keeps it that way."""

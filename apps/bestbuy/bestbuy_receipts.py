@@ -22,6 +22,7 @@ from __future__ import annotations
 from paperpull_core import failure
 from paperpull_core import listing
 from paperpull_core import not_shown
+from paperpull_core import pressing
 from paperpull_core import renaming
 from paperpull_core import saved_copy
 from paperpull_core.journal import Journal
@@ -467,14 +468,31 @@ class App:
         from datetime import date as _date
         while True:
             self._open_orders(page)
-            choices = site.year_choices(page)
-            query = site.capture_history_query(page, choices[0] if choices else str(_date.today().year))
-            hist = self._walk_years(page, query)
+            try:
+                choices = site.year_choices(page)
+                query = site.capture_history_query(
+                    page, choices[0] if choices else str(_date.today().year))
+                hist = self._walk_years(page, query)
+            except site.Refused as refused:
+                log.warning("%s", refused)
+                hist = {"entries": [], "years": 0, "answered": 0, "last": False,
+                        "stop": "control refused", "status": 0, "year": 0}
             if hist["answered"] or hist["last"]:
                 return hist
             self.progress.save(backup=True)
             print("\n!! Your purchase history did not come when this asked Best Buy for it")
             print(f"({site.why_it_stopped(hist)}), so this cannot say which purchases are new.")
+            if hist["stop"] == "control refused":
+                print("Its year menu does not read the way this app knows it, so nothing was")
+                print("pressed. Best Buy may have changed the page. Run Diagnose and send the")
+                print("file it writes, so the app can be repaired.")
+                self.write_failure("read the purchase history",
+                                   "the year menu did not read as the one this app presses",
+                                   postmortem=self._history_facts(hist))
+                if not need_it:
+                    print("This goes on with the purchases already found.")
+                    return hist
+                raise SystemExit(0)
             if hist["stop"] == "no answer":
                 print("Best Buy's bot protection does this after too many requests in a short")
                 print("time. Nothing is lost. Leave it for an hour before asking again.")
@@ -1463,6 +1481,16 @@ def main(argv=None):
         else:
             build_parser().print_help()
             return 0
+    except pressing.Stop as stop:
+        # A press it would not make, something over the year menu say, stops
+        # the run here with the reason said and the failure file written.
+        # pressing.stop_run is not used, since this app's write_failure
+        # takes its facts as postmortem.
+        pressing.say(stop)
+        if app.stats.get("mode") not in ("diagnose", "record"):
+            app.stats.pop("failure_files", None)
+            app.write_failure(stop.step, stop.reason, postmortem=stop.facts)
+        raise SystemExit(0)
     except KeyboardInterrupt:
         print("\nStopped by user. Progress saved.")
         return 130

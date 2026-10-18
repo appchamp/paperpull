@@ -41,7 +41,10 @@ SAFETY (this is a shopping account with a card on file):
   is_year_menu and is_year_option. Those hold every word to is_safe_control
   as well, and every label the control carries to FORBIDDEN_CONTROL_RE,
   which refuses Buy Again, returns, cancellations, reviews, credit card and
-  payment controls.
+  payment controls. The year is taken only from what opening the menu
+  showed. Each press goes through paperpull_core.pressing, which stops the
+  run, saying what covered it, when something sits over the control, and a
+  control that does not read as one stops the run saying so (Refused).
 
 Site layer verified working against the live site: 2026-09-25
 """
@@ -58,6 +61,7 @@ from urllib.parse import quote, urlsplit
 # Everything on its way into a diagnostic file goes through here.
 from paperpull_core.redact import redact, set_private_words  # noqa: F401
 
+from paperpull_core import pressing
 from paperpull_core.models import IN_STORE, ONLINE, Item, Purchase
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import checked as _checked_date
@@ -212,24 +216,57 @@ PRESS_GUARDS = (is_year_menu, is_year_option)
 
 class Refused(Exception):
     """A control did not read as the one the press was for, so nothing was
-    pressed."""
+    pressed. Its message is this program's own words, never the page's."""
 
 
-def _press(locator, what: str, guard, *args) -> None:
-    """Press the element `locator` finds, once, only when the words it shows
+def _words():
+    """This app's own words for paperpull_core.words, for saying what
+    covered a control."""
+    import sys
+    from paperpull_core.words import words_for
+    return words_for("Best Buy", sys.modules[__name__])
+
+
+def _press(page, el, what: str, css: str, guard, *args) -> None:
+    """Press `el`, an element handle, once, only when the words it shows
     pass `guard` and no label it carries, its aria-label or title, is one
     the blocklist refuses. The words are read from the element that is then
-    pressed. Refused, with nothing pressed, otherwise."""
+    pressed, and the press goes through paperpull_core.pressing, which
+    stops the run, saying what covered it, when something sits over it.
+    Refused, with nothing pressed, otherwise."""
     from paperpull_core.controls import control_labels
     if guard not in PRESS_GUARDS:
         raise Refused("a press was asked for with no guard of this app's own")
-    el = locator.element_handle(timeout=10000)
     if el is None:
         raise Refused("%s is not on the page" % what)
     shows = _tidy(el.inner_text())
     if not guard(shows, *args) or any(FORBIDDEN_CONTROL_RE.search(l) for l in control_labels(el)):
-        raise Refused("%s reads %r, so it was not pressed" % (what, shows[:40]))
-    el.click()
+        raise Refused("%s does not read as one, so it was not pressed" % what)
+    pressing.click(page, el, css=css, what=what, words=_words(), step="choose a year")
+
+
+def _menu(page):
+    """The range menu's element, or None."""
+    return page.locator(YEAR_MENU).first.element_handle(timeout=10000)
+
+
+def _shown(page, year: str) -> list:
+    """Every element on the page whose whole text is `year` and that shows."""
+    out = []
+    for el in page.get_by_text(year, exact=True).element_handles():
+        try:
+            if el.is_visible():
+                out.append(el)
+        except Exception:
+            continue
+    return out
+
+
+def _came_with_the_menu(before: list, after: list) -> list:
+    """The elements of `after` that are none of `before`, which is what
+    opening the menu showed."""
+    return [el for el in after
+            if not any(el.evaluate("(a, b) => a === b", b) for b in before)]
 
 
 def hide_survey(page) -> None:
@@ -300,11 +337,11 @@ def challenge_after_a_moment(page, wait_ms: Optional[int] = None) -> Optional[st
 
 def year_choices(page) -> List[str]:
     """The years the range menu offers, newest first. Opening the menu is
-    the only thing done, and it is closed again. None are read when the
-    menu does not read as one (is_year_menu), and nothing is pressed."""
+    the only thing done, and it is closed again. A menu that does not read
+    as one (is_year_menu) is not pressed, and Refused says so."""
     hide_survey(page)
     try:
-        _press(page.locator(YEAR_MENU).first, "the range menu", is_year_menu)
+        _press(page, _menu(page), "the range menu", YEAR_MENU, is_year_menu)
         page.wait_for_timeout(1000)
         texts = page.evaluate(
             "() => [...document.querySelectorAll('body *')]"
@@ -312,6 +349,8 @@ def year_choices(page) -> List[str]:
             ".map(e => (e.innerText || '').trim()).filter(t => /^20\\d\\d$/.test(t))")
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
+    except Refused:
+        raise
     except Exception as e:
         log.warning("Could not read the range menu: %s", e)
         return []
@@ -340,14 +379,29 @@ def pick_year(page, year: str, reads: int = 3, gap_ms: int = 1200, limit: int = 
     from the year before into it.
 
     The menu and the year are each pressed only when they read as the menu
-    (is_year_menu) and as `year` (is_year_option). False, with the rest left
-    unpressed, when one does not."""
+    (is_year_menu) and as `year` (is_year_option), and the year only when
+    it is the one element reading `year` that opening the menu showed, or,
+    with the menu open already, the one element reading it on the page, so
+    a year written anywhere else on the page is never taken for it. When
+    one does not, the rest is left unpressed and Refused says so."""
     hide_survey(page)
     try:
-        _press(page.locator(YEAR_MENU).first, "the range menu", is_year_menu)
+        before = _shown(page, year)
+        _press(page, _menu(page), "the range menu", YEAR_MENU, is_year_menu)
         page.wait_for_timeout(1000)
-        _press(page.get_by_text(year, exact=True).last, "the year %s in the range menu" % year,
-               is_year_option, year)
+        shown = _shown(page, year)
+        came = _came_with_the_menu(before, shown)
+        if not came and len(shown) == 1:
+            # The menu was open already, as year_choices can leave it when
+            # Escape does not close it, and the one element reading `year`
+            # is its own.
+            came = shown
+        if len(came) != 1:
+            raise Refused("the range menu did not show the year once, so no year was pressed")
+        tag = came[0].evaluate("(e) => e.tagName.toLowerCase()")
+        _press(page, came[0], "the year %s in the range menu" % year, tag, is_year_option, year)
+    except Refused:
+        raise
     except Exception as e:
         log.warning("Could not choose %s: %s", year, e)
         return False
@@ -502,6 +556,8 @@ def why_it_stopped(hist: dict) -> str:
         return "Best Buy's answer held no purchase history"
     if stop == "no query":
         return "the page made no history query"
+    if stop == "control refused":
+        return "the year menu did not read as the one this app presses"
     return "no answer came back from Best Buy"
 
 
