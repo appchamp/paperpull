@@ -1121,7 +1121,7 @@ NO_PDF = "the press gave no pdf"
 ROW_LOOKS = 10
 
 # How long a download the row's receipt control starts is given to finish
-# before it is cancelled. A receipt is a few hundred kilobytes.
+# before it is canceled. A receipt is a few hundred kilobytes.
 RECEIPT_DOWNLOAD_SECONDS = 20
 
 
@@ -1232,9 +1232,9 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
     def on_download(dl):
         # Only a download from a Meijer address. It is followed from here in
         # a fiber of its own (intake.follow) and never waited for in this
-        # listener. Every listener of the event runs after this one in the
-        # same fiber, pressing's ear for what the press brought among them,
-        # and waiting here held them all until the download finished.
+        # listener. Every listener registered after this one runs after it
+        # in the same fiber, pressing's ear for what the press brought among
+        # them, and waiting here held them all until the download finished.
         u = dl.url or ""
         if not is_safe_url(u[5:] if u.startswith("blob:") else u):
             return
@@ -1320,7 +1320,7 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
                     trace.append({"note": "the control opened a window", "url": mask_href(u)})
             if got:
                 break
-        # A download is given twenty seconds to finish, then cancelled
+        # A download is given twenty seconds to finish, then canceled
         # (intake.finish), so Download.path() cannot hold the run forever.
         # Its own file is asked for only once it has finished.
         if downloads and not got:

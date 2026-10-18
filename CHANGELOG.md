@@ -69,7 +69,7 @@ All notable changes to PaperPull are recorded here. Versioning follows
   while Meijer waited there for the download to finish, up to twenty
   seconds, the check of what the press brought heard nothing. Meijer now
   only notes the download as it begins and waits for it afterward, still
-  cancelling one that has not finished in twenty seconds, so everything
+  canceling one that has not finished in twenty seconds, so everything
   listening hears the download at once. A test now checks that no app
   waits for a download where it hears one.
 

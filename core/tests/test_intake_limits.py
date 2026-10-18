@@ -794,6 +794,37 @@ def test_why_a_download_failed_is_answered_in_time(page, server, monkeypatch):
     assert _sending_stopped(sent, "failure"), "the download was left running"
 
 
+def test_a_wait_an_app_gives_of_its_own_is_said_without_the_cores_limit(monkeypatch, capsys):
+    """Meijer gives a receipt's download twenty seconds of its own. Raising
+    DOWNLOAD_SECONDS would not change that, so the words for a download
+    canceled at the end of it say only the time. A wait of the core's own
+    still names its limit."""
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 3)
+
+    class Download:
+        canceled = 0
+
+        def cancel(self):
+            self.canceled += 1
+
+    class Page:
+        def wait_for_timeout(self, ms):
+            pass
+
+    own = Download()
+    assert intake.waits_for(own, Page(), 2, finished=lambda d: False) is False
+    said = capsys.readouterr().out
+    assert "did not finish in 2 seconds, so it was cancelled." in said, said
+    assert "DOWNLOAD_SECONDS" not in said, said
+    assert own.canceled == 1
+    cores = Download()
+    assert intake.waits_for(cores, Page(), finished=lambda d: False) is False
+    said = capsys.readouterr().out
+    assert "did not finish in 3 seconds" in said, said
+    assert "DOWNLOAD_SECONDS in paperpull_core/intake.py is the limit" in said, said
+    assert cores.canceled == 1
+
+
 def test_a_download_nobody_wants_is_discarded_at_once(page, server):
     """Bilt's, Simmons', Spectrum's and Alpaca's way, a download a press
     started that the app does not take."""

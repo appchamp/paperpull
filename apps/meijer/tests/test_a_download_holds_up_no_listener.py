@@ -142,11 +142,11 @@ def server(tmp_path_factory):
             else:
                 self.send_header("content-length", str(len(RECEIPT)))
             self.end_headers()
-            served.began.setdefault(kind, time.monotonic())
+            began = served.began[kind] = time.monotonic()
             try:
                 if forever:
                     piece = RECEIPT[:64]
-                    while time.monotonic() - served.began[kind] < 25:
+                    while time.monotonic() - began < 25:
                         self.wfile.write(b"%x\r\n" % len(piece) + piece + b"\r\n")
                         served.add(kind, len(piece))
                         time.sleep(0.2)
@@ -165,7 +165,10 @@ def server(tmp_path_factory):
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(cert, private)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    httpd.socket = tls.wrap_socket(httpd.socket, server_side=True)
+    # The handshake happens in each request's own thread, so a connection
+    # the browser opens and never uses cannot hold up the rest.
+    httpd.socket = tls.wrap_socket(httpd.socket, server_side=True,
+                                   do_handshake_on_connect=False)
     served.port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield served

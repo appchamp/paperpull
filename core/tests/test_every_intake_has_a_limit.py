@@ -88,7 +88,7 @@ NOT_A_DOCUMENT = {
     ("apps/lowes/lowes_site.py", "pair_cards", "decode"):
         "an order's id in a link, at most 80 characters, checked to be base64",
     ("apps/meijer/meijer_site.py", "press_row_receipt", "download_path"):
-        "asked for only once intake.finish says the download finished, cancelled after "
+        "asked for only once intake.finish says the download finished, canceled after "
         "twenty seconds, the file then read through intake.read_file "
         "(test_a_download_file_asked_for_outside_intake_waits_through_finish_first)",
     ("apps/spectrum/spectrum_site.py", "decode_statement_id", "decode"):
@@ -412,7 +412,8 @@ def _is_intake_finish(node) -> bool:
 
 def _asked_before_finish(fn) -> list:
     """Lines where a function asks for a download's own file other than in
-    the body of an `if intake.finish(...)`, where it has finished."""
+    the body of an `if intake.finish(...)` on that same download, where it
+    has finished."""
     parents = {}
     for node in ast.walk(fn):
         for child in ast.iter_child_nodes(node):
@@ -422,8 +423,10 @@ def _asked_before_finish(fn) -> list:
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "path" and not node.args and not node.keywords):
             continue
+        which = ast.unparse(node.func.value)
         child, up = node, parents.get(node)
         while up is not None and not (isinstance(up, ast.If) and _is_intake_finish(up.test)
+                                      and up.test.args and ast.unparse(up.test.args[0]) == which
                                       and child in up.body):
             child, up = up, parents.get(up)
         if up is None:
@@ -456,12 +459,14 @@ def test_the_finish_first_check_finds_a_file_asked_for_too_soon():
                      "    if intake.finish(dl, page):\n"
                      "        pass\n"
                      "    else:\n"
+                     "        dl.path()\n"
+                     "    if intake.finish(other, page):\n"
                      "        dl.path()\n").body[0]
-    assert _asked_before_finish(soon) == [2, 4, 8]
-    held = ast.parse("def take(dl, page):\n"
-                     "    if intake.finish(dl, page, seconds=20):\n"
+    assert _asked_before_finish(soon) == [2, 4, 8, 10]
+    held = ast.parse("def take(downloads, page):\n"
+                     "    if intake.finish(downloads[0], page, seconds=20):\n"
                      "        try:\n"
-                     "            saved = dl.path()\n"
+                     "            saved = downloads[0].path()\n"
                      "        except Exception:\n"
                      "            saved = None\n").body[0]
     assert _asked_before_finish(held) == []
@@ -475,13 +480,17 @@ def test_the_finish_first_check_finds_a_file_asked_for_too_soon():
 # what a press brought among them. Delivery's listener did, and Meijer's did
 # until both followed the download through intake.follow instead.
 
-# Calls that wait, for a download to finish or for time to pass. Cancelling
-# and intake.discard do not, since a cancelled download has finished.
+# Calls that wait, for a download to finish, for something on a page or for
+# time to pass. Canceling does not, and intake.discard cancels first, so the
+# delete after it is at once (only where canceling raised, with the browser
+# gone, does it wait as finish allows).
 LISTENER_WAITS = {"path", "save_as", "failure", "delete", "finish", "waits_for",
                   "save_download_as", "take_download", "save_download",
-                  "wait_for_timeout", "wait_for_event", "wait_for_load_state",
-                  "wait_for_selector", "wait_for_function", "expect_download",
-                  "expect_event", "expect_popup", "sleep"}
+                  "wait_for", "wait_for_timeout", "wait_for_event", "wait_for_load_state",
+                  "wait_for_selector", "wait_for_function", "wait_for_url",
+                  "expect_download", "expect_event", "expect_popup", "expect_page",
+                  "expect_navigation", "expect_request", "expect_response",
+                  "goto", "reload", "sleep"}
 
 
 def _is_download(node) -> bool:
