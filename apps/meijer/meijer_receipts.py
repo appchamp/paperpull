@@ -922,8 +922,11 @@ class App:
         What a look found is what the press found ("outcome"), and for a row
         that is not on the page, whether the purchase has dropped off
         Meijer's list ("dropped") and the oldest date the list shows
-        ("oldest"). It has dropped off only when every look that showed the
-        list found so."""
+        ("oldest"). It has dropped off only when every look showed the list
+        and found so. A look whose list did not show within its wait saw
+        none of it, so it never found the purchase gone. Such a look used to
+        be passed over, and a page slow on one look then left the other to
+        decide alone."""
         listed = False
         found: dict = {}
         judged = []
@@ -940,6 +943,7 @@ class App:
             trace.append({"note": "the purchase's tab", "opened": bool(shown.get("opened")),
                           "rows": int(shown.get("rows") or 0)})
             if not shown.get("rows"):
+                judged.append(False)
                 continue
             listed = True
             self._lists_missed = 0

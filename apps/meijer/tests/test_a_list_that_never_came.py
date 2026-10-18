@@ -388,7 +388,17 @@ def test_a_pilot_stops_on_the_check_that_arrives_a_moment_later(attached,
     assert not known(tmp_path)
 
 
-def test_discovery_still_reads_a_list_that_comes(attached, tmp_path, capsys):
+@pytest.fixture()
+def a_list_that_comes(monkeypatch):
+    """A tab whose rows do come is given fifteen seconds for them. The wait
+    ends as soon as they show, so it costs nothing on a quick machine. On
+    a busy one the three seconds a list that never comes is given ran out
+    before the tab was pressed and read, and no list was found where there
+    was one."""
+    monkeypatch.setattr(site, "LIST_WAIT_MS", 15000, raising=False)
+
+
+def test_discovery_still_reads_a_list_that_comes(attached, tmp_path, capsys, a_list_that_comes):
     """What worked before still works, the store receipts read from behind
     the tab they live on."""
     SITE.orders = LISTED
@@ -414,7 +424,8 @@ def test_an_orders_page_with_nothing_on_it_claims_nothing(attached, tmp_path, ca
 
 
 def test_with_somebody_there_it_asks_them_to_look_and_then_goes_on(attached, tmp_path,
-                                                                   capsys, monkeypatch):
+                                                                   capsys, monkeypatch,
+                                                                   a_list_that_comes):
     """At a console the run waits for the person rather than stopping, and
     once they say the page shows their orders it opens the orders page
     again. Past a few questions they give up with Ctrl+C, so a loop that
