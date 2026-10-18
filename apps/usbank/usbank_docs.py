@@ -396,7 +396,7 @@ class App:
             # list what it could read as all there is (#106).
             print("\n  A part of U.S. Bank's statement list would not answer, so the")
             print("  list was not read whole and nothing more is taken this run.")
-            print("  Press Resume here, or run this again.")
+            print("  Run this again in a little while to read the list whole.")
             self.write_failure("read the statement list", "some of the list would not answer")
             raise SystemExit(0)
         if raw:

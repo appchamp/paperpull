@@ -1140,6 +1140,21 @@ def _statement_rows(page):
     for i in range(n):
         sec = sections.nth(i)
         try:
+            headings = sec.locator("h3").count()
+        except Exception as e:
+            raise RowUnread("a section's heading would not answer") from e
+        if not headings:
+            # A list with no heading at all is no statements section when it
+            # holds no rows either, and is passed over as before. One with
+            # rows could be statements under a heading not drawn, so it is
+            # not taken as absent.
+            try:
+                if not sec.locator(SEL["row"]).count():
+                    continue
+            except Exception as e:
+                raise RowUnread("a section's rows would not answer") from e
+            raise RowUnread("a section with rows has no heading")
+        try:
             heading = " ".join((sec.locator("h3").first.inner_text(timeout=2000) or "").split())
         except Exception as e:
             raise RowUnread("a section's heading would not answer") from e

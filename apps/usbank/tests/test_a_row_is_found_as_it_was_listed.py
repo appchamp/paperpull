@@ -89,6 +89,23 @@ def test_a_date_no_row_reads_as_finds_nothing(page):
     assert site.find_row_control(page, "2031-08-31") == (None, "")
 
 
+def test_a_list_with_no_heading_and_no_rows_is_passed_over(page):
+    page.set_content(_page("<div class='document-list'><p>No documents</p></div>",
+                           _section(["September 30, 2031"])))
+    _button, aria = site.find_row_control(page, "2031-09-30")
+    assert aria == "Download September 30, 2031 statement"
+
+
+def test_a_list_with_rows_and_no_heading_is_never_taken_for_none(page):
+    page.set_content(_page("<div class='document-list'><ul><li class='download-items'>"
+                           "<span>September 30, 2031</span><button aria-label='Download "
+                           "September 30, 2031 statement'>Download</button></li></ul></div>",
+                           _section(["September 30, 2031"])))
+    assert site.find_row_control(page, "2031-09-30") == (None, "")
+    with pytest.raises(site.RowUnread):
+        site.read_rows(page, "Checking")
+
+
 def test_a_twin_the_guard_refuses_still_stops_the_press(page):
     """Two rows read as one date whatever the guard says of either, so the
     one the guard passes is not taken as the only one."""
