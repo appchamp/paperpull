@@ -41,10 +41,12 @@ SAFETY (this is a shopping account with a card on file):
   is_year_menu and is_year_option. Those hold every word to is_safe_control
   as well, and every label the control carries to FORBIDDEN_CONTROL_RE,
   which refuses Buy Again, returns, cancellations, reviews, credit card and
-  payment controls. The year is taken only from what opening the menu
-  showed. Each press goes through paperpull_core.pressing, which stops the
-  run, saying what covered it, when something sits over the control, and a
-  control that does not read as one stops the run saying so (Refused).
+  payment controls. The year is taken from what opening the menu showed,
+  or with the menu left open from the one element on the page reading it
+  alone (pick_year says when that could be another). Each press goes
+  through paperpull_core.pressing, which stops the run, saying what covered
+  it, when something sits over the control, and a control that does not
+  read as one stops the run saying so (Refused).
 
 Site layer verified working against the live site: 2026-09-25
 """
@@ -335,18 +337,28 @@ def challenge_after_a_moment(page, wait_ms: Optional[int] = None) -> Optional[st
             return found
 
 
+# Every element on the page that shows and whose whole text is a year.
+_YEAR_LEAVES_JS = r"""() => [...document.querySelectorAll('body *')]
+  .filter(e => e.children.length === 0 && e.getClientRects().length
+          && /^20\d\d$/.test((e.innerText || '').trim()))"""
+
+
 def year_choices(page) -> List[str]:
-    """The years the range menu offers, newest first. Opening the menu is
-    the only thing done, and it is closed again. A menu that does not read
-    as one (is_year_menu) is not pressed, and Refused says so."""
+    """The years the range menu offers, newest first, read from what
+    opening it showed, so a year written elsewhere on the page is never
+    taken for one it offers. None when it showed nothing new, a menu left
+    open say, and the caller then asks for this year. Opening the menu is
+    the only thing done, and it is closed again with Escape. A menu that
+    does not read as one (is_year_menu) is not pressed, and Refused says
+    so."""
     hide_survey(page)
     try:
+        before = page.evaluate_handle(_YEAR_LEAVES_JS)
         _press(page, _menu(page), "the range menu", YEAR_MENU, is_year_menu)
         page.wait_for_timeout(1000)
         texts = page.evaluate(
-            "() => [...document.querySelectorAll('body *')]"
-            ".filter(e => e.children.length === 0 && e.getClientRects().length)"
-            ".map(e => (e.innerText || '').trim()).filter(t => /^20\\d\\d$/.test(t))")
+            "(before) => (" + _YEAR_LEAVES_JS + ")().filter(e => !before.includes(e))"
+            ".map(e => (e.innerText || '').trim())", before)
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
     except Refused:
@@ -380,10 +392,13 @@ def pick_year(page, year: str, reads: int = 3, gap_ms: int = 1200, limit: int = 
 
     The menu and the year are each pressed only when they read as the menu
     (is_year_menu) and as `year` (is_year_option), and the year only when
-    it is the one element reading `year` that opening the menu showed, or,
-    with the menu open already, the one element reading it on the page, so
-    a year written anywhere else on the page is never taken for it. When
-    one does not, the rest is left unpressed and Refused says so."""
+    it is the one element reading `year` that opening the menu showed.
+    When opening it showed nothing new, as with a menu year_choices left
+    open, the year is the one element on the whole page that shows and
+    reads `year` alone, which is the menu's own unless the page also writes
+    that year alone somewhere else and the menu does not offer it. Two such
+    elements, or none, press nothing. When one does not read as it should,
+    the rest is left unpressed and Refused says so."""
     hide_survey(page)
     try:
         before = _shown(page, year)

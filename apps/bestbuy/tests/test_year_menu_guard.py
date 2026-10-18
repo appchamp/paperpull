@@ -119,6 +119,21 @@ def test_a_year_written_elsewhere_on_the_page_is_never_the_one_pressed(show):
     assert said(page) == ["menu", "2025"]
 
 
+def test_a_year_written_elsewhere_is_never_offered(show):
+    """Found by review. A year the menu does not offer, written alone
+    elsewhere on the page, was read as offered and then pressed."""
+    page = show(history(extra='<h2 onclick="said(\'heading\')">2027</h2>'))
+    assert site.year_choices(page) == ["2026", "2025"]
+
+
+def test_a_menu_left_open_offers_nothing_new(show):
+    """Opened again, it shows nothing new, so nothing is offered and the
+    caller asks for this year."""
+    page = show(history(extra='<h2>2027</h2>'))
+    site.year_choices(page)
+    assert site.year_choices(page) == []
+
+
 def test_a_menu_left_open_gives_its_one_year(show):
     """year_choices closes the menu with Escape, which a menu may ignore.
     Opened again, it shows nothing new, and the one element reading the
