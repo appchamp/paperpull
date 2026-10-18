@@ -58,6 +58,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
   way, a day written 15th is read as that day rather than the end of its
   year, and two rows that read as one date are left alone. Thanks to
   appchamp for the failure files.
+- **Meijer calls a purchase no longer listed only when every look saw its
+  list.** Before a purchase is set down as no longer listed, Meijer looks
+  for it twice. A look whose list never showed was passed over, so the
+  other look alone could set the purchase down as gone. A look that sees
+  no list now counts as not finding the purchase gone, and it stays to be
+  looked for again.
 
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed
