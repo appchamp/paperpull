@@ -863,8 +863,9 @@ Every contribution keeps the **read-only, local, no-credentials** design, see
 The Windows installer is built from a tagged commit of this repository by the
 [Windows package](.github/workflows/build-windows.yml) workflow on a clean
 GitHub runner, never from a developer's machine, and the checksums of what it
-produced are published beside it. Signing goes through that same workflow so a
-signed binary can only ever come from code that is in this repository.
+produced are published beside it. Signing goes through that same workflow, so
+a signed binary can only ever come from code that is in this repository or
+from the CPython archive whose SHA-256 it pins.
 
 This program does not transfer any information to other networked systems
 unless specifically requested by the user. The only sites it contacts are the

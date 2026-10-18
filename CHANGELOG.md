@@ -187,8 +187,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
   it is started in, as before. Each build and each package workflow asks
   the packaged Python which version it is and stops on any other answer.
   python-build-standalone does not sign its files the way the Python
-  Software Foundation signed the embeddable ones, and `PaperPull.exe` and
-  the installer are signed as before.
+  Software Foundation signed the embeddable ones, so the release build now
+  signs the packaged Python's own programs and libraries (`python.exe`,
+  `pythonw.exe`, `python312.dll`, `python3.dll` and `python\DLLs`) with the
+  same certificate as `PaperPull.exe` and the installer, only while each is
+  still the file the checked archive held, and the build stops if any of
+  them is left unsigned.
 - **The Windows and Mac packages install only the package files they were
   built with.** They installed whatever release of each package was newest
   on the day of the build, anything above a lower bound, and nothing

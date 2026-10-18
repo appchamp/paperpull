@@ -2,11 +2,11 @@
 # something that only exists on one machine, and signs it with Azure Artifact
 # Signing when the repository is set up for it.
 #
-# Signing happens in two places. PaperPull.exe is signed in the staged
-# folder, before it is zipped, packed into the MSIX and wrapped by the
-# installer, so every copy of it that ships carries the signature. Then the
-# installer itself is signed. The MSIX is left for the Store, which signs it
-# on submission.
+# Signing happens in two places. PaperPull.exe and the bundled Python's own
+# programs and libraries are signed in the staged folder, before it is
+# zipped, packed into the MSIX and wrapped by the installer, so every copy
+# of them that ships carries the signature. Then the installer itself is
+# signed. The MSIX is left for the Store, which signs it on submission.
 #
 # Signing runs only when the repository variable ARTIFACT_SIGNING_ENDPOINT is
 # set. Without it the job builds the same package unsigned, as a local build
@@ -64,40 +64,112 @@ jobs:
           # CLI is told not to look for one. Signing needs none.
           allow-no-subscriptions: true
 
-      # Only PaperPull.exe, the one program the build compiles. Everything
-      # else under dist\PaperPull came from someone else, CPython from
-      # python-build-standalone (unsigned by its builder, and checked against
-      # its pinned SHA-256 before it was used) and the packages from the
-      # hashed lock, so it keeps whatever signature its publisher gave it,
-      # and PaperPull.exe is moved aside for the signing and put back after.
-      - name: Set PaperPull.exe aside for signing
+      # PaperPull.exe, the one program the build compiles, and the bundled
+      # Python's own programs and libraries, which python-build-standalone
+      # ships unsigned. Their archive was checked against its pinned SHA-256
+      # before anything was built from it, and the build recorded each of
+      # these files' SHA-256 as the archive held it in
+      # dist\python-files.sha256. The packages were installed into the same
+      # folder since, so a file that no longer matches its record stops the
+      # job here, before anything is signed. Everything else under
+      # dist\PaperPull keeps whatever signature its publisher gave it. The
+      # two Visual C++ runtime DLLs keep Microsoft's, and the packages from
+      # the hashed lock and their Scripts launchers keep theirs or none.
+      # Each listed file is moved aside under the same relative path, so
+      # nothing else can be signed by mistake, signed in one call and put
+      # back. That is 30 signatures a build, 31 with the installer, against
+      # the 5,000 a month of the Basic plan. A new python-build-standalone
+      # release can add a file, so putting them back also checks that no
+      # program or library is left unsigned in python\ or python\DLLs, and
+      # core/tests holds the list.
+      - name: Set PaperPull.exe and the interpreter aside for signing
         if: env.SIGNING == 'true'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force to-sign\launcher | Out-Null
-          Move-Item dist\PaperPull\PaperPull.exe to-sign\launcher\PaperPull.exe
+          $ErrorActionPreference = 'Stop'
+          $sign = @(
+            'PaperPull.exe'
+            'python\python.exe'
+            'python\pythonw.exe'
+            'python\python3.dll'
+            'python\python312.dll'
+            'python\DLLs\libcrypto-3-x64.dll'
+            'python\DLLs\libffi-8.dll'
+            'python\DLLs\libssl-3-x64.dll'
+            'python\DLLs\sqlite3.dll'
+            'python\DLLs\_asyncio.pyd'
+            'python\DLLs\_bz2.pyd'
+            'python\DLLs\_ctypes.pyd'
+            'python\DLLs\_decimal.pyd'
+            'python\DLLs\_elementtree.pyd'
+            'python\DLLs\_hashlib.pyd'
+            'python\DLLs\_lzma.pyd'
+            'python\DLLs\_msi.pyd'
+            'python\DLLs\_multiprocessing.pyd'
+            'python\DLLs\_overlapped.pyd'
+            'python\DLLs\_queue.pyd'
+            'python\DLLs\_socket.pyd'
+            'python\DLLs\_sqlite3.pyd'
+            'python\DLLs\_ssl.pyd'
+            'python\DLLs\_uuid.pyd'
+            'python\DLLs\_wmi.pyd'
+            'python\DLLs\_zoneinfo.pyd'
+            'python\DLLs\pyexpat.pyd'
+            'python\DLLs\select.pyd'
+            'python\DLLs\unicodedata.pyd'
+            'python\DLLs\winsound.pyd'
+          )
+          $came = @{}
+          foreach ($line in Get-Content dist\python-files.sha256) {
+            $hash, $rel = $line -split '  ', 2
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path dist\PaperPull $rel)).Hash -ne $hash) {
+              throw "$rel is no longer the file the checked archive held"
+            }
+            $came[$rel] = $hash
+          }
+          foreach ($rel in $sign) {
+            if ($rel -ne 'PaperPull.exe' -and -not $came.ContainsKey($rel)) { throw "$rel did not come from the checked archive" }
+            $to = Join-Path to-sign\stage $rel
+            New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+            Move-Item -LiteralPath (Join-Path dist\PaperPull $rel) -Destination $to
+          }
+          $sign | Set-Content -Encoding ascii to-sign\signed.txt
+          Write-Output ("{0} files set aside for signing" -f $sign.Count)
 
-      - name: Sign PaperPull.exe
+      - name: Sign PaperPull.exe and the interpreter
         if: env.SIGNING == 'true'
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\to-sign\launcher
-          files-folder-filter: exe
+          files-folder: ${{ github.workspace }}\to-sign\stage
+          files-folder-filter: exe,dll,pyd
+          files-folder-recurse: true
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Put the signed PaperPull.exe back
+      - name: Put the signed files back
         if: env.SIGNING == 'true'
         shell: pwsh
         run: |
-          Move-Item to-sign\launcher\PaperPull.exe dist\PaperPull\PaperPull.exe
-          $sig = Get-AuthenticodeSignature dist\PaperPull\PaperPull.exe
-          if ($sig.Status -ne 'Valid') { throw "PaperPull.exe is not validly signed: $($sig.Status)" }
-          Write-Output ("PaperPull.exe signed by " + $sig.SignerCertificate.Subject)
+          $ErrorActionPreference = 'Stop'
+          $signed = @(Get-Content to-sign\signed.txt)
+          $signer = $null
+          foreach ($rel in $signed) {
+            $at = Join-Path dist\PaperPull $rel
+            Move-Item -LiteralPath (Join-Path to-sign\stage $rel) -Destination $at
+            $sig = Get-AuthenticodeSignature -LiteralPath $at
+            if ($sig.Status -ne 'Valid') { throw "$rel is not validly signed: $($sig.Status)" }
+            if (-not $signer) { $signer = $sig.SignerCertificate.Subject }
+            if ($sig.SignerCertificate.Subject -ne $signer) { throw "$rel is signed by $($sig.SignerCertificate.Subject), not $signer" }
+          }
+          $unsigned = @(Get-ChildItem dist\PaperPull\python, dist\PaperPull\python\DLLs -File |
+            Where-Object { $_.Extension -in '.exe', '.dll', '.pyd' } |
+            Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne 'Valid' })
+          if ($unsigned) { throw "not signed and not on the list to sign: $($unsigned.Name -join ', ')" }
+          Write-Output ("{0} files signed by {1}, PaperPull.exe and the interpreter" -f $signed.Count, $signer)
 
       - name: Build the zip, installer and MSIX from the stage
         env:
@@ -140,10 +212,12 @@ jobs:
           $unzipped = Join-Path $env:RUNNER_TEMP "zipcheck"
           Expand-Archive $zip.FullName -DestinationPath $unzipped -Force
           $inZip = Get-ChildItem $unzipped -Recurse -Filter PaperPull.exe | Select-Object -First 1
-          foreach ($f in @((Join-Path dist $exe.Name), $inZip.FullName)) {
-            $sig = Get-AuthenticodeSignature $f
+          $zipRoot = Split-Path $inZip.FullName
+          $check = @(Join-Path dist $exe.Name) + @(Get-Content to-sign\signed.txt | ForEach-Object { Join-Path $zipRoot $_ })
+          foreach ($f in $check) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $f
             if ($sig.Status -ne 'Valid') { throw "$f is not validly signed: $($sig.Status)" }
-            Write-Output ("{0} signed by {1}" -f (Split-Path $f -Leaf), $sig.SignerCertificate.Subject)
+            Write-Output ("{0} signed by {1}" -f $f.Replace($zipRoot, "zip"), $sig.SignerCertificate.Subject)
           }
 
       # The Store signs the real package. To prove this one installs, it is
@@ -176,9 +250,15 @@ jobs:
           Write-Output ("installed: " + $pkg.PackageFullName + " version " + $pkg.Version)
           Write-Output ("install location: " + $pkg.InstallLocation)
           $want = python -c "import sys; sys.path.insert(0, 'packaging'); import build_windows; print(build_windows.PY_VERSION)"
-          $have = & (Join-Path $pkg.InstallLocation "python\python.exe") -c "import platform; print(platform.python_version())"
-          if ($have -ne $want) { throw "the installed package runs Python $have, and the build names $want" }
-          Write-Output "the installed package runs Python $have"
+          # A program inside WindowsApps starts only through the package, as
+          # PaperPull.exe does below, never by its path with its output read,
+          # so the installed interpreter is asked through its own DLL's version.
+          $dll = Get-ChildItem (Join-Path $pkg.InstallLocation "python") -Filter "python3*.dll" |
+            Where-Object { $_.Name -ne "python3.dll" } | Select-Object -First 1
+          if (-not $dll) { throw "the installed package has no python3XY.dll" }
+          $have = "$($dll.VersionInfo.ProductVersion)".Trim()
+          if ($have -ne $want) { throw "the installed package carries Python $have ($($dll.Name)), and the build names $want" }
+          Write-Output "the installed package carries Python $have"
           $env:PAPERPULL_PORT = "8790"
           $proc = Start-Process -FilePath (Join-Path $pkg.InstallLocation "PaperPull.exe") -PassThru
           $ok = $false
@@ -225,7 +305,8 @@ jobs:
           if-no-files-found: error
 
       # Unsigned as a package, as the Store wants it. The Store signs on
-      # submission. The PaperPull.exe inside it is already signed.
+      # submission. The PaperPull.exe and the interpreter files inside it are
+      # already signed.
       - name: Upload the MSIX for the Store
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
