@@ -205,6 +205,12 @@ def stop_run(app, stop: Stop) -> None:
     (run_reporting.stopped_early). Diagnose and record download nothing and
     write no failure file.
 
+    Diagnose writes its survey here instead. A stop out of Diagnose, at a
+    page it could not open, skipped the survey main() writes after it, so
+    the one command a tester runs to name the controls wrote nothing at
+    all (#27). The survey is of the page the window shows, and an app
+    whose write_survey takes `stopped` has it say why Diagnose stopped.
+
     An app writes one failure file a run, and a run that wrote one for an
     earlier document would write nothing for the stop. The stop is what a
     tester has to send, so it writes a file of its own all the same, the
@@ -215,7 +221,18 @@ def stop_run(app, stop: Stop) -> None:
         pass
     say(stop)
     stats = getattr(app, "stats", None)
-    if not isinstance(stats, dict) or stats.get("mode") not in ("diagnose", "record"):
+    if isinstance(stats, dict) and stats.get("mode") == "diagnose":
+        write_survey = getattr(app, "write_survey", None)
+        if callable(write_survey):
+            try:
+                import inspect
+                if "stopped" in inspect.signature(write_survey).parameters:
+                    write_survey(stopped=stop)
+                else:
+                    write_survey()
+            except Exception:
+                pass
+    elif not isinstance(stats, dict) or stats.get("mode") != "record":
         if isinstance(stats, dict):
             stats.pop("failure_files", None)
         app.write_failure(stop.step, stop.reason, extra=stop.facts)

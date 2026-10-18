@@ -20,6 +20,20 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Thanks to @appchamp for the request and for recording the page (#103).
 
 ### Fixed
+- **Diagnose always writes its file, and Wells Fargo looks behind the
+  page's menu for Statements & Documents.** A Run All started from Wells
+  Fargo's accounts summary stopped at its first step because no
+  Statements & Documents link showed there, and Diagnose run on the same
+  page stopped the same way before it wrote anything, so there was no file
+  to send. Diagnose now writes its survey in every app when it stops
+  early, and Wells Fargo's Diagnose surveys the page the window shows and
+  says it could not open the documents page. When no Statements &
+  Documents link shows, Wells Fargo now opens a button named exactly Menu
+  to look for one, and presses nothing else. The failure file also counts
+  links drawn with no address, controls inside a shadow root and controls
+  named Statements & Documents, since Wells Fargo draws its links with no
+  address and the file had counted none. Thanks to @crazyhorse90210 for
+  the failure files (#27).
 - **The transactions export no longer stops at half of an emoji.** A
   statement's text can carry half of an emoji, from a font that names its
   characters in an unusual way, and a CSV has no way to write half a

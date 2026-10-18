@@ -898,7 +898,7 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send.
 
         Diagnose writes a detailed file for repairing this provider, and
@@ -908,7 +908,9 @@ class App:
         something that file is for.
 
         So this is written beside it, on the same list of what may leave
-        that the failure file uses, and it is the one to send.
+        that the failure file uses, and it is the one to send. When
+        Diagnose could not open Statements & Documents, it says so, and
+        the counts are of the page the window showed (#27).
         """
         failure.write_survey(
             self.paths.diagnostics,
@@ -916,27 +918,48 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='Wells Fargo')
+            provider='Wells Fargo',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         """Survey the Statements & Documents page and write a file a tester can attach to
         the GitHub issue. No screenshot, digit runs masked, JSON bodies as
         shape only. Nothing is downloaded and nothing but a documents link is
-        followed."""
+        followed.
+
+        When Statements & Documents will not open, the page the window
+        shows is surveyed instead, and the file says Diagnose could not
+        open the documents page. The stop used to leave Diagnose before it
+        wrote anything, so a tester on the accounts summary had no file
+        naming the controls to send (#27)."""
         self.stats["mode"] = "diagnose"
         words = words_for('Wells Fargo', site)
         page = self.page()
         info = {"timestamp": now_iso(), "unverified": True,
                 "note": Fixed("Wells Fargo app built without an account. This survey is what "
                               "the maintainer repairs the site layer against.")}
+        stopped = None
         try:
-            found = site.goto_documents(page)
+            try:
+                found = site.goto_documents(page)
+            except pressing.Stop as stop:
+                # The page would not open, and nothing past the stop was
+                # pressed. What the window shows is surveyed all the same,
+                # and no link on it is followed.
+                stopped = stop
+                found = False
+                info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
             info["documents_page_found"] = found
+            info["documents_page_opened"] = bool(found)
             info["landed_on"] = site.redact(page.url)
             info["signed_out"] = site.looks_signed_out(page)
             info["challenge"] = site.detect_security_challenge(page)
+            info["documents_link"] = {
+                "shown": site._documents_control(page) is not None,
+                "hidden": site._documents_controls_hidden(page),
+                "menu_button_shown": site._menu_button(page) is not None}
             site.set_private_words([self.config.get("owner", "")])
-            info["survey"] = site.survey(page)
+            info["survey"] = site.survey(page, max_follow=0 if stopped is not None else 6)
             if found:
                 site.expand_all(page)
                 site.scroll_full_page(page)
@@ -969,10 +992,23 @@ class App:
                     "title": d.title[:90], "href": (d.href or "")[:100],
                     "text": (d.text or "").replace("\n", " | ")[:160],
                     "category": cat, "summary": summ, "date": date, "period": period})
+        except pressing.Stop as stop:
+            # A press on the documents page it would not make, the account
+            # picker's say, ends the look there, and the file still says
+            # what was seen and why it stopped.
+            stopped = stop
+            info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
         except Exception as e:
             info["error"] = str(e)[:300]
+        self._diagnose_stopped = stopped
         out = self.paths.diagnostics / "diagnose-documents.json"
         write_shaped(out, info, words)
+        if stopped is not None:
+            # The stop's own words, as a run says them (pressing.say).
+            pressing.say(stopped)
+            if stopped.step == "open the statements page":
+                print("Diagnose could not open Statements & Documents, so the file is of "
+                      "the page the window shows.")
         print(f"Wrote {out}")
         print("  That is the detailed file, for repairing this provider. Any word")
         print("  in it that is not on PaperPull's fixed list is written as its")

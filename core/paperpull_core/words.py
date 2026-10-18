@@ -248,7 +248,7 @@ scroll height width anything largest errors rejections saved bytes expected leas
 kept candidates accepted rejected identity outcome refused unverified checked
 verified unknown chars requests method methods query keys shape shapes path step
 steps action locator how role roles tag tags marked where unresolved structure root
-truncated children child other attrs attr data shadow in frame opened tab new effect
+truncated children child other attrs attr data shadow roots iframes in frame opened tab new effect
 navigated landed download printed requests guard allows providers own site repeat
 malformed print without stamp fill submit click select check value redacted at
 waits winner elapsed strategy strategies attempts already late satisfied while
