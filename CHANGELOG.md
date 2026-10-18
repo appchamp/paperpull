@@ -64,6 +64,14 @@ All notable changes to PaperPull are recorded here. Versioning follows
   other look alone could set the purchase down as gone. A look that sees
   no list now counts as not finding the purchase gone, and it stays to be
   looked for again.
+- **Meijer no longer waits for a receipt's download where it hears it.**
+  Everything listening for a download on the page hears it in turn, so
+  while Meijer waited there for the download to finish, up to twenty
+  seconds, the check of what the press brought heard nothing. Meijer now
+  only notes the download as it begins and waits for it afterward, still
+  cancelling one that has not finished in twenty seconds, so everything
+  listening hears the download at once. A test now checks that no app
+  waits for a download where it hears one.
 
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed

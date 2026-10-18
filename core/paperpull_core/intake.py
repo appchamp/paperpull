@@ -547,9 +547,12 @@ def refusal(download) -> Optional[TooLarge]:
 
 def _slow_words(what: str = "The download for this document",
                 seconds: Optional[float] = None) -> str:
-    seconds = DOWNLOAD_SECONDS if seconds is None else seconds
+    # A wait an app gives of its own is not this module's limit, and raising
+    # DOWNLOAD_SECONDS would not change it, so only the time is said.
+    if seconds is not None:
+        return "%s did not finish in %d seconds, so it was cancelled." % (what, seconds)
     return ("%s did not finish in %d seconds, so it was cancelled. %s"
-            % (what, seconds, raising("DOWNLOAD_SECONDS", "gives a download longer")))
+            % (what, DOWNLOAD_SECONDS, raising("DOWNLOAD_SECONDS", "gives a download longer")))
 
 
 def failure(download, page=None, *, partial=None) -> str:
@@ -621,13 +624,14 @@ def waits_for(download, page, seconds: Optional[float] = None, *, finished=None,
 
     `finished(download)` answers whether it has finished, and is the record
     kept by whatever asks download.path() in a fiber of its own, where a
-    wait for it holds nothing else (finish, and Meijer's way since #42).
+    wait for it holds nothing else (finish).
     `partial` is the file the browser writes it to while it arrives, when
     the app knows it. The wait is page.wait_for_timeout, so that fiber runs
     meanwhile. With `start_ms` the first pause is that long and each one
     after twice the last, up to `poll_ms`, so a download that has already
     finished costs a moment and not a quarter second."""
     global _timed_out
+    given = seconds
     seconds = DOWNLOAD_SECONDS if seconds is None else seconds
     waited = 0
     pause = poll_ms if start_ms is None else max(1, min(start_ms, poll_ms))
@@ -646,7 +650,7 @@ def waits_for(download, page, seconds: Optional[float] = None, *, finished=None,
         if waited >= seconds * 1000:
             _timed_out += 1
             log.warning("a download did not finish in %d seconds and was cancelled", seconds)
-            print("  " + _slow_words("The download", seconds))
+            print("  " + _slow_words("The download", given))
             _cancel(download)
             return False
         try:

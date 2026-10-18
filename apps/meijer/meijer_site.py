@@ -1120,6 +1120,10 @@ NO_PDF = "the press gave no pdf"
 # is called missing.
 ROW_LOOKS = 10
 
+# How long a download the row's receipt control starts is given to finish
+# before it is cancelled. A receipt is a few hundred kilobytes.
+RECEIPT_DOWNLOAD_SECONDS = 20
+
 
 def press_row_receipt(page, purchase, trace=None, facts=None):
     """Press the row's own receipt control, the PDF icon at its end, and
@@ -1202,7 +1206,7 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
     got: dict = {}
     downloads: list = []
     popups: list = []
-    finished: dict = {}
+    saved = None
 
     def on_response(res):
         # An answer from this page or a window this press opened. Another
@@ -1226,17 +1230,19 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
     # the one object the listener is taken off with below, where a second
     # downloads.append would be a different one.
     def on_download(dl):
-        # Only a download from a Meijer address, and it is waited for here,
-        # in the listener's own fiber, so the press can give up on one that
-        # never finishes (review).
+        # Only a download from a Meijer address. It is followed from here in
+        # a fiber of its own (intake.follow) and never waited for in this
+        # listener. Every listener of the event runs after this one in the
+        # same fiber, pressing's ear for what the press brought among them,
+        # and waiting here held them all until the download finished.
         u = dl.url or ""
         if not is_safe_url(u[5:] if u.startswith("blob:") else u):
             return
         downloads.append(dl)
         try:
-            finished[id(dl)] = dl.path()
+            intake.follow(dl)
         except Exception:
-            finished[id(dl)] = None
+            pass
 
     def on_popup(p):
         popups.append(p)
@@ -1314,20 +1320,17 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
                     trace.append({"note": "the control opened a window", "url": mask_href(u)})
             if got:
                 break
-        # A download is given twenty seconds to finish, then cancelled, so
-        # Download.path() cannot hold the run forever.
+        # A download is given twenty seconds to finish, then cancelled
+        # (intake.finish), so Download.path() cannot hold the run forever.
+        # Its own file is asked for only once it has finished.
         if downloads and not got:
-            for _ in range(40):
-                if id(downloads[0]) in finished:
-                    break
-                page.wait_for_timeout(500)
-            if id(downloads[0]) not in finished:
+            if intake.finish(downloads[0], page, seconds=RECEIPT_DOWNLOAD_SECONDS):
                 try:
-                    downloads[0].cancel()
+                    saved = downloads[0].path()
                 except Exception:
-                    pass
-                if trace is not None:
-                    trace.append({"note": "the download did not finish in time"})
+                    saved = None
+            elif trace is not None:
+                trace.append({"note": "the download did not finish in time"})
     finally:
         for target, event, handler in ((ctx, "response", on_response), (page, "download", on_download),
                                        (page, "popup", on_popup)):
@@ -1345,14 +1348,14 @@ def press_row_receipt(page, purchase, trace=None, facts=None):
                 extra.close()
             except Exception:
                 pass
-    if downloads and not got and finished.get(id(downloads[0])):
+    if downloads and not got and saved:
         # A download the browser saved for itself. Its own file is read
         # rather than moved, so nothing is left in the browser's folder
         # half-taken.
         try:
             # Measured before it is read, and never read when it is larger
             # than a document may be.
-            body = intake.read_file(finished[id(downloads[0])])
+            body = intake.read_file(saved)
             if body[:5] == b"%PDF-":
                 got["body"] = body
                 got["how"] = "a download"
