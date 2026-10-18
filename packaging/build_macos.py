@@ -62,6 +62,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -96,6 +97,14 @@ PBS_SHA256 = {
     "arm64": "81a359f1cfadd4da11766534c5913791cea55f26e1bb902cacd2a531bb1e4b2b",
     "x86_64": "65b195c9cedc1fef6767f044f9822069adbd1bd9204d424ece4628776fdc04bb",
 }
+
+# stapler fetches the ticket from Apple's ticket server, which dropped the
+# connection twice on the Intel runner as 0.56.0 was built (exit 68,
+# NSURLErrorDomain -1005, "The network connection was lost"). A staple that
+# fails is tried again after each of these pauses, four tries in all, and
+# the build still stops when the last one fails, so a ticket that is really
+# missing stops it as before. The workflow's stapler validate waits the same.
+STAPLE_WAITS = (15, 30, 60)
 
 
 def triple(arch: str | None = None) -> str:
@@ -469,14 +478,28 @@ def notarize_app() -> None:
         _submit(z, APP.name)
     finally:
         z.unlink()
-    subprocess.run(["xcrun", "stapler", "staple", str(APP)], check=True)
+    staple(APP)
     say("  accepted and stapled")
 
 
 def notarize(path: Path) -> None:
     _submit(path, path.name)
-    subprocess.run(["xcrun", "stapler", "staple", str(path)], check=True)
+    staple(path)
     say("  accepted and stapled")
+
+
+def staple(path: Path) -> None:
+    """Staple the notarization ticket to `path`, tried again after each of
+    STAPLE_WAITS while stapler fails. The last try's failure stops the
+    build as CalledProcessError, as one try's did before."""
+    cmd = ["xcrun", "stapler", "staple", str(path)]
+    for wait in STAPLE_WAITS:
+        r = subprocess.run(cmd)
+        if r.returncode == 0:
+            return
+        say("  stapler exited %d, trying again in %d s" % (r.returncode, wait))
+        time.sleep(wait)
+    subprocess.run(cmd, check=True)
 
 
 # -- dmg -----------------------------------------------------------------------

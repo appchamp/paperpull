@@ -124,11 +124,24 @@ jobs:
 
       - name: What Gatekeeper will say
         if: env.HAVE_CERT == 'true'
+        # stapler validate asks Apple's ticket server too, which dropped the
+        # connection (exit 68) on the Intel runner as 0.56.0 was built. Each
+        # validate is tried four times, 15, 30 and 60 s apart, the waits of
+        # STAPLE_WAITS in packaging/build_macos.py, and the step still fails
+        # with stapler's own exit code when the last try does.
         run: |
+          validate() {
+            for wait in 15 30 60; do
+              xcrun stapler validate "$@" && return 0
+              echo "stapler validate exited $?, trying again in $wait s"
+              sleep "$wait"
+            done
+            xcrun stapler validate "$@"
+          }
           codesign --verify --strict --verbose=2 dist/PaperPull.app
           spctl --assess --type execute --verbose=2 dist/PaperPull.app
-          xcrun stapler validate dist/PaperPull.app
-          xcrun stapler validate dist/PaperPull-*.dmg
+          validate dist/PaperPull.app
+          validate dist/PaperPull-*.dmg
 
       - name: Checksums
         run: |
