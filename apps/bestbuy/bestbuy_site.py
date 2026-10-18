@@ -253,14 +253,19 @@ def _menu(page):
 
 
 def _shown(page, year: str) -> list:
-    """Every element on the page whose whole text is `year` and that shows."""
+    """Every element on the page whose whole text is `year` and that shows.
+    One that could not be read might be the menu's own or another, and the
+    choice that follows counts them, so it is never passed over. Refused
+    then, and no year is pressed."""
     out = []
     for el in page.get_by_text(year, exact=True).element_handles():
         try:
-            if el.is_visible():
-                out.append(el)
+            shows = el.is_visible()
         except Exception:
-            continue
+            raise Refused("an element reading the year could not be read, so no year "
+                          "was pressed")
+        if shows:
+            out.append(el)
     return out
 
 
@@ -572,7 +577,7 @@ def why_it_stopped(hist: dict) -> str:
     if stop == "no query":
         return "the page made no history query"
     if stop == "control refused":
-        return "the year menu did not read as the one this app presses"
+        return "the year menu did not read as one"
     return "no answer came back from Best Buy"
 
 

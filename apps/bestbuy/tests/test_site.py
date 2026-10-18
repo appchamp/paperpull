@@ -282,3 +282,27 @@ def test_the_details_keep_only_named_items():
     from paperpull_core.models import Purchase
     p = site.extract_details(_Body(EARLY_PAGE), Purchase(order_number="BBY01-800000000009"))
     assert p.items == []
+
+
+def test_a_year_element_that_could_not_be_read_refuses_the_choice():
+    """It might be the menu's own, and the choice after counts them."""
+    import pytest
+
+    class _Unread:
+        def is_visible(self):
+            raise RuntimeError("Target closed")
+
+    class _Shown:
+        def is_visible(self):
+            return True
+
+    class _Found:
+        def element_handles(self):
+            return [_Shown(), _Unread()]
+
+    class _Page:
+        def get_by_text(self, year, exact):
+            return _Found()
+
+    with pytest.raises(site.Refused):
+        site._shown(_Page(), "2025")

@@ -487,7 +487,7 @@ class App:
                 print("pressed. Best Buy may have changed the page. Run Diagnose and send the")
                 print("file it writes, so the app can be repaired.")
                 self.write_failure("read the purchase history",
-                                   "the year menu did not read as the one this app presses",
+                                   "the year menu did not read as one",
                                    postmortem=self._history_facts(hist))
                 if not need_it:
                     print("This goes on with the purchases already found.")
@@ -1199,7 +1199,7 @@ class App:
         return self._journal
 
     def write_failure(self, step: str, reason: str, text: str = "",
-                      postmortem: dict = None) -> None:
+                      postmortem: dict = None, extra: dict = None) -> None:
         """What the page looked like when this went wrong, to a file.
 
         Written without anybody having to know to ask for it, because a
@@ -1211,7 +1211,10 @@ class App:
         is still sitting on the thing that broke."""
         if self.stats.get("failure_files"):
             return
-        extra = {"postmortem": postmortem} if postmortem else None
+        # `extra` is a stop's facts, as pressing.stop_run hands them on.
+        extra = dict(extra or {})
+        if postmortem:
+            extra["postmortem"] = postmortem
         # A checkpoint at the moment it gave up. It is also what makes the
         # journal when nothing had written to it yet, and every tester file
         # sent in on 2026-09-25 came back without one for that reason.
@@ -1228,7 +1231,7 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='Best Buy', text=text, extra=extra)
+            provider='Best Buy', text=text, extra=extra or None)
         if not path:
             return
         self.stats["failure_files"] = 1
@@ -1484,13 +1487,7 @@ def main(argv=None):
     except pressing.Stop as stop:
         # A press it would not make, something over the year menu say, stops
         # the run here with the reason said and the failure file written.
-        # pressing.stop_run is not used, since this app's write_failure
-        # takes its facts as postmortem.
-        pressing.say(stop)
-        if app.stats.get("mode") not in ("diagnose", "record"):
-            app.stats.pop("failure_files", None)
-            app.write_failure(stop.step, stop.reason, postmortem=stop.facts)
-        raise SystemExit(0)
+        pressing.stop_run(app, stop)
     except KeyboardInterrupt:
         print("\nStopped by user. Progress saved.")
         return 130
