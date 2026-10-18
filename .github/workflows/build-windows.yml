@@ -67,17 +67,21 @@ jobs:
       # PaperPull.exe, the one program the build compiles, and the bundled
       # Python's own programs and libraries, which python-build-standalone
       # ships unsigned. Their archive was checked against its pinned SHA-256
-      # before anything was built from it, so until this step they are its
-      # bytes. Everything else under dist\PaperPull keeps whatever signature
-      # its publisher gave it. The two Visual C++ runtime DLLs keep
-      # Microsoft's, and the packages from the hashed lock and their Scripts
-      # launchers keep theirs or none. Each listed file is moved aside under
-      # the same relative path, so nothing else can be signed by mistake,
-      # signed in one call and put back. That is 30 signatures a build, 31
-      # with the installer, against the 5,000 a month of the Basic plan. A
-      # new python-build-standalone release can add a file, so putting them
-      # back also checks that no program or library is left unsigned in
-      # python\ or python\DLLs, and core/tests holds the list.
+      # before anything was built from it, and the build recorded each of
+      # these files' SHA-256 as the archive held it in
+      # dist\python-files.sha256. The packages were installed into the same
+      # folder since, so a file that no longer matches its record stops the
+      # job here, before anything is signed. Everything else under
+      # dist\PaperPull keeps whatever signature its publisher gave it. The
+      # two Visual C++ runtime DLLs keep Microsoft's, and the packages from
+      # the hashed lock and their Scripts launchers keep theirs or none.
+      # Each listed file is moved aside under the same relative path, so
+      # nothing else can be signed by mistake, signed in one call and put
+      # back. That is 30 signatures a build, 31 with the installer, against
+      # the 5,000 a month of the Basic plan. A new python-build-standalone
+      # release can add a file, so putting them back also checks that no
+      # program or library is left unsigned in python\ or python\DLLs, and
+      # core/tests holds the list.
       - name: Set PaperPull.exe and the interpreter aside for signing
         if: env.SIGNING == 'true'
         shell: pwsh
@@ -115,7 +119,16 @@ jobs:
             'python\DLLs\unicodedata.pyd'
             'python\DLLs\winsound.pyd'
           )
+          $came = @{}
+          foreach ($line in Get-Content dist\python-files.sha256) {
+            $hash, $rel = $line -split '  ', 2
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path dist\PaperPull $rel)).Hash -ne $hash) {
+              throw "$rel is no longer the file the checked archive held"
+            }
+            $came[$rel] = $hash
+          }
           foreach ($rel in $sign) {
+            if ($rel -ne 'PaperPull.exe' -and -not $came.ContainsKey($rel)) { throw "$rel did not come from the checked archive" }
             $to = Join-Path to-sign\stage $rel
             New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
             Move-Item -LiteralPath (Join-Path dist\PaperPull $rel) -Destination $to

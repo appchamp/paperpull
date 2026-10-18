@@ -87,9 +87,11 @@ This project's certificate signs its own programs, the installer and
 in `python\DLLs`. python-build-standalone does not sign those, where the
 builds from python.org came signed by the Python Software Foundation, and
 Windows features such as Smart App Control trust a signed file more
-readily. They are signed only after the archive they come in has been
-checked against its pinned SHA-256, so the signature goes on exactly the
-files python-build-standalone published. Everything else keeps whatever
+readily. The archive they come in is checked against its pinned SHA-256,
+the build records the SHA-256 of each of these files as the archive held
+it, and the workflow signs them only while every one still matches its
+record, so the signature goes on exactly the files python-build-standalone
+published. Everything else keeps whatever
 signature its publisher gave it. The Visual C++ runtime DLLs keep
 Microsoft's, and the packages installed from PyPI, with their small
 launchers in `python\Scripts`, carry their own or none.
