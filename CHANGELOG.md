@@ -39,6 +39,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
   other way takes the replacement character there too, and the file is
   always written. No real archive held such a half, so nothing already
   written changes.
+- **Chase Business saves the business card's statements.** A business
+  card's statement row has no "Opens menu to save document" menu, only an
+  "opens document" link and a "Saves document" link, so every card
+  statement went to Manual Review with "Could not capture the document
+  PDF". The app now presses the row's own "Saves document" once and keeps
+  the one PDF Chase sends, when it prints the card's last four and the
+  row's date as its statement date. "opens document" is never pressed, checking
+  statements are saved through their menu as before, and a row that shows
+  both or neither is left for review.
 
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed
