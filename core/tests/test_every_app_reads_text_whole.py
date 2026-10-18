@@ -40,6 +40,9 @@ OWN = {
     ("export_transactions.py", "__init__"): "the tool's own cache, whose paths stay as the "
                                             "disk gave them and whose text is made whole",
     ("listing.py", "_before"): "the note this core wrote itself",
+    ("pdf_reader.py", "start"): "the PDF reader's own word that it is ready",
+    ("pdf_reader.py", "_serve"): "the app's own job for its PDF reader, whose path stays as "
+                                 "the disk gave it",
     ("listing.py", "last"): "the note this core wrote itself",
     ("storage.py", "load_config"): "the person's own config.json",
     ("storage.py", "ensure_owner"): "the person's own config.json",

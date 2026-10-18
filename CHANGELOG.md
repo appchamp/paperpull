@@ -53,6 +53,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
   covers what Diagnose prints in every app, the file a failed download
   writes, and the controls clicked and options picked during Record.
   Thanks to appchamp for spotting it (#103).
+- **A document is taken in only up to a limit, whichever way it comes.**
+  A document larger than 100 MB, twenty five times the largest of 2,644
+  real ones, is refused, whether it is fetched, read inside the page,
+  downloaded, printed or handed over in base64. It is refused before it is
+  read wherever its length is declared, and one read inside the page or
+  printed is stopped as soon as it passes the limit. A download is
+  measured before it is copied, and one caught by the core's delivery is
+  cancelled when it takes longer than five minutes or grows past the
+  limit in the download folder. A ZIP is opened only when it lists at most
+  1,000 files, is stored or deflated, and its PDF unpacks to no more than
+  100 times its packed size, and anything else is kept whole in Manual
+  Review the way an archive that cannot be told apart already was. PDFs
+  are read in a process of their own that is stopped after two minutes or
+  1 GB of memory, so a PDF built to stall pypdf or fill the memory is set
+  aside as one that does not validate, says why, and is not read again in
+  the same run. A refusal never deletes or writes over a document already
+  in the archive. The limits are in one place, paperpull_core/intake.py,
+  and every refusal names the one it met and says it is raised there.
 
 ## [0.55.0] - 2026-10-17
 

@@ -9,7 +9,6 @@ All requests and navigation must stay on explicitly allowed provider hosts.
 
 from __future__ import annotations
 
-import base64
 import logging
 import re
 import time as _time
@@ -17,6 +16,7 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import checked as _checked_date
@@ -345,10 +345,18 @@ def _get_token(page, force: bool = False) -> str:
 
 
 def _evaluate_with_retry(page, js: str, arg, attempts: int = 2):
+    return _retrying(page, lambda: page.evaluate(js, arg), attempts)
+
+
+def _retrying(page, call, attempts: int = 2):
+    """call(), tried again after a pause when it raised. An answer refused
+    for its size is not asked for again (intake.TooLarge)."""
     last = None
     for i in range(attempts):
         try:
-            return page.evaluate(js, arg)
+            return call()
+        except intake.TooLarge:
+            raise
         except Exception as e:
             last = e
             log.info("page fetch attempt %d failed: %s", i + 1, e)
@@ -558,9 +566,8 @@ _DOWNLOAD_JS = """async ({url, headers, body}) => {
       headers: {...headers, 'content-type': 'application/json'},
       body: JSON.stringify(body)});
   if (r.status !== 200) return {status: r.status, b64: ''};
-  const buf = await r.arrayBuffer();
   let s = '';
-  const bytes = new Uint8Array(buf);
+  const bytes = await ppRead(r);
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk)
     s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
@@ -577,20 +584,23 @@ def fetch_pdf(page, doc: dict) -> Tuple[int, bytes]:
     }
 
     def attempt(token: str):
-        return _evaluate_with_retry(page, _DOWNLOAD_JS, {
+        return _retrying(page, lambda: intake.evaluate(page, _DOWNLOAD_JS, {
             "url": API["download"],
             "headers": {**GATEWAY_HEADERS, "authorization": f"Bearer {token}"},
-            "body": body})
+            "body": body}))
 
     token = _get_token(page)
     if not token:
         return 0, b""
-    res = attempt(token)
-    if (res or {}).get("status") in (401, 403):
-        token = _get_token(page, force=True)
-        if token:
-            res = attempt(token)
-    data = base64.b64decode(res.get("b64") or "") if res else b""
+    try:
+        res = attempt(token)
+        if (res or {}).get("status") in (401, 403):
+            token = _get_token(page, force=True)
+            if token:
+                res = attempt(token)
+        data = intake.decode(res.get("b64") or "") if res else b""
+    except intake.TooLarge:
+        return 0, b""
     return int((res or {}).get("status") or 0), data
 
 

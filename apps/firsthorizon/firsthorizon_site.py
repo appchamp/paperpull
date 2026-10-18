@@ -99,6 +99,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 from urllib.parse import quote, unquote, urlsplit
 
+from paperpull_core import intake
 from paperpull_core import pressing
 from paperpull_core import redirects
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
@@ -730,7 +731,7 @@ def session_alive(page, run: Run) -> bool:
     if _signed_out_status(resp):
         raise SessionExpired("the session probe answered as signed out")
     try:
-        body = resp.body() or b""
+        body = intake.body(resp)
     except Exception:
         raise ListStopped("the session probe could not be read")
     if _ctype(resp).startswith("text/html") or body.lstrip()[:1] == b"<":
@@ -838,7 +839,7 @@ def read_links(response) -> Tuple[str, List[Statement]]:
         raise ListStopped("a documents answer came from another address")
     _guard_words([account_id])
     try:
-        body = response.body() or b""
+        body = intake.body(response)
     except Exception as e:
         raise ListStopped("a documents answer could not be read (%s)" % type(e).__name__)
     if _ctype(response).startswith("text/html") or body.lstrip()[:1] == b"<":

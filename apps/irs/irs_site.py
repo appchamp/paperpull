@@ -91,6 +91,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core import redirects
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.redact import private_words, redact, set_private_words  # noqa: F401  (re-exported)
@@ -632,8 +633,8 @@ def _read_transcript_list(page) -> list:
         _let_go(resp)
         raise ListStopped("the transcript list did not answer as a list")
     try:
-        data = whole_json(json.loads(resp.body().decode("utf-8")))
-    except (ValueError, UnicodeDecodeError):
+        data = whole_json(json.loads(intake.body(resp).decode("utf-8")))
+    except (ValueError, UnicodeDecodeError, intake.TooLarge):
         raise ListStopped("the transcript list did not answer as a list")
     if not isinstance(data, list):
         raise ListStopped("the transcript list is not the plain list this app was built for")
@@ -861,7 +862,10 @@ def _fetch(page, url: str, out_path: Path, trace: Optional[list]) -> bool:
     if resp.status != 200 or ctype != "application/pdf":
         _let_go(resp)
         return False
-    body = resp.body()
+    try:
+        body = intake.body(resp)
+    except intake.TooLarge:
+        return False
     if body[:5] != b"%PDF-":
         if body.lstrip()[:1] in (b"<", b"{", b"["):
             raise SessionExpired("the IRS Online Account answered a document with a sign-in body")

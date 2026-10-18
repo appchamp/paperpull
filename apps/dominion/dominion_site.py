@@ -24,7 +24,6 @@ about 18 months - see is_unavailable_bill().
 # Site layer verified working against the live site: 2026-08
 from __future__ import annotations
 
-import base64
 import html as _html
 import logging
 import re
@@ -32,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import human_date as _human_date
 from paperpull_core.dates import checked as _checked_date
@@ -409,7 +410,7 @@ _BLOB_FETCH_JS = r"""async () => {
     const f = document.querySelector("iframe[src^='blob:']");
     if (!f || !f.src) return null;
     const r = await fetch(f.src);
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await ppRead(r);
     let s = ''; for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
     return btoa(s);
 }"""
@@ -446,9 +447,9 @@ def download_by_url(page, url: str, out_path) -> bool:
     try:
         page.wait_for_selector("iframe[src^='blob:']", timeout=15000)
         page.wait_for_timeout(1200)
-        b64 = page.evaluate(_BLOB_FETCH_JS)
+        b64 = intake.evaluate(page, _BLOB_FETCH_JS)
         if b64:
-            data = base64.b64decode(b64)
+            data = intake.decode(b64)
             if b"%PDF-" in data[:1024]:
                 out_path.write_bytes(data)
                 return True
@@ -587,8 +588,7 @@ def is_unavailable_bill(out_path) -> bool:
     than 18 months are not available.') instead of a real bill beyond ~18
     months. Detect it so those are marked unavailable, not saved as junk."""
     try:
-        import pypdf
-        text = whole_characters(pypdf.PdfReader(str(out_path)).pages[0].extract_text() or "")
+        text = whole_characters(pdf_reader.page_texts(out_path, 1)[0])
         return bool(_UNAVAILABLE_RE.search(text))
     except Exception:
         return False

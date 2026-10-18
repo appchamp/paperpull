@@ -49,13 +49,13 @@ SAFETY (this is a credit card account that can move money):
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 
 # Everything on its way into a diagnostic file goes through here. It
@@ -312,7 +312,7 @@ _FETCH_JS = r"""async ([url, body, headers]) => {
     try { j = await r.json(); } catch (e) { j = null; }
     return {status: r.status, ct, json: j};
   }
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   let s = "";
   for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
   return {status: r.status, ct, b64: btoa(s)};
@@ -326,7 +326,7 @@ def _post(page, url: str, body: dict) -> dict:
         raise ValueError("refusing to fetch off citi.com: %r" % redact(url))
     if not is_safe_url(page.url or "") or looks_signed_out(page):
         raise SessionExpired("the Citi tab is not on a signed-in citi.com page")
-    r = page.evaluate(_FETCH_JS, [url, body, dict(APP_HEADERS)])
+    r = intake.evaluate(page, _FETCH_JS, [url, body, dict(APP_HEADERS)])
     ct = (r.get("ct") or "").lower()
     if r.get("status") in (401, 403) or ct.startswith("text/html"):
         raise SessionExpired("Citi answered %s to %s, which means the session has ended"
@@ -423,7 +423,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, account_id: str = "",
     if "pdf" not in (r.get("ct") or "") or not r.get("b64"):
         log.info("no PDF for %s %s: status %s, %s", account, iso_date, r.get("status"), r.get("ct"))
         return False
-    body = base64.b64decode(r["b64"])
+    body = intake.decode(r["b64"])
     if body[:5] != b"%PDF-":
         return False
     out_path.write_bytes(body)

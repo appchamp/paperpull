@@ -69,6 +69,7 @@ from typing import List, Optional
 from urllib.parse import urlsplit
 
 # Everything on its way into a diagnostic file goes through here.
+from paperpull_core import intake
 from paperpull_core.redact import redact, set_private_words  # noqa: F401
 
 from paperpull_core.dates import checked as _checked_date
@@ -569,7 +570,7 @@ _PDF_JS = r"""async ([path, limit]) => {
   const type = r.headers.get('content-type') || '';
   const name = r.headers.get('content-disposition') || '';
   if (r.status !== 200) return {status: r.status, redirected: false, failed: false, type};
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   if (buf.length > limit) return {status: r.status, redirected: false, failed: false, type, too_big: true};
   let s = '';
   for (let i = 0; i < buf.length; i += 0x8000) {
@@ -1098,7 +1099,9 @@ def fetch_pdf(page, path: str, side: str = RIDES) -> dict:
 
 def _fetch_pdf_once(page, path: str) -> dict:
     try:
-        got = page.evaluate(_PDF_JS, [path, MAX_PDF_BYTES])
+        got = intake.evaluate(page, _PDF_JS, [path, MAX_PDF_BYTES], limit=MAX_PDF_BYTES)
+    except intake.TooLarge:
+        got = {"status": 200, "too_big": True}
     except Exception as e:
         log.info("The receipt did not come back (%s)", type(e).__name__)
         got = None
@@ -1113,8 +1116,8 @@ def _fetch_pdf_once(page, path: str) -> dict:
         out["kind"] = REFUSED
     else:
         try:
-            out["data"] = base64.b64decode(got["b64"])
-        except (binascii.Error, ValueError, TypeError):
+            out["data"] = intake.decode(got["b64"])
+        except (binascii.Error, ValueError, TypeError, intake.TooLarge):
             out["kind"] = FAILED
     return out
 

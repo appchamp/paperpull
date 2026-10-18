@@ -76,7 +76,6 @@ Site layer verified working against the live site: 2026-09-21
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import re
@@ -85,6 +84,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import dismiss_overlays as _dismiss_overlays
 
@@ -670,8 +670,7 @@ def _fetch_pdf(page, href: str) -> Optional[bytes]:
 
 _FETCH_PDF_B64_JS = r"""async ([url, accept]) => {
   const res = await fetch(url, {credentials: 'include', headers: accept ? {Accept: accept} : {}});
-  const buf = await res.arrayBuffer();
-  const bytes = new Uint8Array(buf);
+  const bytes = await ppRead(res);
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   // The body comes back whether the answer was yes or no. A refusal's
@@ -692,13 +691,13 @@ def fetch_statement_pdf(page, url: str, trace: Optional[list] = None, accept: st
     if not is_safe_url(url):
         return None
     try:
-        out = page.evaluate(_FETCH_PDF_B64_JS, [url, accept]) or {}
+        out = intake.evaluate(page, _FETCH_PDF_B64_JS, [url, accept]) or {}
         if trace is not None:
             trace.append({"note": "fetched", "url": redact(url)[:160], "accept": accept or "(none)",
                           "status": out.get("status"), "type": (out.get("type") or "")[:40],
                           "size": out.get("size"), "head": redact(str(out.get("head") or ""))[:40]})
         if out.get("b64"):
-            data = base64.b64decode(out["b64"])
+            data = intake.decode(out["b64"])
             if data[:5] == b"%PDF-":
                 LAST_REFUSAL.clear()
                 return data
@@ -712,6 +711,9 @@ def fetch_statement_pdf(page, url: str, trace: Optional[list] = None, accept: st
                     trace.append({"note": "ADP refused this document", "kind": kind,
                                   "message": redact(human)[:300]})
         log.info("statement PDF answered HTTP %s %s", out.get("status"), (out.get("type") or "")[:30])
+    except intake.TooLarge:
+        # Larger than a document may be, and not asked for again.
+        return None
     except Exception as e:
         log.info("in-page PDF fetch failed: %s", e)
         if trace is not None:
@@ -741,7 +743,7 @@ def wait_for_tax_access(page, url: str, trace: Optional[list] = None,
                 return
             if "pdf" not in (res.headers.get("content-type") or "").lower():
                 return
-            body = res.body()
+            body = intake.body(res)
             if body[:5] == b"%PDF-":
                 caught["body"] = body
         except Exception:

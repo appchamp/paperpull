@@ -43,7 +43,6 @@ SAFETY (this account holds a prepaid balance and a card that refills it):
 """
 from __future__ import annotations
 
-import base64
 import calendar
 import html as _html
 import logging
@@ -53,6 +52,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 
 # Everything on its way into a diagnostic file goes through here. It
@@ -253,7 +253,7 @@ _FETCH_JS = r"""async ([url, fragment]) => {
   const r = await fetch(url, {credentials: "include", headers});
   const ct = r.headers.get("content-type") || "";
   if (!ct.includes("pdf")) return {status: r.status, ct, url: r.url, text: await r.text()};
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   let s = "";
   for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
   return {status: r.status, ct, url: r.url, b64: btoa(s)};
@@ -267,7 +267,7 @@ def _get(page, url: str, fragment: bool = False) -> dict:
         raise ValueError("refusing to fetch off ezpassva.com: %r" % redact(url))
     if not on_portal(page):
         raise SessionExpired("the E-ZPass tab is not on a signed-in myaccount.ezpassva.com page")
-    r = page.evaluate(_FETCH_JS, [url, fragment])
+    r = intake.evaluate(page, _FETCH_JS, [url, fragment])
     landed = (r.get("url") or "").lower()
     if (r.get("status") in (401, 403) or not is_safe_url(r.get("url") or url)
             or any(m in landed for m in LOGIN_URL_MARKERS)):
@@ -410,7 +410,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, href: str = "",
         log.info("no PDF for %s: status %s, %s", iso_date, r.get("status"),
                  "error page" if "/home/error" in (r.get("url") or "").lower() else r.get("ct"))
         return False
-    body = base64.b64decode(r["b64"])
+    body = intake.decode(r["b64"])
     if body[:5] != b"%PDF-":
         return False
     out_path.write_bytes(body)

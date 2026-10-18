@@ -136,7 +136,6 @@ KNOWN CEILINGS
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import logging
 import re
@@ -147,6 +146,8 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlsplit
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core import pressing
 from paperpull_core import redirects
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
@@ -827,7 +828,7 @@ def _json_of(response, what: str):
     if _signed_out_status(response):
         raise SessionExpired("the %s answer was signed out" % what)
     try:
-        body = response.body() or b""
+        body = intake.body(response)
     except Exception as e:
         raise ListStopped("the %s answer could not be read (%s)" % (what, type(e).__name__))
     if _ctype(response).startswith("text/html") or body.lstrip()[:1] == b"<":
@@ -1446,7 +1447,7 @@ def _pdf_bytes(page, url: str, heard: list, trace) -> bytes:
         if _status(r) != 200:
             continue
         try:
-            body = r.body() or b""
+            body = intake.body(r)
         except Exception:
             body = b""
         if body[:5] == b"%PDF-":
@@ -1461,7 +1462,7 @@ def _pdf_bytes(page, url: str, heard: list, trace) -> bytes:
         _note(trace, note="asking the popup's address again was not answered 200")
         return b""
     try:
-        body = resp.body() or b""
+        body = intake.body(resp)
     except Exception:
         body = b""
     _note(trace, note="the popup's address was asked again", how="asked")
@@ -1684,9 +1685,7 @@ def pdf_text(data: bytes, pages: int = 5) -> str:
     """The text of the first pages of a PDF held in memory, or "". Never
     logged, never written."""
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(data))
-        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)]))
+        return whole_characters("\n".join(pdf_reader.page_texts(data, max(1, pages))))
     except Exception:
         return ""
 

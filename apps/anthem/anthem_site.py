@@ -51,6 +51,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 
@@ -477,7 +478,7 @@ _DOWNLOAD_JS = r"""async (a) => {
   const r = await fetch(url, {headers: Object.assign({'Accept':'application/json, application/pdf'}, h)});
   const ct = r.headers.get('content-type') || '';
   if (/json/i.test(ct)) {
-    const j = await r.json();
+    const j = JSON.parse(new TextDecoder().decode(await ppRead(r)));
     // The PDF arrives base64-encoded at result.data.file.
     let file = null;
     try { file = j && j.result && j.result.data && j.result.data.file; } catch(e){}
@@ -487,7 +488,7 @@ _DOWNLOAD_JS = r"""async (a) => {
     return {status: r.status, badShape: keys};
   }
   // A raw PDF (not seen live, but handled): base64 it for transport.
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await ppRead(r);
   let s = '';
   for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
   return {status: r.status, b64: btoa(s)};
@@ -896,7 +897,6 @@ def download_document(page, doc_id: str, out_path) -> bool:
     base64-decoded from the download envelope's result.data.file. Raises
     SessionExpired when Anthem will not authenticate the request.
     """
-    import base64
     parsed = parse_doc_id(doc_id)
     if not parsed:
         log.error("refusing a document identity that is not a known claim type, "
@@ -914,14 +914,14 @@ def download_document(page, doc_id: str, out_path) -> bool:
         return False
     arg = {"claimId": claim_id, "claimType": claim_type, "eobId": eob_id}
     try:
-        res = page.evaluate(_DOWNLOAD_JS, arg) or {}
+        res = intake.evaluate(page, _DOWNLOAD_JS, arg) or {}
     except Exception as e:
         log.warning("download fetch failed: %s", str(e).splitlines()[0][:100])
         return False
     if res.get("noauth") or res.get("status") in (401, 403):
         if prime_session(page, force=True):
             try:
-                res = page.evaluate(_DOWNLOAD_JS, arg) or {}
+                res = intake.evaluate(page, _DOWNLOAD_JS, arg) or {}
             except Exception as e:
                 log.warning("download retry failed: %s", str(e).splitlines()[0][:100])
                 return False
@@ -938,7 +938,7 @@ def download_document(page, doc_id: str, out_path) -> bool:
                   "updating.", res.get("badShape"))
         return False
     try:
-        body = base64.b64decode(res.get("b64") or "")
+        body = intake.decode(res.get("b64") or "")
     except Exception:
         log.warning("could not base64-decode the download response")
         return False
@@ -1178,7 +1178,7 @@ _MEMBER_DOC_DOWNLOAD_JS = r"""async (a) => {
   const dr = await fetch(du, {headers: Object.assign({'Accept':'application/pdf,*/*'}, h)});
   if (dr.status === 401 || dr.status === 403) return {status: dr.status};
   if (!dr.ok) return {status: dr.status};
-  const buf = new Uint8Array(await dr.arrayBuffer());
+  const buf = await ppRead(dr);
   let s=''; for(let i=0;i<buf.length;i++) s+=String.fromCharCode(buf[i]);
   return {status: 200, b64: btoa(s)};
 }"""
@@ -1236,7 +1236,7 @@ _IDCARD_VIEW_JS = r"""async (a) => {
   const vr = await fetch(vu, {headers: Object.assign({'Accept':'application/json'}, h)});
   if (vr.status === 401 || vr.status === 403) return {status: vr.status};
   if (!vr.ok) return {status: vr.status};
-  const vj = await vr.json();
+  const vj = JSON.parse(new TextDecoder().decode(await ppRead(vr)));
   const img = (((vj.result||{}).data||{}).image) || {};
   return {status: 200,
           front: (img.front||{}).data, frontMime: (img.front||{}).mimeType,
@@ -1321,8 +1321,7 @@ def render_html_to_pdf(page, html: str) -> Optional[bytes]:
     on a throwaway blank page with all network blocked (so a letter body cannot
     fetch a tracking pixel or any remote resource). Used to turn a letter's text
     and an ID card's front/back images into filed PDFs."""
-    import base64
-    from paperpull_core.receipt_pdf import PRINT_TO_PDF_OPTIONS, PDF_MAGIC
+    from paperpull_core.receipt_pdf import PRINT_TO_PDF_OPTIONS, PDF_MAGIC, printed_pdf
     ctx = page.context
     scratch = ctx.new_page()
     try:
@@ -1341,8 +1340,7 @@ def render_html_to_pdf(page, html: str) -> Optional[bytes]:
             return None
         scratch.set_content(html, wait_until="load")
         sess = ctx.new_cdp_session(scratch)
-        res = sess.send("Page.printToPDF", dict(PRINT_TO_PDF_OPTIONS))
-        data = base64.b64decode(res.get("data") or "")
+        data = printed_pdf(sess, PRINT_TO_PDF_OPTIONS)
         return data if data.startswith(PDF_MAGIC) else None
     except Exception as e:
         log.warning("could not render a PDF: %s", str(e).splitlines()[0][:80])
@@ -1356,7 +1354,6 @@ def render_html_to_pdf(page, html: str) -> Optional[bytes]:
 
 def _b64_pdf(res: dict, what: str) -> Optional[bytes]:
     """Decode a {status, b64} download result into verified PDF bytes."""
-    import base64
     status = res.get("status")
     if res.get("noauth") or status in (401, 403):
         raise SessionExpired(f"Anthem refused a {what} request; the session has expired")
@@ -1367,7 +1364,7 @@ def _b64_pdf(res: dict, what: str) -> Optional[bytes]:
             log.warning("%s download returned %s", what, status)
         return None
     try:
-        body = base64.b64decode(res["b64"])
+        body = intake.decode(res["b64"])
     except Exception:
         log.warning("could not decode the %s download", what)
         return None
@@ -1434,7 +1431,7 @@ def download_member_document(page, coverage_key: str, document_type: str) -> Opt
         raise SessionExpired("could not capture Anthem's session for a document download")
     arg = {"coverageKey": coverage_key, "documentType": document_type,
            "typeCd": _DOC_TYPE_CD, "origin": _DOC_ORIGIN}
-    res = page.evaluate(_MEMBER_DOC_DOWNLOAD_JS, arg) or {}
+    res = intake.evaluate(page, _MEMBER_DOC_DOWNLOAD_JS, arg) or {}
     return _b64_pdf(res, "member document")
 
 
@@ -1479,7 +1476,7 @@ def download_id_card(page, patient: str, card_type: str, ordinal: int = 0) -> Op
         raise SessionExpired("could not capture Anthem's session for an ID card")
     arg = {"patientKey": re.sub(r"\s+", " ", (patient or "")).strip().lower(),
            "cardType": card_type, "ordinal": int(ordinal or 0)}
-    res = page.evaluate(_IDCARD_VIEW_JS, arg) or {}
+    res = intake.evaluate(page, _IDCARD_VIEW_JS, arg) or {}
     status = res.get("status")
     if res.get("noauth") or status in (401, 403):
         raise SessionExpired("Anthem refused an ID card request; the session has expired")

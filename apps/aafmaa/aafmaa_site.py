@@ -81,6 +81,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.dates import last_day as _last_day
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.capture import is_document as _is_document
@@ -922,7 +923,7 @@ def _answer_body(answer) -> bytes:
     """The bytes the browser kept of an answer, or nothing when it kept none
     or would not say."""
     try:
-        return answer.body() or b""
+        return intake.body(answer)
     except Exception as e:
         log.info("could not read a PDF answer's body: %s", str(e).splitlines()[0][:90])
         return b""
@@ -960,7 +961,7 @@ def _ask_again(page, url: str) -> bytes:
         return b""
     try:
         resp = page.context.request.get(url, max_redirects=0, timeout=20000)
-        body = resp.body() if resp.ok else b""
+        body = intake.body(resp) if resp.ok else b""
     except Exception as e:
         log.info("asking again failed: %s", str(e).splitlines()[0][:90])
         return b""
@@ -1061,7 +1062,7 @@ def download_document_row(page, title: str, date_text: str, account: str,
         while deadline > 0 and not saved:
             if state["download"] is not None:
                 try:
-                    state["download"].save_as(str(out_path))
+                    intake.save_download_as(state["download"], out_path)
                     data = Path(out_path).read_bytes()
                     # A tax form that comes as a ZIP holding its PDF is
                     # kept for the docs module, which opens it.
@@ -1079,6 +1080,7 @@ def download_document_row(page, title: str, date_text: str, account: str,
                 # Each answer read costs a look, so a page that answers
                 # without end cannot hold the capture open.
                 deadline -= 0.5
+                said = intake.refused_count()
                 data = _answer_body(answer)
                 if data.startswith(b"%PDF"):
                     out = Path(out_path)
@@ -1090,7 +1092,8 @@ def download_document_row(page, title: str, date_text: str, account: str,
                 quiet_from = deadline
                 log.info("an answer called itself a PDF and held %s, so the press "
                          "is listened to on", _what_it_held(data))
-                url = answer.url if _may_ask_again(answer) else ""
+                # One larger than a document may be is never asked again.
+                url = answer.url if _may_ask_again(answer) and intake.refused_count() == said else ""
                 if url and url not in again and url not in asked:
                     again.append(url)
             elif again and quiet_from - deadline >= ASK_AGAIN_AFTER:

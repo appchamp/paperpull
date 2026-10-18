@@ -13,7 +13,6 @@ scaffold, so every provider added since made another.
 """
 from __future__ import annotations
 
-import base64
 import filecmp
 import logging
 import os
@@ -22,7 +21,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from . import redirects, shared_folder
+from . import intake, redirects, shared_folder
 from .receipt_pdf import ZIP_MAGIC
 from .redact import redact
 
@@ -235,6 +234,17 @@ def _documents(dl_dir, names, zip_ok: bool) -> list:
     return out
 
 
+def _too_large(paths) -> bool:
+    """Whether any of `paths` is larger than a document may be, said once.
+    Such a file is left where the browser put it, for a person to look at,
+    and is never taken as a document."""
+    for path in paths:
+        if intake.over(path):
+            intake.refuse("The downloaded file", size=intake.size_of(path))
+            return True
+    return False
+
+
 def _all_same(paths) -> bool:
     """Whether every one of `paths` holds the same bytes, as a second
     download of the same document does."""
@@ -277,6 +287,8 @@ def take_new_pdf(dl_dir, before: set, out_path: Path, *, zip_ok: bool = False) -
                  "folder cannot say which file is this document")
         return False
     docs = _documents(dl_dir, names, zip_ok)
+    if _too_large(docs):
+        return False
     if len(docs) > 1 and not _all_same(docs):
         log.info("%d different documents arrived in the download folder, so none "
                  "was taken as this one", len(docs))
@@ -331,8 +343,12 @@ def take_download(download, dl_dir, before, out_path, *, zip_ok: bool = False) -
     saved = False
     try:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        download.save_as(str(out_path))
+        # One larger than a document may be is never copied, or never put
+        # in place (intake.save_download_as).
+        intake.save_download_as(download, out_path)
         saved = True
+    except intake.TooLarge:
+        return ""
     except Exception as e:
         # The exception's text can carry the browser's suggested file name,
         # which can hold the account's tail, so only its kind is logged.
@@ -363,6 +379,8 @@ def take_download(download, dl_dir, before, out_path, *, zip_ok: bool = False) -
     src = Path(dl_dir) / mine[0]
     docs = _documents(dl_dir, names, zip_ok)
     if src not in docs:
+        return ""
+    if _too_large(docs):
         return ""
     if len(docs) > 1 and not _all_same(docs):
         log.info("%d different documents arrived in the download folder, so none "
@@ -508,7 +526,7 @@ FETCH_AS_B64 = r"""async ({url, hosts, subdomains, noRedirect}) => {
                             : {credentials: 'include'};
     const r = await fetch(url, opts);
     if (!r.ok) return null;
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await ppRead(r);
     let s = '';
     for (let i = 0; i < buf.length; i += 0x8000) {
         s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
@@ -545,7 +563,7 @@ FETCH_WITH_STATUS = r"""async ({url, hosts, subdomains, noRedirect}) => {
     const r = await fetch(url, opts);
     const out = {status: r.status, type: (r.headers.get('content-type') || '')};
     if (!r.ok) return out;
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await ppRead(r);
     let s = '';
     for (let i = 0; i < buf.length; i += 0x8000) {
         s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
@@ -560,7 +578,7 @@ def fetch_with_status(page, url: str, hosts=(), *, subdomains: bool = True,
     """What `url` answered with, as {status, type, b64}, fetched by the
     page with its own session. Always a dictionary, so a caller reading a
     key off it cannot meet a string."""
-    got = page.evaluate(FETCH_WITH_STATUS, {
+    got = intake.evaluate(page, FETCH_WITH_STATUS, {
         "url": url,
         "hosts": [str(h).lower().rstrip(".") for h in hosts],
         "subdomains": bool(subdomains),
@@ -574,7 +592,7 @@ def fetch_as_b64(page, url: str, hosts=(), *, subdomains: bool = True,
     """The bytes of `url`, fetched by the page with its own session, as
     base64, or None. With `hosts`, the page checks the address itself
     before asking for it."""
-    return page.evaluate(FETCH_AS_B64, {
+    return intake.evaluate(page, FETCH_AS_B64, {
         "url": url,
         "hosts": [str(h).lower().rstrip(".") for h in hosts],
         "subdomains": bool(subdomains),
@@ -602,7 +620,7 @@ def fetch_pdf(page, href: str, is_safe_url, *, zip_ok: bool = False) -> Optional
         return None
     try:
         resp = redirects.get(page.context.request, href, is_safe_url, timeout=60000)
-        body = resp.body() if resp.ok else b""
+        body = intake.body(resp) if resp.ok else b""
     except Exception as e:
         log.info("fetch %s failed: %s", redact(href)[:80], e)
         return None
@@ -628,7 +646,7 @@ def take_new_tab(page, new_pages, out_path: Path, is_safe_url) -> bool:
                 continue
             if not b64:
                 continue
-            data = base64.b64decode(b64)
+            data = intake.decode(b64)
             if data[:5] == b"%PDF-":
                 shared_folder.write_bytes(out_path, data)
                 return True
@@ -658,15 +676,18 @@ def take_same_tab(page, start_url: str, out_path: Path, trace, is_safe_url) -> b
     # again needs no redirect, here or in the page. One now would be the
     # address sending the cookies somewhere else, not the document.
     body = b""
+    refused = False
     try:
         resp = page.context.request.get(url, max_redirects=0, timeout=60000)
-        body = resp.body() if resp.ok else b""
+        body = intake.body(resp) if resp.ok else b""
+    except intake.TooLarge:
+        refused = True
     except Exception as e:
         log.info("same-tab fetch failed: %s", e)
-    if body[:5] != b"%PDF-":
+    if body[:5] != b"%PDF-" and not refused:
         try:
             b64 = fetch_as_b64(page, url, no_redirect=True)
-            body = base64.b64decode(b64) if b64 else b""
+            body = intake.decode(b64)
         except Exception:
             body = b""
     # Back where it was, whether or not the bytes came, so the next row is
@@ -713,7 +734,7 @@ ASK_AGAIN_JS = r"""async ({url, ms}) => {
         const r = await fetch(url, {credentials: 'include', redirect: 'error',
                                     signal: AbortSignal.timeout(ms)});
         if (!r.ok) return null;
-        const buf = new Uint8Array(await r.arrayBuffer());
+        const buf = await ppRead(r);
         let s = '';
         for (let i = 0; i < buf.length; i += 0x8000) {
             s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
@@ -766,8 +787,8 @@ def ask_again(page, answers: list, out_path: Path, is_safe_url, *, zip_ok: bool 
         log.info("the tab is not on the provider's site, so nothing was asked again")
         return False
     try:
-        b64 = page.evaluate(ASK_AGAIN_JS, {"url": url, "ms": ASK_AGAIN_MS})
-        data = base64.b64decode(b64) if b64 else b""
+        b64 = intake.evaluate(page, ASK_AGAIN_JS, {"url": url, "ms": ASK_AGAIN_MS})
+        data = intake.decode(b64)
     except Exception as e:
         log.info("asking again for %s failed: %s", redact(url)[:80],
                  (str(e).splitlines() or [type(e).__name__])[0][:90])

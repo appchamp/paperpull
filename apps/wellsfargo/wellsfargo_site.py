@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import dismiss_overlays as _dismiss_overlays
 
@@ -1254,7 +1255,10 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
                 return
             if "pdf" in ct or "octet" in ct:
                 try:
-                    body = res.body()
+                    body = intake.body(res)
+                except intake.TooLarge:
+                    # Larger than a document may be, and never asked again.
+                    body = b""
                 except Exception:
                     body = b""
                     got["refetch"] = url
@@ -1290,7 +1294,7 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
                 # browser's cookies wherever it led.
                 resp = page.context.request.get(got.pop("refetch"), max_redirects=0,
                                                 timeout=60000)
-                body = resp.body() if resp.ok else b""
+                body = intake.body(resp) if resp.ok else b""
                 if _is_document(body, zip_ok=True):
                     out_path.write_bytes(body)
                     return True

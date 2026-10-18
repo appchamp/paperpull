@@ -100,7 +100,6 @@ KNOWN CEILINGS (what the first run was to confirm, and did unless noted)
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import logging
 import os
@@ -114,6 +113,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import parse_qsl, urlsplit
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core import pressing
 from paperpull_core import redirects
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
@@ -801,7 +802,7 @@ def _body(response):
         finished = getattr(response, "finished", None)
         if callable(finished):
             finished()
-        return response.body() or b""
+        return intake.body(response)
     except Exception:
         return None
 
@@ -1695,9 +1696,7 @@ def pdf_text(data: bytes, pages: int = 5) -> str:
     """The text of the first pages of a PDF held in memory, or "". Never
     logged, never written."""
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(data))
-        return whole_characters("\n".join((pg.extract_text() or "") for pg in reader.pages[:max(1, pages)]))
+        return whole_characters("\n".join(pdf_reader.page_texts(data, max(1, pages))))
     except Exception:
         return ""
 

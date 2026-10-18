@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import storage  # noqa: F401,E402  binds this provider's AppSpec
 import usbank_site as site  # noqa: E402
+from paperpull_core import intake  # noqa: E402
 
 DOCUMENTS = "https://onlinebanking.usbank.com/digital/servicing/documents"
 VIEWER = "https://onlinebanking.usbank.com/digital/servicing/statement-view"
@@ -105,7 +106,7 @@ def usbank(monkeypatch):
     real_evaluate = pw.Page.evaluate
 
     def evaluate(self, expression, arg=None):
-        if expression == site._FETCH_AS_B64:
+        if expression == intake.reading(site._FETCH_AS_B64):
             fetched_in.append(self)
         return real_evaluate(self, expression, arg)
 

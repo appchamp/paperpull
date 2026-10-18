@@ -40,6 +40,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core import pressing
 from paperpull_core import redirects
 from paperpull_core.dates import last_day as _last_day
@@ -690,7 +691,10 @@ def download_statement(page, href: str, out_path) -> bool:
     if not resp.ok:
         log.warning("fetch returned %s", resp.status)
         return False
-    body = resp.body()
+    try:
+        body = intake.body(resp)
+    except intake.TooLarge:
+        return False
     if not body.startswith(b"%PDF"):
         if _looks_like_login_html(body):
             raise SessionExpired(

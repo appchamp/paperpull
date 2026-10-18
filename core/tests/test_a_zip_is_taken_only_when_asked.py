@@ -324,16 +324,30 @@ def test_different_files_are_kept_beside_the_first(tmp_path):
 
 def test_an_archive_that_breaks_while_opening_is_kept_and_nothing_is_half_written(tmp_path,
                                                                                   monkeypatch):
-    import shutil
+    import os
     out = tmp_path / "Form.pdf"
     archive = zipped({"1099-R.pdf": PDF})
     out.write_bytes(archive)
+    real_fdopen = os.fdopen
 
-    def full(src, dst, *a, **k):
-        dst.write(b"%PDF-1.4\nhalf")
-        raise OSError("the disk is full")
+    class Full:
+        """The temporary file, on a disk that fills after the first piece."""
 
-    monkeypatch.setattr(shutil, "copyfileobj", full)
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.f.close()
+            return False
+
+        def write(self, data):
+            self.f.write(b"%PDF-1.4\nhalf")
+            raise OSError("the disk is full")
+
+    monkeypatch.setattr(os, "fdopen", lambda fd, *a, **k: Full(real_fdopen(fd, *a, **k)))
     opened = receipt_pdf.open_zip(out, review(tmp_path))
     assert opened.pdf is None and opened.failure == "the archive could not be opened"
     assert not out.exists(), "something was left under the document's name"

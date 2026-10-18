@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core import page_check as _page_check
 from paperpull_core import redirects
 from paperpull_core.models import ONLINE, Item, Purchase
@@ -973,7 +974,10 @@ def download_invoice_pdf(page, url: str, out_path) -> bool:
     if not resp.ok or not is_safe_url(resp.url):
         log.warning("invoice download returned %s", resp.status)
         return False
-    body = resp.body()
+    try:
+        body = intake.body(resp)
+    except intake.TooLarge:
+        return False
     if not body.startswith(b"%PDF"):
         log.warning("invoice download was not a PDF (%d bytes)", len(body))
         return False

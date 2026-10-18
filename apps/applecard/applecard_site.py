@@ -82,6 +82,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import dismiss_overlays as _dismiss_overlays
 
@@ -1456,9 +1457,9 @@ _TAKE_BLOB_JS = r"""async () => {
   for (let i = blobs.length - 1; i >= 0; i--) {
     const {url, blob} = blobs[i];
     if (!blob || blob.size < 100 || blob.size > 30000000) continue;
-    const head = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+    const head = await ppBlob(blob.slice(0, 5));
     if (String.fromCharCode(...head) !== '%PDF-') continue;
-    const buf = new Uint8Array(await blob.arrayBuffer());
+    const buf = await ppBlob(blob);
     let s = '';
     for (let j = 0; j < buf.length; j += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(j, j + 0x8000));
     const named = names.filter(n => n.href === url).map(n => n.name);
@@ -1481,14 +1482,13 @@ def _take_blob(page) -> Optional[Tuple[bytes, str]]:
     """The newest PDF the page made since the hook was armed, and the name
     Apple gave it, or None."""
     try:
-        got = page.evaluate(_TAKE_BLOB_JS)
+        got = intake.evaluate(page, _TAKE_BLOB_JS)
     except Exception:
         return None
     if not isinstance(got, dict) or not got.get("b64"):
         return None
-    import base64
     try:
-        data = base64.b64decode(got["b64"])
+        data = intake.decode(got["b64"])
     except Exception:
         return None
     if data[:5] != b"%PDF-":
@@ -1597,7 +1597,10 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
                 return
             if "pdf" in ct or "octet" in ct:
                 try:
-                    body = res.body()
+                    body = intake.body(res)
+                except intake.TooLarge:
+                    # Larger than a document may be, and never asked again.
+                    body = b""
                 except Exception:
                     body = b""
                     got["refetch"] = url
@@ -1643,7 +1646,7 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
                 # browser's cookies wherever it led.
                 resp = page.context.request.get(got.pop("refetch"), max_redirects=0,
                                                 timeout=60000)
-                body = resp.body() if resp.ok else b""
+                body = intake.body(resp) if resp.ok else b""
                 if _is_document(body, zip_ok=True):
                     out_path.write_bytes(body)
                     return True

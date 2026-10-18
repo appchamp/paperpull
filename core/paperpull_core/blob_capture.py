@@ -23,10 +23,11 @@ person's browser, so close_new_tabs waits for it first.
 """
 from __future__ import annotations
 
-import base64
 import logging
 import time
 from typing import Optional, Tuple
+
+from . import intake
 
 log = logging.getLogger(__name__)
 
@@ -120,14 +121,14 @@ TAKE_JS = r"""async (want) => {
     const {url, blob} = blobs[i];
     if (allowed && !allowed.has(bare(url))) continue;
     if (!blob || blob.size < 100 || blob.size > 30000000) continue;
-    const head = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+    const head = await ppBlob(blob.slice(0, 5));
     if (String.fromCharCode(...head) !== '%PDF-') continue;
     pdfs.push({url, blob});
     if (!allowed) break;
   }
   if (pdfs.length !== 1) return {b64: '', name: '', count: blobs.length, matched: pdfs.length};
   const {url, blob} = pdfs[0];
-  const buf = new Uint8Array(await blob.arrayBuffer());
+  const buf = await ppBlob(blob);
   let s = '';
   for (let j = 0; j < buf.length; j += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(j, j + 0x8000));
   const named = names.filter(n => n.href === url).map(n => n.name);
@@ -157,13 +158,13 @@ def take(page, urls: Optional[list] = None, opened: bool = False) -> Optional[Tu
     when there is exactly one."""
     want = {"urls": list(urls or []), "opened": bool(opened)} if (urls or opened) else None
     try:
-        got = page.evaluate(TAKE_JS, want)
+        got = intake.evaluate(page, TAKE_JS, want)
     except Exception:
         return None
     if not isinstance(got, dict) or not got.get("b64"):
         return None
     try:
-        data = base64.b64decode(got["b64"])
+        data = intake.decode(got["b64"])
     except Exception:
         return None
     if data[:5] != b"%PDF-":

@@ -66,13 +66,14 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
 # Everything on its way into a diagnostic file goes through here.
+from paperpull_core import pdf_reader
 from paperpull_core.redact import redact, set_private_words  # noqa: F401
 
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.identity import Identity
 from paperpull_core.models import Item, Purchase
 from paperpull_core.urls import is_safe_url as _host_allows
-from paperpull_core.characters import whole_characters, whole_json
+from paperpull_core.characters import whole_json
 # Only what every app's storage has. The core's census tests import each
 # site module with whichever app's storage was loaded last.
 from storage import now_iso
@@ -1177,33 +1178,9 @@ def drop_blank_last_pages(path) -> int:
     Store invoice printed a second page with nothing on it. The first page
     is always kept, and a page with any word or picture on it ends the
     trimming, so nothing that was printed on is ever cut."""
-    try:
-        from pypdf import PdfReader, PdfWriter
-        reader = PdfReader(str(path))
-        total = keep = len(reader.pages)
-        while keep > 1:
-            page = reader.pages[keep - 1]
-            if whole_characters(page.extract_text() or "").strip():
-                break
-            resources = page.get("/Resources") or {}
-            try:
-                resources = resources.get_object()
-            except Exception:
-                pass
-            if "/XObject" in resources:
-                break
-            keep -= 1
-        if keep == total:
-            return 0
-        writer = PdfWriter()
-        for page in reader.pages[:keep]:
-            writer.add_page(page)
-        with open(str(path), "wb") as out:
-            writer.write(out)
-        return total - keep
-    except Exception as e:
-        log.info("Could not look for blank pages at the end (%s)", type(e).__name__)
-        return 0
+    # Read and written within the limits of a PDF's time and memory
+    # (pdf_reader), and left as it is when it cannot be read.
+    return pdf_reader.trim_blank_tail(path)
 
 
 def hide_print_controls(page) -> int:

@@ -57,7 +57,6 @@ KNOWN CEILINGS (ponytail: left as they are until a run shows otherwise)
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
 import sys
@@ -67,6 +66,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from paperpull_core import pdf_reader
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core import pressing
 from paperpull_core.redact import redact, set_private_words, private_words  # noqa: F401  (re-exported)
@@ -774,8 +775,8 @@ _RESULT_JS = r"""async () => {
   const s = window.__pp || {blobs: [], opened: []};
   const out = {blobs: s.blobs.map(b => ({type: b.type, size: b.size, url: b.url})), opened: s.opened.slice(), b64: ''};
   if (s.blobs.length === 1) {
-    const buf = await s.blobs[0].blob.arrayBuffer();
-    let bin = ''; const bytes = new Uint8Array(buf); for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    const bytes = await ppBlob(s.blobs[0].blob);
+    let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     out.b64 = btoa(bin);
   }
   return out;
@@ -802,7 +803,7 @@ def accept_blob(result: dict) -> Tuple[bytes, str]:
     if len(opened) != 1 or opened[0] != b.get("url"):
         return b"", "the page asked to open %d addresses, not the blob" % len(opened)
     try:
-        data = base64.b64decode(result.get("b64") or "")
+        data = intake.decode(result.get("b64") or "")
     except Exception:
         return b"", "the blob's bytes could not be read"
     if data[:5] != b"%PDF-":
@@ -816,9 +817,7 @@ def pdf_text(data: bytes) -> str:
     a page pypdf cannot read still carries its printed text in the bytes."""
     text = ""
     try:
-        from io import BytesIO
-        from pypdf import PdfReader
-        text = whole_characters("\n".join((p.extract_text() or "") for p in PdfReader(BytesIO(data)).pages))
+        text = whole_characters("\n".join(pdf_reader.page_texts(data)))
     except Exception as e:
         log.info("the PDF's text could not be read with pypdf (%s)", type(e).__name__)
     return text + "\n" + data.decode("latin-1", "replace")
@@ -908,7 +907,7 @@ def _press_for_blob(page, control, label: str, out_path: Path, trace: Optional[l
             trace.append({"note": "stopped after the press", "why": str(stop)})
         return False
     try:
-        result = page.evaluate(_RESULT_JS)
+        result = intake.evaluate(page, _RESULT_JS)
     except Exception as e:
         if trace is not None:
             trace.append({"note": "the blob could not be read", "error": type(e).__name__})

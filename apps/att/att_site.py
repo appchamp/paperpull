@@ -101,7 +101,6 @@ SAFETY (this is a phone account with a card on file):
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
 import sys
@@ -109,6 +108,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, NamedTuple, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.controls import dismiss_overlays as _dismiss_overlays
 from paperpull_core.controls import safe_selects as _safe_selects
@@ -1796,7 +1796,7 @@ def _take_viewer(page, out_path: Path, trace: Optional[list]) -> bool:
             if src.startswith("blob:") or is_safe_url(src):
                 b64 = _fetch_as_b64(page, src)
                 if b64:
-                    data = base64.b64decode(b64)
+                    data = intake.decode(b64)
                     if data[:5] == b"%PDF-":
                         out_path.write_bytes(data)
                         return True
@@ -1867,7 +1867,7 @@ def _catch_pdf(page, el, label: str, out_path: Path, trace: Optional[list] = Non
             if got:
                 return
             if "pdf" in ct or "octet" in ct:
-                body = res.body()
+                body = intake.body(res)
                 if body[:5] == b"%PDF-":
                     got["body"] = body
                 elif not body and not got and made_here.made(res.request) \

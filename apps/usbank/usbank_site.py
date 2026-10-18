@@ -9,7 +9,6 @@ All requests and navigation must stay on explicitly allowed provider hosts.
 
 from __future__ import annotations
 
-import base64
 import html as _html
 import json
 import logging
@@ -18,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from paperpull_core import intake
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.controls import click_next_page as _click_next_page
@@ -1063,7 +1063,7 @@ _FETCH_AS_B64 = r"""async (u) => {
     if (ppOrigin.protocol !== "https:" || !["onlinebanking.usbank.com", "www.usbank.com"].includes(ppOrigin.hostname) || ppOrigin.username || ppOrigin.password || (ppOrigin.port && ppOrigin.port !== "443")) throw new Error("Refusing an off-host document request");
     const r = await fetch(u, {redirect: 'error', credentials: 'include'});
     if (!r.ok) return null;
-    const buf = new Uint8Array(await r.arrayBuffer());
+    const buf = await ppRead(r);
     let s = ''; for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
     return btoa(s);
 }"""
@@ -1188,7 +1188,7 @@ def _click_row_and_capture(page, ctx, account: str, date: str,
         try:
             with page.expect_download(timeout=30000) as dl:
                 link.click()
-            dl.value.save_as(str(out_path))
+            intake.save_download_as(dl.value, out_path)
             # A tax form that comes as a ZIP holding its PDF is kept for the
             # docs module, which opens it.
             if out_path.exists() and _is_document(out_path.read_bytes()[:5], zip_ok=True):
@@ -1219,10 +1219,10 @@ def _click_row_and_capture(page, ctx, account: str, date: str,
         try:
             new_page.wait_for_load_state("domcontentloaded", timeout=20000)
             url = new_page.url or ""
-            b64 = page.evaluate(_FETCH_AS_B64, url) if url.startswith("blob:") \
-                else new_page.evaluate(_FETCH_AS_B64, url)
+            b64 = intake.evaluate(page if url.startswith("blob:") else new_page,
+                                  _FETCH_AS_B64, url)
             if b64:
-                ok = _write_if_pdf(base64.b64decode(b64), out_path)
+                ok = _write_if_pdf(intake.decode(b64), out_path)
                 if ok:
                     log.info("captured via new window (%s)", url[:70])
         except Exception as e:
