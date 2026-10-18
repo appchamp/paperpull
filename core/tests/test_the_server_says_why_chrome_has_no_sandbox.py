@@ -9,6 +9,13 @@ does (paperpull_core.host_sandbox), and a sign-in whose Chrome stopped
 without its sandbox says that, and why. The sandbox itself is never turned
 off or asked for less of. The desktop is untouched.
 
+A kernel without the seccomp-bpf filter does not stop Chrome. It starts
+with the namespace half of its sandbox only, which a host with user
+namespaces allows once the container's profile is removed by hand. So
+there the server starts no Chrome at all, not at a sign-in, not as an
+app's own browser and not as the receipt renderer, and says why, while the
+panel stays up.
+
 What the kernel answers was measured in the server's base image under
 Docker, as an ordinary user. Docker's own profile refused the user
 namespace with EPERM, seccomp-chrome.json let it through, and a profile
@@ -22,6 +29,7 @@ import os
 import socket
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -46,6 +54,12 @@ SUID = ("[11:11:1018/120942.677970:FATAL:sandbox/linux/suid/client/setuid_sandbo
         "directory (2)\n")
 
 DSM = Sandbox("no", "no", "no-kernel")
+# A kernel with seccomp and no user namespaces, the setuid helper not set
+# up, where Chrome stops by itself.
+NO_USERNS = Sandbox("no", "yes", "applied")
+# A kernel with user namespaces and no seccomp-bpf filter, where Chrome
+# would start with half its sandbox.
+HALF = Sandbox("yes", "no", "no-kernel")
 REFUSED = Sandbox("refused", "yes", "applied")
 WHOLE = Sandbox("yes", "yes", "applied")
 
@@ -115,10 +129,32 @@ def test_a_container_refused_them_is_pointed_at_its_profile():
         Sandbox("limit", "yes", "applied"))
 
 
-def test_a_kernel_without_the_filter_alone_is_said_but_does_not_stop_chrome():
-    found = Sandbox("yes", "no", "no-kernel")
-    assert "no seccomp-bpf filter" in host_sandbox.problem(found)
-    assert not host_sandbox.stops_chrome(found)
+def test_a_kernel_without_the_filter_alone_does_not_stop_chrome_and_is_refused():
+    said = host_sandbox.problem(HALF)
+    assert said.startswith("This host's kernel has no seccomp-bpf filter, the other half "
+                           "of Chrome's sandbox, so Chrome would run with only half its "
+                           "sandbox here, and PaperPull will not start Chrome that way.")
+    assert "Sign-in windows cannot open on this host" in said
+    assert host_sandbox.SECTION in said
+    assert not host_sandbox.stops_chrome(HALF)
+    assert host_sandbox.refuses_chrome(HALF)
+
+
+@pytest.mark.parametrize("found", [
+    HALF, DSM, Sandbox("unknown", "no", "no-kernel"), Sandbox("yes", "no", "none"),
+    Sandbox("refused", "no", "no-kernel"), Sandbox("no", "no", "no-kernel", "yes"),
+], ids=repr)
+def test_every_host_without_the_filter_is_refused_and_says_why(found):
+    assert host_sandbox.refuses_chrome(found)
+    assert host_sandbox.problem(found)
+
+
+@pytest.mark.parametrize("found", [
+    WHOLE, NO_USERNS, REFUSED, host_sandbox.UNKNOWN, Sandbox("yes", "unknown", "applied"),
+    Sandbox("no", "yes", "applied", "yes"),
+], ids=repr)
+def test_a_host_with_the_filter_or_one_that_cannot_be_told_is_not_refused(found):
+    assert not host_sandbox.refuses_chrome(found)
 
 
 def test_nothing_is_said_of_a_host_that_has_both_or_cannot_be_told():
@@ -265,7 +301,7 @@ def _looks(monkeypatch, timeout=None) -> list:
 
 def test_a_server_chrome_without_user_namespaces_says_why_at_once(
         monkeypatch, tmp_path, port, capsys, server):
-    server["host"] = DSM
+    server["host"] = NO_USERNS
     monkeypatch.setattr(browser.subprocess, "Popen", _Ended(SUID))
     asked = _looks(monkeypatch)
     assert browser.open_signin_browser(tmp_path / "p", port, "https://bank.example/") is None
@@ -273,7 +309,7 @@ def test_a_server_chrome_without_user_namespaces_says_why_at_once(
         "it waited for a port although Chrome had ended: %s" % asked
     words = said(capsys)
     assert "Google Chrome closed right after it started" in words
-    assert "This host's kernel has no user namespaces and no seccomp-bpf filter" in words
+    assert "This host's kernel has no user namespaces, so Chrome's sandbox" in words
     assert '"On Synology" in SERVER.md' in words
     for wrong in ("window opened", "Close every", "already running", "Install Chrome",
                   "install Chrome or Edge", "None of the browsers", "400 MB"):
@@ -350,7 +386,7 @@ def test_a_server_whose_helper_cannot_start_starts_chrome_as_before(
         monkeypatch, tmp_path, port, capsys, server):
     """Chrome then writes to nowhere, as before #110, and the host check
     alone names the cause once the wait is out, here cut to a second."""
-    server["host"] = DSM
+    server["host"] = NO_USERNS
     started = _Ended(SUID)
 
     def popen(cmd, **kw):
@@ -370,7 +406,7 @@ def test_a_server_whose_helper_cannot_start_starts_chrome_as_before(
 @pytest.mark.skipif(os.name == "nt", reason="a shell script stands in for Chrome")
 def test_a_real_process_that_ends_without_its_sandbox_on_the_server(
         monkeypatch, tmp_path, port, capsys, server):
-    server["host"] = DSM
+    server["host"] = NO_USERNS
     (tmp_path / "said.txt").write_text(SUID, encoding="utf-8")
     exe = tmp_path / "google-chrome-stable"
     exe.write_text("#!/bin/sh\ncat '%s' >&2\nexit 133\n" % (tmp_path / "said.txt"),
@@ -383,6 +419,114 @@ def test_a_real_process_that_ends_without_its_sandbox_on_the_server(
     assert browser.open_signin_browser(tmp_path / "p", port, "https://bank.example/") is None
     assert asked and asked.count(False) == 1, asked
     assert "no user namespaces" in said(capsys)
+
+
+# -- a host without the filter starts no Chrome ------------------------------------------
+
+def _never_started(monkeypatch):
+    """Any process at all, Chrome or the helper that reads what it writes,
+    fails the test, as does a wait for its port."""
+    def popen(cmd, *_a, **_k):
+        raise AssertionError("started %s on a host without seccomp-bpf" % (cmd[0],))
+    monkeypatch.setattr(browser.subprocess, "Popen", popen)
+
+    def wait(*_a, **_k):
+        raise AssertionError("waited for a port no Chrome was started for")
+    monkeypatch.setattr(browser, "wait_for_debug_port", wait)
+
+
+@pytest.mark.parametrize("host", [HALF, DSM, Sandbox("yes", "no", "none"),
+                                  Sandbox("no", "no", "no-kernel", "yes")], ids=repr)
+def test_a_server_sign_in_on_a_host_without_the_filter_starts_no_chrome(
+        monkeypatch, tmp_path, port, capsys, server, host):
+    server["host"] = host
+    _never_started(monkeypatch)
+    assert browser.open_signin_browser(tmp_path / "p", port, "https://bank.example/") is None
+    words = said(capsys)
+    assert "Google Chrome was not started." in words
+    assert " ".join(host_sandbox.problem(host).split()) in words
+    for wrong in ("closed right after", "window opened", "Close every", "already running",
+                  "Install Chrome", "None of the browsers", "400 MB", "Trying"):
+        assert wrong not in words, wrong
+
+
+class _Chromium:
+    """Playwright's browser type, noting each browser it is asked for."""
+
+    def __init__(self):
+        self.asked = []
+
+    def launch(self, **kw):
+        self.asked.append(("launch", kw))
+        return "browser"
+
+    def launch_persistent_context(self, user_data_dir, **kw):
+        self.asked.append(("persistent", kw))
+        return "context"
+
+
+def _the_servers_own_starts(c, tmp_path):
+    from paperpull_core import receipt_pdf
+    return {
+        "sandboxed_launch": lambda: browser.sandboxed_launch(c, headless=True),
+        "sandboxed_persistent_context":
+            lambda: browser.sandboxed_persistent_context(c, str(tmp_path / "p")),
+        "receipt renderer": lambda: receipt_pdf.render_url_headless(
+            types.SimpleNamespace(chromium=c), {}, "https://bank.example/r",
+            tmp_path / "r.pdf", is_safe_url=lambda u: True, hosts=["bank.example"]),
+    }
+
+
+@pytest.mark.parametrize("host", [HALF, DSM], ids=repr)
+def test_the_servers_playwright_browsers_are_refused_before_one_is_asked_for(
+        tmp_path, server, host):
+    server["host"] = host
+    c = _Chromium()
+    for name, start in _the_servers_own_starts(c, tmp_path).items():
+        with pytest.raises(browser.SandboxRefused) as e:
+            start()
+        assert str(e.value) == host_sandbox.problem(host), name
+    assert c.asked == [], "a browser was asked for anyway"
+    assert not (tmp_path / "r.pdf").exists()
+
+
+def test_an_apps_own_browser_on_such_a_host_ends_the_run_and_says_why(
+        tmp_path, capsys, server):
+    server["host"] = HALF
+    c = _Chromium()
+    with pytest.raises(SystemExit) as e:
+        browser.launch_own_browser(c, str(tmp_path / "p"))
+    assert str(e.value) == host_sandbox.problem(HALF)
+    assert c.asked == []
+
+
+@pytest.mark.parametrize("host", [WHOLE, NO_USERNS, host_sandbox.UNKNOWN,
+                                  Sandbox("no", "yes", "applied", "yes")], ids=repr)
+def test_a_server_host_with_the_filter_starts_its_playwright_browsers_as_before(
+        tmp_path, server, host):
+    server["host"] = host
+    c = _Chromium()
+    assert browser.server_refusal() == ""
+    assert browser.sandboxed_launch(c, headless=True) == "browser"
+    assert browser.sandboxed_persistent_context(c, str(tmp_path / "p")) == "context"
+    assert [kw["chromium_sandbox"] for _kind, kw in c.asked] == [True, True]
+
+
+def test_a_check_that_breaks_refuses_nothing_and_the_desktop_never_asks(
+        monkeypatch, server):
+    """A host that could not be told is not refused, as UNKNOWN is not."""
+    def broken():
+        raise RuntimeError("no /proc")
+    monkeypatch.setattr(host_sandbox, "check", broken)
+    assert browser.server_refusal() == ""
+    monkeypatch.delenv("PAPERPULL_SERVER")
+
+    def asked():
+        raise AssertionError("the desktop asked the host about Chrome's sandbox")
+    monkeypatch.setattr(host_sandbox, "check", asked)
+    assert browser.server_refusal() == ""
+    c = _Chromium()
+    assert browser.sandboxed_launch(c) == "browser"
 
 
 # -- the desktop, untouched --------------------------------------------------------------

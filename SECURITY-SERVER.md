@@ -157,7 +157,11 @@ password manager.
   `privileged`, which grants far more than the sandbox needs, nor with
   `no-new-privileges`, which would turn the setuid bit off. On a kernel
   built without seccomp, as Synology's 4.4 kernels are, the helper is never
-  set up, since Chrome would have only half its sandbox there.
+  set up, since Chrome would have only half its sandbox there. Nor is
+  Chrome started on such a kernel at all, even one with user namespaces
+  and the container's profile removed by hand, where it would otherwise run
+  with its namespaces and no filter on its system calls. The panel stays up
+  and says why.
 - **Only the panel is on the network.** Each provider's browser debugging
   port and the screen sharing server listen inside the container only. The
   sign-in window reaches you through the panel, behind the password, on the

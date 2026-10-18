@@ -659,7 +659,13 @@ def _sandboxed(kwargs: dict) -> dict:
 def _started(launch, *args, **kwargs):
     """`launch` called, with a sandbox that could not start said in plain
     words. Playwright's own words for it advise turning the sandbox off,
-    which this tool never does, so they are not passed on."""
+    which this tool never does, so they are not passed on. On PaperPull
+    Server a host without the seccomp-bpf filter is refused before
+    `launch` is called, since Chrome would start there with half its
+    sandbox (server_refusal)."""
+    refusal = server_refusal()
+    if refusal:
+        raise SandboxRefused(refusal)
     try:
         return launch(*args, **kwargs)
     except Exception as e:
@@ -986,6 +992,12 @@ def _launch(exe: str, name: str, profile_dir, port: str,
     # give it its sandbox (#110), but its sign-in windows stay open for days,
     # so what it writes is kept to its start (_KeptStart).
     on_server = os.environ.get("PAPERPULL_SERVER") == "1"
+    # A host without the seccomp-bpf filter would let it start with half its
+    # sandbox, so it is not started there at all.
+    refusal = server_refusal() if on_server else ""
+    if refusal:
+        _say_server_refused(name, refusal)
+        return None
     said = None
     if on_server:
         said = _KeptStart.begin()
@@ -1159,6 +1171,40 @@ def _server_sandbox_stops_chrome() -> bool:
         return stops_chrome(check())
     except Exception:
         return False
+
+
+def server_refusal() -> str:
+    """Why PaperPull Server will not start Chrome on this host, or "" when
+    it may, and always "" off the server. A kernel without the seccomp-bpf
+    filter lets Chrome start with the namespace half of its sandbox only,
+    as a host with user namespaces does once the container's profile is
+    removed by hand, and until then nothing refused it (#110 said so and
+    went on). Every Chrome the server starts asks this first, the sign-in
+    window, a browser of an app's own and the receipt renderer, and the
+    self-test asks the same check (paperpull_core.host_sandbox)."""
+    if os.environ.get("PAPERPULL_SERVER") != "1":
+        return ""
+    try:
+        from .host_sandbox import check, problem, refuses_chrome
+        found = check()
+        if not refuses_chrome(found):
+            return ""
+        return problem(found) or SERVER_REFUSED
+    except Exception:
+        return ""
+
+
+# Said when the check refuses Chrome and has no sentence of its own, which
+# problem() always has today.
+SERVER_REFUSED = ("This host cannot give Chrome its whole sandbox, and PaperPull will not "
+                  "start Chrome without it. See \"Chrome does not start\" in SERVER.md.")
+
+
+def _say_server_refused(name: str, why: str) -> None:
+    """What a sign-in says when the server would not start its Chrome."""
+    import textwrap
+    print("\n%s was not started." % name)
+    print(textwrap.fill(why, width=72))
 
 
 def _say_server_sandbox(name: str, port: str, ended: bool = True) -> None:

@@ -7,7 +7,8 @@ can have its sandbox, or the panel, the container's log and a sign-in would
 all say sign-in windows cannot open on a host where they do. And without
 the seccomp-bpf filter the helper gives only half the sandbox, so it never
 stands in there (a Synology DiskStation, kernel 4.4.302+, measured layer 1
-SUID with seccomp off).
+SUID with seccomp off). Without the filter the server starts no Chrome at
+all, helper or not (refuses_chrome).
 """
 import os
 import stat
@@ -38,6 +39,22 @@ def test_without_the_filter_the_helper_is_no_stand_in(userns):
     assert not hs.stands_in(half)
     assert hs.problem(half)
     assert hs.stops_chrome(half)
+    assert hs.refuses_chrome(half)
+
+
+@pytest.mark.parametrize("userns", ["yes", "unknown"])
+def test_a_ready_helper_without_the_filter_is_refused_where_chrome_would_start(userns):
+    """With user namespaces Chrome would start with half its sandbox, the
+    helper ready or not, so the server refuses it before it starts."""
+    half = found(userns=userns, seccomp_bpf="no")
+    assert not hs.stands_in(half) and not hs.stops_chrome(half)
+    assert hs.refuses_chrome(half)
+    assert "no seccomp-bpf filter" in hs.problem(half)
+
+
+def test_a_ready_helper_beside_the_filter_is_never_refused():
+    assert not hs.refuses_chrome(found())
+    assert not hs.refuses_chrome(found(seccomp_bpf="unknown"))
 
 
 def test_without_a_ready_helper_nothing_changes():

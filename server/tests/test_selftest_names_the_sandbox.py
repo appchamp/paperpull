@@ -7,7 +7,9 @@ noise about CPU frequency files, and never printed its sandbox line at all
 came first and was cut off. Now a sandbox line comes before the port, and
 names the cause the host check found (paperpull_core.host_sandbox), or says
 it was the sandbox when Chrome's own words do. A Chrome that failed for any
-other reason is said as it always was.
+other reason is said as it always was. On a host without the seccomp-bpf
+filter, where Chrome would start with half its sandbox, the self-test does
+not start its Chrome at all, as no sign-in does.
 """
 import sys
 import types
@@ -53,21 +55,39 @@ def run(monkeypatch):
 
 
 def test_a_host_without_user_namespaces_is_named_before_the_port(run):
-    rows = run(SUID, Sandbox("no", "no", "no-kernel"))
+    rows = run(SUID, Sandbox("no", "yes", "applied"))
     assert [(name, ok) for name, ok, _ in rows] == [("sandbox", False), ("browser", False)]
     detail = rows[0][2]
-    assert "no user namespaces and no seccomp-bpf filter" in detail
+    assert "no user namespaces, so Chrome's sandbox cannot start" in detail
     assert '"On Synology" in SERVER.md' in detail
+    assert "debugging port" in rows[1][2]
+
+
+@pytest.mark.parametrize("host", [Sandbox("no", "no", "no-kernel"), Sandbox("yes", "no", "none"),
+                                  Sandbox("yes", "no", "no-kernel"),
+                                  Sandbox("no", "no", "no-kernel", "yes")], ids=repr)
+def test_a_host_without_the_filter_starts_no_chrome_and_says_why(monkeypatch, host):
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: (_ for _ in ()).throw(AssertionError("attached"))
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+
+    def start_chrome(profile):
+        raise AssertionError("the self-test started Chrome on a host without seccomp-bpf")
+    monkeypatch.setattr(selftest, "start_chrome", start_chrome)
+    monkeypatch.setattr(host_sandbox, "check", lambda: host)
+    selftest.results.clear()
+    selftest.browser_checks()
+    rows = list(selftest.results)
+    selftest.results.clear()
+    assert rows == [("sandbox", False, host_sandbox.problem(host)),
+                    ("browser", False, "Chrome was not started, since it would run without "
+                                       "its whole sandbox")]
 
 
 def test_a_container_refused_them_is_pointed_at_its_profile(run):
     rows = run("", Sandbox("refused", "yes", "applied"))
     assert rows[0][0] == "sandbox" and "seccomp-chrome.json" in rows[0][2]
-
-
-def test_a_host_without_the_filter_is_named_too(run):
-    rows = run("", Sandbox("yes", "no", "no-kernel"))
-    assert rows[0][0] == "sandbox" and "no seccomp-bpf filter" in rows[0][2]
 
 
 def test_chromes_own_words_say_it_was_the_sandbox_when_the_host_check_found_nothing(run):

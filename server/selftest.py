@@ -11,8 +11,10 @@ every check held.
              namespaces) and the seccomp filter both on, which is what the
              container's security profile is for. When it does not, or
              Chrome stops before it opens a window, it says why, a host with
-             no user namespaces or no seccomp-bpf (paperpull_core.host_sandbox)
-  screen     a Chrome window opens on the virtual screen
+             no user namespaces or no seccomp-bpf (paperpull_core.host_sandbox).
+             On a host with no seccomp-bpf, where Chrome would start with
+             half its sandbox, Chrome is not started at all
+  screen    a Chrome window opens on the virtual screen
   print      a page prints to a PDF, the way every receipt app saves one
   panel      the panel answers, and with the PaperPull icon for the tab
   password   not signed in, the panel sends you to sign in, and its API and
@@ -84,6 +86,21 @@ def sandbox_problem() -> str:
         return ""
 
 
+def sandbox_refusal() -> str:
+    """Why Chrome is not started here at all, a host without the seccomp-bpf
+    filter, where it would run with half its sandbox, or "". The same check
+    every sign-in asks (paperpull_core.host_sandbox.refuses_chrome)."""
+    try:
+        core()
+        from paperpull_core import host_sandbox
+        found = host_sandbox.check()
+        if host_sandbox.refuses_chrome(found):
+            return host_sandbox.problem(found) or "This host cannot give Chrome its whole sandbox."
+    except Exception:
+        pass
+    return ""
+
+
 def sandbox_cause(said: str) -> str:
     """Why Chrome did not start, when its sandbox is why, or "". The host's
     own answer names the cause. Without one, Chrome's own words for a
@@ -127,6 +144,14 @@ def start_chrome(profile: Path) -> tuple[subprocess.Popen, str]:
 def browser_checks() -> None:
     from playwright.sync_api import sync_playwright
 
+    refusal = sandbox_refusal()
+    if refusal:
+        # Chrome would start here with half its sandbox, so it is not
+        # started, as no sign-in starts it.
+        check("sandbox", False, refusal)
+        check("browser", False, "Chrome was not started, since it would run without its "
+                                "whole sandbox")
+        return
     profile = Path(tempfile.mkdtemp(prefix="selftest-profile-"))
     proc = None
     try:
