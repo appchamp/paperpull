@@ -250,9 +250,15 @@ jobs:
           Write-Output ("installed: " + $pkg.PackageFullName + " version " + $pkg.Version)
           Write-Output ("install location: " + $pkg.InstallLocation)
           $want = python -c "import sys; sys.path.insert(0, 'packaging'); import build_windows; print(build_windows.PY_VERSION)"
-          $have = & (Join-Path $pkg.InstallLocation "python\python.exe") -c "import platform; print(platform.python_version())"
-          if ($have -ne $want) { throw "the installed package runs Python $have, and the build names $want" }
-          Write-Output "the installed package runs Python $have"
+          # A program inside WindowsApps starts only through the package, as
+          # PaperPull.exe does below, never by its path with its output read,
+          # so the installed interpreter is asked through its own DLL's version.
+          $dll = Get-ChildItem (Join-Path $pkg.InstallLocation "python") -Filter "python3*.dll" |
+            Where-Object { $_.Name -ne "python3.dll" } | Select-Object -First 1
+          if (-not $dll) { throw "the installed package has no python3XY.dll" }
+          $have = "$($dll.VersionInfo.ProductVersion)".Trim()
+          if ($have -ne $want) { throw "the installed package carries Python $have ($($dll.Name)), and the build names $want" }
+          Write-Output "the installed package carries Python $have"
           $env:PAPERPULL_PORT = "8790"
           $proc = Start-Process -FilePath (Join-Path $pkg.InstallLocation "PaperPull.exe") -PassThru
           $ok = $false
