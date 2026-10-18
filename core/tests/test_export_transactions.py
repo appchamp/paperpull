@@ -1265,3 +1265,45 @@ def test_a_statement_whose_font_gives_half_a_character_makes_both_spreadsheets(t
     prefixed = {b.value: d.quotePrefix for b, d in zip(_column(txns, "Balance"),
                                                          _column(txns, "Description"))}
     assert prefixed == {999.0: False, 998.0: False, 997.0: False, 996.0: True}
+
+
+def test_a_statement_refused_for_a_limit_is_named_and_read_again_by_the_next_export(
+        tmp_path, monkeypatch, capsys):
+    """pdfplumber read the archive in the export's own process, with nothing
+    to stop a PDF made to keep it busy or to fill the memory. It reads in
+    PaperPull's PDF reader now, held to PDF_SECONDS. A statement refused is
+    named with the limit it met and is not kept in the cache, so raising the
+    limit is all the next export needs to read it."""
+    import time
+    openpyxl = pytest.importorskip("openpyxl")
+    pytest.importorskip("pdfplumber")
+    from paperpull_core import intake, pdf_reader
+    import test_pdf_reader as made
+    monkeypatch.setattr(intake, "PDF_SECONDS", 1)
+    pdf_reader.stop()
+    pdf_reader.forget()
+    try:
+        index = _bank_folder(tmp_path, "Jane", "Checking")
+        (index.parent / "June Statement.pdf").write_bytes(made.stalling_pdf())
+        started = time.monotonic()
+        r = xt.export(tmp_path, log=lambda *_: None)
+        assert time.monotonic() - started < 15
+        assert (r["statements"], r["read"], r["transactions"]) == (1, 1, 0), r
+        assert "PDF_SECONDS" in capsys.readouterr().out
+        (row,) = openpyxl.load_workbook(r["path"])["Statements"].iter_rows(min_row=2,
+                                                                           values_only=True)
+        status = row[xt.STMT_COLUMNS.index("Status")]
+        assert status.startswith("The PDF took longer than 1 seconds to read"), status
+        assert "PDF_SECONDS in paperpull_core/intake.py is the limit" in status, status
+        cache = tmp_path / xt.CACHE_NAME
+        held = json.loads(cache.read_text("utf-8"))["files"] if cache.exists() else {}
+        assert not any("June Statement.pdf" in k for k in held), "a refusal was kept"
+        # The next export reads it again, and the run's memory refuses the
+        # same bytes at once.
+        again = time.monotonic()
+        r = xt.export(tmp_path, log=lambda *_: None)
+        assert (r["read"], r["cached"]) == (1, 0), r
+        assert time.monotonic() - again < 5
+    finally:
+        pdf_reader.stop()
+        pdf_reader.forget()

@@ -66,7 +66,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
 # Everything on its way into a diagnostic file goes through here.
-from paperpull_core import pdf_reader
+from paperpull_core import intake, pdf_reader
 from paperpull_core.redact import redact, set_private_words  # noqa: F401
 
 from paperpull_core.dates import checked as _checked_date
@@ -399,8 +399,11 @@ _API_JS = r"""async ([path, method, body, dsid, version, key]) => {
   if (r.type === 'opaqueredirect' || r.redirected) {
     return {status: r.status, redirected: true, failed: false, data: null};
   }
+  // A receipt is the invoice answer's own HTML, so every answer is read
+  // only up to the limit a document has (intake.evaluate), and a refusal is
+  // thrown on, never taken for an answer that was not JSON.
   let data = null;
-  try { data = await r.json(); } catch (e) { data = null; }
+  try { data = await ppJson(r); } catch (e) { if (ppRefused(e)) throw e; data = null; }
   return {status: r.status, redirected: false, failed: false, data};
 }"""
 
@@ -421,8 +424,8 @@ def api_call(page, path: str, body=None, dsid: str = "") -> dict:
         return {"status": 0, "redirected": False, "failed": True, "data": None}
     method = "GET" if body is None else "POST"
     try:
-        got = page.evaluate(_API_JS, [path, method, body, str(dsid or ""),
-                                      RAP_API_VERSION, TOKEN_KEY])
+        got = intake.evaluate(page, _API_JS, [path, method, body, str(dsid or ""),
+                                              RAP_API_VERSION, TOKEN_KEY])
     except Exception as e:
         log.info("A call to Report a Problem did not come back (%s)", type(e).__name__)
         return {"status": 0, "redirected": False, "failed": True, "data": None}

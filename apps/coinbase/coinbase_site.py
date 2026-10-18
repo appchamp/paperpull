@@ -764,7 +764,8 @@ def _get_json(page, url: str):
         log.warning("%s answered %s", redact(url.split("?")[0]), resp.status)
         return None
     try:
-        return whole_json(resp.json())
+        # Never copied into the run past the limit (intake.json_of).
+        return intake.json_of(resp)
     except Exception:
         return None
 

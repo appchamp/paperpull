@@ -1509,14 +1509,7 @@ def _catch_statement(page, run: Run, target: Target, out_path: Path,
     # of it is read or saved.
     def on_download(download):
         downloads.append(1)
-        try:
-            download.cancel()
-        except Exception:
-            pass
-        try:
-            download.delete()
-        except Exception:
-            pass
+        intake.discard(download)
 
     def on_page(p):
         if not armed[0]:

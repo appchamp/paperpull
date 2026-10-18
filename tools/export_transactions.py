@@ -56,7 +56,8 @@ _CORE = Path(__file__).resolve().parents[1] / "core"
 if (_CORE / "paperpull_core").is_dir() and str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
 try:
-    from paperpull_core.characters import whole_characters, whole_json  # noqa: E402
+    from paperpull_core import pdf_reader  # noqa: E402
+    from paperpull_core.characters import whole_json  # noqa: E402
     from paperpull_core.sheets import csv_value, keep_text, read_stored_row, xlsx_value  # noqa: E402
 except ImportError as e:
     raise ImportError("export_transactions.py needs PaperPull's core folder beside its tools folder") from e
@@ -811,18 +812,25 @@ def page_lines(text_lines: List[dict]) -> List[str]:
 
 
 def pdf_lines(path: Path) -> List[str]:
-    import logging
-    logging.getLogger("pdfminer").setLevel(logging.ERROR)
-    import pdfplumber
+    """A statement's lines, every page's, as pdfplumber reads them.
+
+    pdfplumber reads the PDF in PaperPull's PDF reader process and not here,
+    held to the time and memory a PDF is given (paperpull_core.pdf_reader),
+    since a PDF can be made to keep a reader busy for good or to fill the
+    memory, and pdfplumber bounds neither. A page's characters come back
+    only where they may be needed, on a page with enough lines of one or two
+    characters to be a scattered block (page_lines). Raises pdf_reader.Unread
+    when the PDF could not be read or was refused for a limit."""
     lines: List[str] = []
-    with pdfplumber.open(str(path)) as pdf:
-        for page in pdf.pages:
-            try:
-                lines.extend(whole_json(page_lines(page.extract_text_lines(
-                    layout=False, strip=True, return_chars=True))))
-            except Exception:
-                text = whole_characters(page.extract_text() or "")
-                lines.extend(text.splitlines())
+    for page in pdf_reader.plumbed(path, chars_when=SCATTER_MIN):
+        if "lines" not in page:
+            # pdfplumber could not read this page's lines, and gave its text.
+            lines.extend((page.get("text") or "").splitlines())
+            continue
+        try:
+            lines.extend(whole_json(page_lines(page["lines"])))
+        except Exception:
+            lines.extend(tl.get("text") or "" for tl in page["lines"])
     return [l for l in lines if l.strip()]
 
 
@@ -962,13 +970,21 @@ def export(root: Path, out: Optional[Path] = None, provider: Optional[str] = Non
                 continue
             parsed = cache.get(p)
             if parsed is None:
+                refused = False
                 try:
                     parsed = parse_statement(pdf_lines(p), (row.get("Document Date") or "").strip() or None)
                 except Exception as e:
+                    # A PDF refused for a limit is said in full, since its
+                    # words name the limit, and is read again by the next
+                    # export rather than kept, so raising the limit is
+                    # enough to have it read.
+                    refused = getattr(e, "kind", "") == pdf_reader.OVER_LIMIT
+                    said = (str(e) if refused else
+                            "could not read, %s" % (str(e).splitlines() or [""])[0][:80])
                     parsed = {"period_start": None, "period_end": None, "beginning": None, "ending": None,
-                              "transactions": [], "status": "could not read, %s" % str(e).splitlines()[0][:80],
-                              "sum": 0.0}
-                cache.put(p, parsed)
+                              "transactions": [], "status": said, "sum": 0.0}
+                if not refused:
+                    cache.put(p, parsed)
                 read += 1
                 if read % 25 == 0:
                     log(f"  read {read} statement(s)...")

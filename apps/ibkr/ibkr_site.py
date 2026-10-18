@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from paperpull_core import pressing
+from paperpull_core import intake, pressing
 from paperpull_core.words import words_for as _words_for
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import last_day as _last_day
@@ -820,7 +820,9 @@ def download_document(page, account_id: str, doc_type: str, title: str,
         dl = dl_info.value
         began = True
         try:
-            failed = dl.failure() or ""
+            # Within the time a download is given, and cancelled past it
+            # (intake.failure).
+            failed = intake.failure(dl, page)
         except Exception as e:
             failed = str(e).splitlines()[0][:70] if str(e) else type(e).__name__
     except pressing.Stop:

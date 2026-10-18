@@ -6,9 +6,11 @@ it busy for as long as it likes or to fill the memory, a page tree that
 refers back to itself, a stream that unpacks to gigabytes, a cross
 reference table that has to be rebuilt object by object. pypdf 6 bounds
 some of these and older ones bound none, and an install keeps whatever
-pypdf it was set up with. A thread cannot be stopped from outside in
-Python, so the reading happens in a worker process, and the worker is
-stopped when it passes intake.PDF_SECONDS or intake.PDF_MEMORY_BYTES.
+pypdf it was set up with. pdfplumber, which the transactions export reads
+statements with, bounds none of them either (plumbed). A thread cannot be
+stopped from outside in Python, so the reading happens in a worker
+process, and the worker is stopped when it passes intake.PDF_SECONDS or
+intake.PDF_MEMORY_BYTES.
 
 One worker serves the whole run and is started the first time a PDF is
 read, so a document costs a round trip to it rather than a new Python. It
@@ -87,30 +89,41 @@ class Unread(Exception):
 ALL = None
 
 
+def _source(source):
+    """(path, bytes, size) of a PDF handed over as a path or as its bytes."""
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        data = bytes(source)
+        return None, data, len(data)
+    # Absolute, since the worker runs in a folder of its own and an app
+    # hands over a path from its output folder as it was set.
+    path = os.path.abspath(os.fspath(source))
+    return path, None, intake.size_of(path)
+
+
+def _asked(job: dict, source):
+    """The worker's answer to `job` over a PDF, or the sentence refusing it
+    for a limit, said and remembered for the run as read() does."""
+    path, data, size = _source(source)
+    if size > intake.DOCUMENT_BYTES:
+        return None, _said_size(size)
+    digest = _digest(data, path)
+    if digest is not None and digest in _REFUSED:
+        return None, _REFUSED[digest]
+    answer = _ask(job, path, data)
+    over = answer.get("over_limit") or ""
+    if over and digest is not None and answer.get("remember", True):
+        _REFUSED[digest] = over
+    return answer, over
+
+
 def read(source, *, text_pages: Optional[int] = 0, layout: bool = False) -> Read:
     """Open a PDF, a path or its bytes, count its pages and, when asked,
     read the text of the first `text_pages` of them (ALL for every page, 0
     for none). With `layout`, each page is read in pypdf's layout mode and,
     when that fails, the plain way. Never raises."""
-    data = path = None
-    if isinstance(source, (bytes, bytearray, memoryview)):
-        data = bytes(source)
-        size = len(data)
-    else:
-        # Absolute, since the worker runs in a folder of its own and an
-        # app hands over a path from its output folder as it was set.
-        path = os.path.abspath(os.fspath(source))
-        size = intake.size_of(path)
-    if size > intake.DOCUMENT_BYTES:
-        return _refused(_said_size(size))
-    digest = _digest(data, path)
-    if digest is not None and digest in _REFUSED:
-        return _refused(_REFUSED[digest])
-    answer = _ask({"op": "read", "text_pages": text_pages, "layout": bool(layout)}, path, data)
-    over = answer.get("over_limit") or ""
+    answer, over = _asked({"op": "read", "text_pages": text_pages, "layout": bool(layout)},
+                          source)
     if over:
-        if digest is not None and answer.get("remember", True):
-            _REFUSED[digest] = over
         return _refused(over)
     return Read(opened=bool(answer.get("opened")), pages=int(answer.get("pages") or 0),
                 texts=tuple(answer.get("texts") or ()), text_error=answer.get("text_error") or "",
@@ -138,6 +151,26 @@ def page_texts(source, pages: Optional[int] = ALL, *, layout: bool = False) -> l
     if got.text_error:
         raise Unread(got.text_error, got.kind)
     return list(got.texts)
+
+
+def plumbed(source, *, chars_when: int = 0) -> list:
+    """Every page of a PDF, a path or its bytes, as pdfplumber reads its
+    lines, read in the worker and held to its limits like any other read.
+
+    A page is {"lines": [...]}, each line its text and its top, and each
+    also its characters (x0, x1, top, size, height and text) on a page with
+    at least `chars_when` lines of one or two characters, where a caller may
+    rebuild a block pdfplumber scattered. A page whose lines pdfplumber
+    could not read is {"text": ...}, its text read the plain way. Raises
+    Unread where the PDF did not open or was refused for a limit."""
+    answer, over = _asked({"op": "plumber", "chars_when": int(chars_when or 0)}, source)
+    if over:
+        _refused(over)
+        raise Unread(over, OVER_LIMIT)
+    if not answer.get("opened"):
+        raise Unread(answer.get("error") or "the PDF could not be opened",
+                     answer.get("error_kind") or "")
+    return list(answer.get("plumbed") or ())
 
 
 def trim_blank_tail(path) -> int:
@@ -738,6 +771,8 @@ class _Watch:
 def _do(job: dict, data: Optional[bytes]) -> dict:
     """One job, in whichever process reads PDFs. Every failure of pypdf's is
     an answer, never an exception, except running out of memory."""
+    if job.get("op") == "plumber":
+        return _plumb(job, data)
     try:
         from pypdf import PdfReader
     except Exception as e:
@@ -823,3 +858,89 @@ def _trim(reader, total: int, path: str) -> dict:
 
 
 TRIMMING = ".trimming"
+
+
+# What plumbed() hands back of each character pdfplumber read.
+_CHAR_KEYS = ("x0", "x1", "top", "size", "height", "text")
+
+
+def _plumb(job: dict, data: Optional[bytes]) -> dict:
+    """Every page's lines as pdfplumber reads them, the way the transactions
+    export read them in its own process before (plumbed). Every failure is
+    an answer, except running out of memory."""
+    try:
+        logging.getLogger("pdfminer").setLevel(logging.ERROR)
+        import pdfplumber
+    except Exception as e:
+        return {"opened": False, "error": "%s" % e, "error_kind": type(e).__name__}
+    import io
+    source = io.BytesIO(data) if data is not None else str(job.get("path") or "")
+    chars_when = int(job.get("chars_when") or 0)
+    pages = []
+    try:
+        with pdfplumber.open(source) as pdf:
+            for page in pdf.pages:
+                try:
+                    # Made whole where pdfplumber hands it over (characters.py).
+                    lines = whole_json(_lines(page.extract_text_lines(
+                        layout=False, strip=True, return_chars=True), chars_when))
+                except Exception as e:
+                    if _out_of_memory(e):
+                        raise MemoryError from None
+                    pages.append({"text": whole_characters(page.extract_text() or "")})
+                    continue
+                pages.append({"lines": lines})
+    except Exception as e:
+        if _out_of_memory(e):
+            raise MemoryError from None
+        return {"opened": False, "error": ("%s" % e) or type(e).__name__,
+                "error_kind": type(e).__name__}
+    return {"opened": True, "pages": len(pages), "plumbed": pages}
+
+
+def _out_of_memory(error) -> bool:
+    """Whether an error is running out of memory, which pdfplumber hands on
+    inside a PdfminerException of its own (pdfplumber 0.11.10, page.py)."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, MemoryError):
+            return True
+        seen.add(id(error))
+        inner = [a for a in getattr(error, "args", ()) if isinstance(a, BaseException)]
+        error = error.__cause__ or error.__context__ or (inner[0] if inner else None)
+    return False
+
+
+def _lines(found: list, chars_when: int) -> list:
+    """pdfplumber's lines of a page with what plumbed() hands back of each,
+    and their characters on a page with at least `chars_when` lines of one
+    or two characters."""
+    short = sum(1 for tl in found if len((tl.get("text") or "").strip()) <= 2)
+    keep = bool(chars_when) and short >= chars_when
+    return [_line(tl, keep) for tl in found]
+
+
+def _line(found: dict, chars: bool) -> dict:
+    out = {"text": found.get("text") or "", "top": float(found.get("top") or 0.0)}
+    if not chars:
+        return out
+    kept: list = []
+    for c in found.get("chars") or ():
+        one = {k: (c[k] if k == "text" else float(c[k] or 0.0)) for k in _CHAR_KEYS if k in c}
+        text = one.get("text") or ""
+        if kept and _half(text, 0xDC00) and _half(kept[-1].get("text") or "", 0xD800):
+            # The two halves of one character, read as two characters, are
+            # kept as one, so they are made whole together into what they
+            # make, as the line's own text is, and not each into U+FFFD.
+            kept[-1]["text"] += text
+            kept[-1]["x1"] = one.get("x1", kept[-1].get("x1", 0.0))
+            continue
+        kept.append(one)
+    out["chars"] = kept
+    return out
+
+
+def _half(text: str, first: int) -> bool:
+    """Whether text is one half of a surrogate pair, the high half for
+    0xD800 and the low half for 0xDC00."""
+    return len(text) == 1 and first <= ord(text) <= first + 0x3FF

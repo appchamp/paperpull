@@ -215,9 +215,6 @@ class _Armed:
         self.is_safe_url = is_safe_url or (lambda u: False)
         self.body = b""
         self.download = None
-        # What the download's own file came to once it finished, its path,
-        # or "" when it failed. Missing while it is still arriving.
-        self.finished: dict = {}
         # Whether an answer read in flight was larger than a document may be.
         self.too_large = False
         self.new_pages: list = []
@@ -288,14 +285,14 @@ class _Armed:
             self.download = download
         except Exception:
             return
-        # Waited for here, in the listener's own fiber, so the capture can
-        # give up on a download that never finishes and cancel it, rather
-        # than wait in save_as for as long as the provider keeps sending
-        # (intake.waits_for, Meijer's way since #42).
+        # Followed from now, in a fiber of its own, so the capture can give
+        # up on a download that never finishes and cancel it (intake.finish).
+        # Not waited for here, where it held up every listener after this
+        # one, pressing's ear for what a press brought among them.
         try:
-            self.finished[id(download)] = download.path() or ""
+            intake.follow(download)
         except Exception:
-            self.finished[id(download)] = ""
+            pass
 
     def _on_page(self, page):
         try:
@@ -746,32 +743,15 @@ def _read_race(page, watch, staged: Path, is_safe_url, request, rejected):
 def _finished_in_bounds(page, watch) -> bool:
     """Whether the download the press started finished in time, and did not
     grow past the limit while it arrived. One that did not is cancelled
-    (intake.waits_for). Its size once finished is measured as it is saved
+    (intake.finish). Its size once finished is measured as it is saved
     (intake.save_download_as)."""
-    return intake.waits_for(watch.download, page,
-                            finished=lambda d: id(d) in watch.finished,
-                            partial=lambda: _growing(watch))
+    return intake.finish(watch.download, page, partial=lambda: _growing(watch))
 
 
 def _growing(watch) -> list:
     """The files the browser is writing in the watched folder that were not
-    there, or have changed, since the press. A file another capture left
-    behind is not this download."""
-    if not watch.dl_dir:
-        return []
-    stamps = getattr(watch.before, "stamps", None) or {}
-    out = []
-    for path in intake.partials(watch.dl_dir):
-        name = path.name
-        if name not in watch.before:
-            out.append(path)
-            continue
-        try:
-            if name in stamps and capture._stamp(path) != stamps[name]:
-                out.append(path)
-        except OSError:
-            pass
-    return out
+    there, or have changed, since the press (capture.growing)."""
+    return capture.growing(watch.dl_dir, watch.before)
 
 
 def _order(hints) -> list:

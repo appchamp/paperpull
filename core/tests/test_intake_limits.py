@@ -15,6 +15,7 @@ it refuses.
 """
 import base64
 import io
+import socket
 import struct
 import sys
 import threading
@@ -459,9 +460,11 @@ def server():
     """A provider that can answer with anything, any size, at any speed.
 
     /                      a page with a link to /doc
-    /doc?n=&length=&d=&slow=&forever=&tag=
+    /doc?n=&length=&d=&slow=&forever=&stop=&tag=
         n bytes of a PDF, with a declared length or chunked, as an
-        attachment or inline, a piece every `slow` ms, or without end
+        attachment or inline, a piece every `slow` ms, or without end,
+        cut off unfinished after `stop` seconds when given, so a test
+        whose guard is broken fails then rather than waiting for ever
     """
     sent = Sent()
 
@@ -482,11 +485,20 @@ def server():
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if self.headers.get("Range"):
+                # Chromium asks again from where a cut-off download stopped.
+                # Refused, so a test whose guard is broken fails at the cut.
+                self.send_response(410)
+                self.send_header("content-length", "0")
+                self.end_headers()
+                return
             n = int(q.get("n", "0"))
             chunked = q.get("length") == "0"
             forever = q.get("forever") == "1"
             slow = int(q.get("slow", "0")) / 1000.0
+            stop = float(q.get("stop", "0"))
             tag = q.get("tag", "")
+            began = time.monotonic()
             self.send_response(200)
             self.send_header("content-type", "application/pdf")
             if q.get("d"):
@@ -500,6 +512,9 @@ def server():
             done = 0
             try:
                 while forever or done < n:
+                    if stop and time.monotonic() - began > stop:
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                        return
                     part = piece if forever else piece[:min(len(piece), n - done)]
                     if chunked or forever:
                         self.wfile.write(b"%x\r\n" % len(part) + part + b"\r\n")
@@ -649,7 +664,7 @@ def test_a_download_that_never_ends_is_cancelled_in_time(page, server, tmp_path,
                                                          capsys):
     monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 3)
     base, _ = server
-    page.goto(base + "/?d=attachment&forever=1&slow=200")
+    page.goto(base + "/?d=attachment&forever=1&slow=200&stop=25")
     out = tmp_path / "Statement.pdf"
     started = time.monotonic()
     got = delivery.deliver(page, delivery.DocumentRequest(trigger=lambda: page.click("#go")),
@@ -673,6 +688,275 @@ def test_a_download_saved_by_an_app_never_writes_over_what_is_there(page, server
         receipt_pdf.save_download(dl.value, out)
     assert out.read_bytes() == b"the document already here"
     assert left_in(tmp_path) == ["Statement.pdf"]
+
+
+# -- a download an app waits for itself ----------------------------------------------
+#
+# Download.path(), save_as(), failure() and delete() each wait in Playwright
+# until the download has finished. An app that waited with expect_download,
+# or heard the download with a listener of its own, then saved it, waited
+# there for as long as the provider kept sending. The server cuts these off
+# after 25 seconds, so a broken guard fails the test then.
+
+FOREVER = "/?d=attachment&forever=1&slow=200&stop=25&tag=%s"
+
+
+def _sending_stopped(sent, tag) -> bool:
+    """Whether the server stopped sending the download, which it does once
+    the browser lets go of it. A piece or two may still be on its way."""
+    time.sleep(1.0)
+    first = sent.bytes.get(tag, 0)
+    time.sleep(1.5)
+    return sent.bytes.get(tag, 0) == first
+
+
+def _heard(page) -> list:
+    """Downloads heard by a listener of the app's own that only keeps them,
+    as AmFam's, AAFMAA's and twenty others' do."""
+    heard = []
+
+    def on_download(d):
+        heard.append(d)
+    page.on("download", on_download)
+    return heard
+
+
+def _wait_until(page, ready, ms=10000):
+    for _ in range(ms // 100):
+        if ready():
+            return
+        page.wait_for_timeout(100)
+    raise AssertionError("never came")
+
+
+def test_a_download_an_app_waited_for_that_never_ends_is_cancelled_in_time(
+        page, server, tmp_path, monkeypatch, capsys):
+    """Ally's, Chase's, US Bank's and PG&E's way. expect_download, then
+    intake.save_download_as."""
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 3)
+    base, sent = server
+    page.goto(base + FOREVER % "waited")
+    out = tmp_path / "Statement.pdf"
+    out.write_bytes(b"the document already here")
+    with page.expect_download(timeout=10000) as dl:
+        page.click("#go")
+    started = time.monotonic()
+    with pytest.raises(intake.TooSlow) as refused:
+        intake.save_download_as(dl.value, out)
+    assert time.monotonic() - started < 12
+    said = capsys.readouterr().out
+    assert "did not finish in 3 seconds" in said and "DOWNLOAD_SECONDS" in said
+    assert "DOWNLOAD_SECONDS in paperpull_core/intake.py" in str(refused.value)
+    # Caught wherever a refusal for size is.
+    assert isinstance(refused.value, intake.TooLarge)
+    assert out.read_bytes() == b"the document already here"
+    assert left_in(tmp_path) == ["Statement.pdf"], "a saving file was left"
+    assert _sending_stopped(sent, "waited"), "the download was left running"
+    # Saved again, Target's and Wealthfront's way, it is refused at once
+    # and said no more.
+    again = time.monotonic()
+    with pytest.raises(intake.TooSlow):
+        receipt_pdf.save_download(dl.value, out)
+    assert time.monotonic() - again < 2
+    assert "did not finish" not in capsys.readouterr().out
+    assert out.read_bytes() == b"the document already here"
+
+
+def test_a_download_heard_by_an_apps_own_listener_is_cancelled_in_time(
+        page, server, tmp_path, monkeypatch):
+    """AmFam's way and twenty others'. A listener keeps the download, and
+    capture.take_download saves it."""
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 3)
+    base, sent = server
+    page.goto(base + FOREVER % "heard")
+    heard = _heard(page)
+    page.click("#go")
+    _wait_until(page, lambda: heard)
+    out = tmp_path / "out" / "Statement.pdf"
+    started = time.monotonic()
+    assert capture.take_download(heard[0], None, capture.snapshot(None), out) == ""
+    assert time.monotonic() - started < 12
+    assert not out.exists()
+    assert _sending_stopped(sent, "heard"), "the download was left running"
+
+
+def test_why_a_download_failed_is_answered_in_time(page, server, monkeypatch):
+    """Interactive Brokers' and Vanguard's way, which ask why it failed."""
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 3)
+    base, sent = server
+    page.goto(base + FOREVER % "failure")
+    with page.expect_download(timeout=10000) as dl:
+        page.click("#go")
+    started = time.monotonic()
+    assert intake.failure(dl.value, page).startswith(
+        "The download for this document did not finish in 3 seconds, so it was cancelled.")
+    assert time.monotonic() - started < 12
+    assert _sending_stopped(sent, "failure"), "the download was left running"
+
+
+def test_a_download_nobody_wants_is_discarded_at_once(page, server):
+    """Bilt's, Simmons', Spectrum's and Alpaca's way, a download a press
+    started that the app does not take."""
+    base, sent = server
+    page.goto(base + FOREVER % "unwanted")
+    with page.expect_download(timeout=10000) as dl:
+        page.click("#go")
+    started = time.monotonic()
+    intake.discard(dl.value)
+    assert time.monotonic() - started < 5
+    assert _sending_stopped(sent, "unwanted"), "the download was left running"
+
+
+def test_a_download_that_finishes_is_saved_whole_and_soon(page, server, tmp_path, monkeypatch):
+    """A correct document is never lost to the wait. One that has finished
+    costs a moment, not a quarter second, and a slow one inside the time is
+    saved whole."""
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 10)
+    base, _ = server
+    page.goto(base + "/?d=attachment&n=%d" % (512 * 1024))
+    with page.expect_download(timeout=10000) as dl:
+        page.click("#go")
+    page.wait_for_timeout(500)
+    out = tmp_path / "Statement.pdf"
+    started = time.monotonic()
+    intake.save_download_as(dl.value, out)
+    assert time.monotonic() - started < 1
+    assert out.stat().st_size == 512 * 1024 and out.read_bytes()[:5] == b"%PDF-"
+    page.goto(base + "/?d=attachment&slow=50&n=%d" % (2 * MiB))
+    with page.expect_download(timeout=10000) as dl:
+        page.click("#go")
+    slow = tmp_path / "Slow.pdf"
+    intake.save_download_as(dl.value, slow)
+    assert slow.stat().st_size == 2 * MiB
+    assert intake.failure(dl.value) == ""
+    assert left_in(tmp_path) == ["Slow.pdf", "Statement.pdf"]
+
+
+def test_a_download_whose_tab_closed_is_still_waited_for(page, server, tmp_path, monkeypatch):
+    """A press can open a tab that only starts the download and closes. The
+    wait goes on on another page of the browser rather than ending with
+    that tab, which would refuse a document that was arriving."""
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 10)
+    base, _ = server
+    with page.context.expect_page(timeout=10000) as opened:
+        page.evaluate("(u) => { window.open(u); }",
+                      base + "/?d=attachment&slow=100&n=%d" % MiB)
+    tab = opened.value
+    tab.wait_for_load_state()
+    with tab.expect_download(timeout=10000) as dl:
+        tab.click("#go")
+    tab.close()
+    assert dl.value.page is tab and tab.is_closed()
+    out = tmp_path / "Statement.pdf"
+    intake.save_download_as(dl.value, out)
+    assert out.stat().st_size == MiB
+
+
+def test_delivery_holds_up_no_listener_after_its_own(page, server):
+    """Delivery waited for the download inside its own listener, and every
+    listener after it heard nothing until the download finished, pressing's
+    ear for what a press brought among them. It follows the download in a
+    fiber of its own now."""
+    base, sent = server
+    page.goto(base + FOREVER % "listeners")
+    after = []
+    with delivery._Armed(page, is_safe_url=guard(base)) as watch:
+        page.on("download", lambda d: after.append(d))
+        page.click("#go")
+        _wait_until(page, lambda: watch.download is not None)
+        _wait_until(page, lambda: after, ms=2000)
+    intake.discard(after[0])
+    assert _sending_stopped(sent, "listeners")
+
+
+def test_a_download_growing_past_the_limit_in_the_folder_is_cancelled_by_take_download(
+        driver, server, small, tmp_path):
+    """Pointed at a folder, as an app attached to a person's browser has
+    it, the download is refused while it arrives, as delivery's is."""
+    base, sent = server
+    dl_dir = tmp_path / "dl"
+    ctx = driver.chromium.launch_persistent_context(
+        str(tmp_path / "profile"), accept_downloads=True, args=ARGS)
+    try:
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        assert capture.set_download_dir(page, dl_dir)
+        page.goto(base + "/?d=attachment&tag=folder&slow=20&n=%d" % (40 * MiB))
+        before = capture.snapshot(dl_dir)
+        heard = _heard(page)
+        page.click("#go")
+        _wait_until(page, lambda: heard)
+        out = tmp_path / "out" / "Statement.pdf"
+        started = time.monotonic()
+        assert capture.take_download(heard[0], dl_dir, before, out) == ""
+        assert time.monotonic() - started < 30
+        assert not out.exists()
+    finally:
+        ctx.close()
+    assert sent.bytes.get("folder", 0) < 20 * MiB, sent.bytes
+
+
+# -- an answer read whole as text or JSON ---------------------------------------------
+
+def test_a_page_answer_larger_than_chromium_keeps_never_comes(page, server):
+    """The census of answers read whole (ANSWERS, test_every_intake_has_a_limit)
+    lets a listing in a page's own answer be read whole into the run, since
+    Chromium keeps the body of a page's answer only up to about 10 MB and
+    raises for a larger one rather than hand it over. Measured here, so the
+    reason stays true on the Chromium the suite runs."""
+    base, _ = server
+    heard = {}
+
+    def on_response(r):
+        if "/doc" in r.url:
+            heard[r.url] = r
+    page.on("response", on_response)
+    small = base + "/doc?tag=heard&n=%d" % MiB
+    large = base + "/doc?tag=heard&n=%d" % (30 * MiB)
+    for url in (small, large):
+        assert page.evaluate("async (u) => (await (await fetch(u)).arrayBuffer()).byteLength",
+                             url) > 0
+    _wait_until(page, lambda: len(heard) == 2)
+    assert len(heard[small].body()) == MiB
+    assert len(heard[small].text()) == MiB
+    for read in (heard[large].body, heard[large].text, heard[large].json):
+        with pytest.raises(Exception):
+            read()
+
+
+def test_an_answer_asked_through_the_session_is_read_as_text_only_within_the_limit(
+        page, server, small, monkeypatch, capsys):
+    """Amazon's, Coinbase's, Paylocity's, Stripe's and UKG's listings, asked
+    through the session, are read through intake.text_of and json_of, so one
+    whose length says it is over the limit is never copied into the run."""
+    from playwright.sync_api import APIResponse
+    base, _ = server
+    read = []
+    real = APIResponse.body
+    monkeypatch.setattr(APIResponse, "body", lambda self: read.append(1) or real(self))
+    with pytest.raises(intake.TooLarge):
+        intake.text_of(page.context.request.get(base + "/doc?n=%d" % (3 * MiB)))
+    assert read == [], "the body came into this process although its length said no"
+    assert "PaperPull takes in" in capsys.readouterr().out
+    with pytest.raises(intake.TooLarge):
+        intake.json_of(page.context.request.get(base + "/doc?length=0&n=%d" % (3 * MiB)))
+    assert intake.text_of(page.context.request.get(base + "/doc?n=1000"))[:5] == "%PDF-"
+
+
+def test_a_document_read_as_text_in_the_page_stops_at_the_limit(page, server, small):
+    """Affirm's agreement, Apple's receipt, Anthem's letters and NetBenefits'
+    statement come as text or JSON read in the page, through ppText and
+    ppJson, which stop reading at the limit."""
+    base, sent = server
+    text = "async (u) => { const r = await fetch(u); return (await ppText(r)).length; }"
+    with pytest.raises(intake.TooLarge):
+        intake.evaluate(page, text, base + "/doc?length=0&tag=astext&n=%d" % (20 * MiB))
+    assert sent.bytes.get("astext", 0) < 10 * MiB, sent.bytes
+    assert intake.evaluate(page, text, base + "/doc?n=5000") == 5000
+    parse = ("async (u) => { const r = await fetch(u); "
+             "try { return await ppJson(r); } catch (e) { if (ppRefused(e)) throw e; return 'not json'; } }")
+    with pytest.raises(intake.TooLarge):
+        intake.evaluate(page, parse, base + "/doc?n=%d" % (3 * MiB))
+    assert intake.evaluate(page, parse, base + "/doc?n=5000") == "not json"
 
 
 def test_a_page_printed_larger_than_a_document_may_be_is_not_written(browser, tmp_path,

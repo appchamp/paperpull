@@ -48,7 +48,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from paperpull_core import pressing
+from paperpull_core import intake, pressing
 from paperpull_core.words import words_for as _words_for
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.dates import checked as _checked_date
@@ -698,7 +698,9 @@ def download_document(page, account_id: str, charitable: bool,
         dl = dl_info.value
         began = True
         try:
-            failed = dl.failure() or ""   # returns once the download has finished
+            # Once the download has finished, within the time a download is
+            # given, and cancelled past it (intake.failure).
+            failed = intake.failure(dl, page)
         except Exception as e:
             failed = str(e).splitlines()[0][:70] if str(e) else type(e).__name__
     except pressing.TurnedOff:

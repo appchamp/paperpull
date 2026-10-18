@@ -1195,7 +1195,9 @@ _LETTERS_LIST_JS = r"""async () => {
   const r = await fetch(u, {headers: Object.assign({'Accept':'application/json'}, h)});
   if (r.status === 401 || r.status === 403) return {status: r.status};
   if (!r.ok) return {status: r.status};
-  const j = await r.json();
+  // Each message's body is the letter itself, so the list is read only up
+  // to the limit a document has (intake.evaluate).
+  const j = await ppJson(r);
   return {status: 200, messages: (j.messages || [])};
 }"""
 
@@ -1286,20 +1288,22 @@ def _prime_bucket(page, target: str, bucket: str, needs_member: bool = False) ->
 
 
 def _prime_and_fetch(page, target: str, bucket: str, js: str, what: str,
-                     needs_member: bool = False) -> Optional[dict]:
+                     needs_member: bool = False, evaluate=None) -> Optional[dict]:
     """Shared front half of the three list_* collectors: confirm the tab is on
     Anthem, capture the surface's session bearer, run its in-page listing GET,
     and interpret the status. Returns the validated response dict, None when
     there is nothing to list (not on Anthem, or a non-200), and raises
     SessionExpired when the session is no longer valid. The per-surface row
-    parsing stays in each collector, where the surfaces genuinely differ."""
+    parsing stays in each collector, where the surfaces genuinely differ.
+    `evaluate` runs the listing in place of `js`, for one that carries the
+    documents themselves and is read through intake.evaluate."""
     if not is_anthem_owned_page(page):
         log.warning("The open tab is not on Anthem; sign in and open the portal.")
         return None
     if not _prime_bucket(page, target, bucket, needs_member=needs_member):
         raise SessionExpired(f"could not capture Anthem's session for {what}")
     try:
-        res = page.evaluate(js) or {}
+        res = (evaluate() if evaluate is not None else page.evaluate(js)) or {}
     except Exception as e:
         # A timeout or a page that went away mid-listing must not read as "no
         # documents"; stop the surface loudly.
@@ -1517,8 +1521,8 @@ def list_letters(page) -> List[dict]:
     Fetched by the securemessage API from the captured session; no message is
     opened and no read flag is changed."""
     rows: List[dict] = []
-    res = _prime_and_fetch(page, DOCUMENTS_URL, "ms", _LETTERS_LIST_JS,
-                           "message", needs_member=True)
+    res = _prime_and_fetch(page, DOCUMENTS_URL, "ms", "", "message", needs_member=True,
+                           evaluate=lambda: intake.evaluate(page, _LETTERS_LIST_JS))
     if res is None:
         return rows
     for m in parse_letters(res.get("messages") or []):

@@ -182,6 +182,38 @@ All notable changes to PaperPull are recorded here. Versioning follows
   the same run. A refusal never deletes or writes over a document already
   in the archive. The limits are in one place, paperpull_core/intake.py,
   and every refusal names the one it met and says it is raised there.
+- **A download an app waits for itself is cancelled after five minutes as
+  well.** Only a download caught by the core's delivery was given a time.
+  An app that waited for its own, Ally, Chase, U.S. Bank, PG&E, AAFMAA,
+  Target, Wealthfront and about twenty more, waited for as long as the
+  provider kept sending, since saving a download, asking why it failed and
+  deleting it each wait for it to finish. Each now waits five minutes at
+  most, and a download that has not finished by then is cancelled and
+  refused, saying so and naming DOWNLOAD_SECONDS. A download the browser
+  writes into a download folder is cancelled as soon as it grows past
+  100 MB there, as delivery's was. A tab that started a download and
+  closed does not end the wait, and the wait no longer holds up anything
+  else listening on the page, the check of what a press brought among
+  them.
+- **The transactions export reads statements within the limits.** It read
+  every PDF in the archive with pdfplumber in its own process, with
+  nothing to stop a PDF made to keep it busy or fill the memory. Measured,
+  a PDF of 70 KB kept pdfplumber reading for almost two minutes before it
+  passed 700 MB, and one of 139 KB was still reading after five. Each
+  statement is now read in PaperPull's PDF reader process, held to two
+  minutes and 1 GB like every other PDF. A statement refused for a limit
+  says so in its row of the Statements sheet, naming the limit, and the
+  next export reads it again.
+- **A document that comes as text or JSON is taken in only up to the
+  limit.** Affirm's loan agreements, Apple's receipts, Anthem's letters
+  and NetBenefits' statements arrive as HTML or JSON that the app prints,
+  and they were read whole. They are now read inside the page a piece at a
+  time and stop at 100 MB like any other document. The lists Amazon,
+  Coinbase, Paylocity, Stripe and UKG ask for through the session are read
+  through the same limit, and refused unread when their length says they
+  are over it. Every other place an answer is read whole as text or JSON
+  holds a list, and each is named in a test with what bounds it, so a new
+  one is looked at before it ships.
 - **Best Buy and M&T press their year controls only when the control reads
   as one, and M&T never calls a list whole with a year left closed.** Best
   Buy's year menu and the year in it were pressed without a guard of their

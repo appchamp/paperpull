@@ -102,6 +102,7 @@ from paperpull_core.redact import private_words
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.api_census import shape_of as _shape
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core import intake
 from paperpull_core.characters import whole_json
 
 log = logging.getLogger("netbenefits_docs.site")
@@ -338,7 +339,7 @@ _MAKE_JS = """async ({tokenPath, statementPath, dateRange, want}) => {
     tr = await fetch(tokenPath, {credentials: 'include', headers: {'Accept': 'application/json'}, redirect: 'error'});
   } catch (e) { return {status: 0, stage: 'token', refused: true}; }
   if (tr.status !== 200) return {status: tr.status, stage: 'token'};
-  const tj = await tr.json();
+  const tj = await ppJson(tr);
   const body = new URLSearchParams({txntoken: tj.txnTokenValue || '', sodReqIndicator: 'HACK',
                                     dateRange: dateRange, ytdDateRange: '', sodPreview: 'N', consentReq: 'N'});
   let r;
@@ -346,7 +347,9 @@ _MAKE_JS = """async ({tokenPath, statementPath, dateRange, want}) => {
     r = await fetch(statementPath, {method: 'POST', credentials: 'include', redirect: 'error',
                     headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body.toString()});
   } catch (e) { return {status: 0, stage: 'statement', refused: true}; }
-  const html = await r.text();
+  // The statement is this page, so it is read only up to the limit a
+  // document has (intake.evaluate).
+  const html = await ppText(r);
   const title = (html.match(/<title>([^<]*)<\\/title>/i) || [, ''])[1].trim();
   const period = (html.match(/Statement Period:\\s*([0-9\\/]+\\s+to\\s+[0-9\\/]+)/) || [, ''])[1];
   // The plan's name is the first Header cell of the statement itself
@@ -425,7 +428,7 @@ def make_statement(page, date_range: str, want_html: bool = False) -> dict:
     args = {"tokenPath": TOKEN_PATH, "statementPath": STATEMENT_PATH,
             "dateRange": date_range, "want": "html" if want_html else ""}
     try:
-        res = page.evaluate(_MAKE_JS, args)
+        res = intake.evaluate(page, _MAKE_JS, args)
     except Exception as e:
         # The site moves its own tab around (to the plan summary, to a
         # timeout page) without being asked. If that happened mid-call,
@@ -437,7 +440,7 @@ def make_statement(page, date_range: str, want_html: bool = False) -> dict:
         _keep_awake(page)
         if not on_documents_page(page):
             raise SessionExpired("the Statements page did not come back, sign in again")
-        res = page.evaluate(_MAKE_JS, args)
+        res = intake.evaluate(page, _MAKE_JS, args)
     status = res.get("status")
     if res.get("refused") is True:
         # Signed out only when the page says so or the session's own token
@@ -981,7 +984,12 @@ def collect_documents(page, keep=None, config: Optional[dict] = None) -> List[di
     for p in periods(kind):
         if keep is not None and not keep(p["date"][:4]):
             continue
-        res = make_statement(page, p["range"])
+        try:
+            res = make_statement(page, p["range"])
+        except intake.TooLarge:
+            # Said already. Not listed this run, and asked for again on the
+            # next, as any document refused for a limit is.
+            continue
         if res.get("isStatement"):
             found_any = True
             rows.append({"title": p["title"], "date": p["date"], "period_start": p["start"],
@@ -1022,6 +1030,8 @@ def download_document(page, title: str, date: str, out_path: Path, occurrence: i
     except PlanDidNotOpen as e:
         log.warning("%s %s: the plan %s did not open again (%s)", title, date,
                     (plan or {}).get("label"), e.reason)
+        return False
+    except intake.TooLarge:
         return False
     if not res.get("isStatement"):
         log.warning("%s %s: the site made no statement (%s)", title, date, res.get("title"))
