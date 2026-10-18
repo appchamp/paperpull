@@ -138,10 +138,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
   container's log whether this host can give Chrome its sandbox, and why
   not. The panel shows the reason at the top of every page, the
   self-test's sandbox line names it, and a sign-in says it at once. A
-  container whose security profile was left out is told to check it. The
-  sandbox is never turned off. SERVER.md has a new On Synology section,
-  with a Debian 12 virtual machine or the desktop app as the ways that
-  work. Thanks to @akcamperdude for the report.
+  container whose security profile was left out is told to check it. Of
+  what Chrome writes, only the first 64 kB is kept for that, however many
+  days its sign-in window stays open. The sandbox is never turned off.
+  SERVER.md has a new On Synology section, with a Debian 12 virtual
+  machine or the desktop app as the ways that work. Thanks to
+  @akcamperdude for the report.
 
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed

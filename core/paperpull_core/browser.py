@@ -982,11 +982,14 @@ def _launch(exe: str, name: str, profile_dir, port: str,
     # Nothing of it is shown or kept. A Chromium that starts goes on writing
     # there until it closes, and the file goes with it. Their own browsers,
     # and the bundled one on every other system, still write to nowhere.
-    # PaperPull Server's Chrome writes there too, since a host that cannot
-    # give it its sandbox stops it the same way (#110).
+    # PaperPull Server's Chrome is stopped the same way by a host that cannot
+    # give it its sandbox (#110), but its sign-in windows stay open for days,
+    # so what it writes is kept to its start (_KeptStart).
     on_server = os.environ.get("PAPERPULL_SERVER") == "1"
     said = None
-    if on_server or (name == CHROMIUM and sys.platform not in ("win32", "darwin")):
+    if on_server:
+        said = _KeptStart.begin()
+    elif name == CHROMIUM and sys.platform not in ("win32", "darwin"):
         said = _startup_log()
     gpu, gpu_env = server_gpu()
     try:
@@ -994,8 +997,8 @@ def _launch(exe: str, name: str, profile_dir, port: str,
                                  f"--remote-debugging-port={port}", "--no-first-run",
                                  "--no-default-browser-check", *gpu, url],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL if said is None else said,
-                                start_new_session=True, env=gpu_env, **detach)
+                                stderr=_handed(said), start_new_session=True,
+                                env=gpu_env, **detach)
     except OSError as e:
         _close_quietly(said)
         # This function's answer is a browser name or None, and the caller
@@ -1188,10 +1191,126 @@ def _startup_log():
         return None
 
 
+# The helper of _KeptStart, run by this same Python. Its first line is what
+# a process list shows of it. It reads into one buffer made once, which held
+# its memory at 3 MB with more than 120 GB of lines of every length read
+# through it, where a new bytes object for each read settled at 9 MB.
+_KEEP_START = r"""# PaperPull keeps the start of what Chrome writes, and reads the rest into nothing
+import io, os, sys
+keep = int(sys.argv[1])
+buf = bytearray(65536)
+view = memoryview(buf)
+source = io.FileIO(0, closefd=False)
+while True:
+    got = source.readinto(buf)
+    if not got:
+        break
+    if keep > 0:
+        try:
+            keep -= os.write(1, view[:min(got, keep)])
+        except OSError:
+            keep = 0
+"""
+
+
+class _KeptStart:
+    """What PaperPull Server's Chrome writes, of which only the first KEEP
+    bytes are kept, in a file with no name that _launch reads for the lines
+    of a Chrome without its sandbox.
+
+    Chrome writes into a pipe, and a small helper holds the other end for as
+    long as any process holding Chrome's end does. It copies the start into
+    the file and reads the rest into nothing, so the file never grows past
+    KEEP, and every write Chrome makes goes through, as it did into nowhere
+    before #110. Its sign-in windows stay open for days, and the file they
+    wrote straight into grew for as long as they did.
+
+    Measured with Chrome 154 in the server image. The sign-in step ends
+    seconds after its window opens, so a pipe it read itself would have no
+    reader for the rest of the window's life. Chrome's own processes ignore
+    the SIGPIPE that brings, but its two crashpad handlers catch it and ended
+    at the first crash, which they write about. Truncating the file once the
+    start is judged does not help either, since every later write takes disk
+    again, with or without O_APPEND.
+    """
+
+    KEEP = 1 << 16
+
+    def __init__(self, log, write_end: int, helper):
+        self.log = log
+        self.write_end = write_end
+        self.helper = helper
+
+    @classmethod
+    def begin(cls):
+        """One with its helper running, or None when none can be started.
+        Chrome then writes to nowhere, as before #110, and the host check
+        alone says why it could not start its sandbox."""
+        if getattr(sys, "frozen", False):
+            return None     # sys.executable would be the app itself
+        log = _startup_log()
+        if log is None:
+            return None
+        try:
+            read_end, write_end = os.pipe()
+        except OSError:
+            _close_quietly(log)
+            return None
+        try:
+            # A session of its own, so that whatever ends the sign-in step
+            # does not end it while Chrome still writes.
+            helper = subprocess.Popen(
+                [sys.executable, "-I", "-S", "-c", _KEEP_START, str(cls.KEEP)],
+                stdin=read_end, stdout=log, stderr=subprocess.DEVNULL,
+                start_new_session=True)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            os.close(write_end)
+            _close_quietly(log)
+            return None
+        finally:
+            os.close(read_end)
+        return cls(log, write_end, helper)
+
+    def read(self) -> str:
+        """The start of what Chrome wrote. Read at an offset, which moves
+        nothing, since the helper writes through the same open file."""
+        try:
+            if hasattr(os, "pread"):
+                got = os.pread(self.log.fileno(), self.KEEP, 0)
+            else:   # Windows, where only the server's tests run
+                self.log.seek(0)
+                got = self.log.read(self.KEEP)
+        except (OSError, ValueError):
+            return ""
+        return got.decode("utf-8", "replace")
+
+    def close(self) -> None:
+        """Closes this process's ends of both. The helper goes on until
+        every process holding Chrome's end has closed it."""
+        if self.write_end is not None:
+            try:
+                os.close(self.write_end)
+            except OSError:
+                pass
+            self.write_end = None
+        _close_quietly(self.log)
+
+
+def _handed(said):
+    """The stderr a browser is started with."""
+    if said is None:
+        return subprocess.DEVNULL
+    if isinstance(said, _KeptStart):
+        return said.write_end
+    return said
+
+
 def _read_quietly(said) -> str:
     """The start of what was written to a _startup_log file, or nothing."""
     if said is None:
         return ""
+    if isinstance(said, _KeptStart):
+        return said.read()
     try:
         said.seek(0)
         return said.read(1 << 16).decode("utf-8", "replace")

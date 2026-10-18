@@ -172,17 +172,26 @@ def test_on_linux_the_child_answers_both_questions():
 
 # -- the server's sign-in ----------------------------------------------------------------
 
+_POPEN = subprocess.Popen
+
+
 class _Ended:
     """Stands in for subprocess.Popen, a browser that wrote `says` to the
-    stderr it was handed and has ended by the first look."""
+    stderr it was handed and has ended by the first look. Anything else is
+    started for real, the server's helper that keeps the start of what
+    Chrome writes among them."""
 
     def __init__(self, says=""):
         self.says = says
         self.handed = []
 
-    def __call__(self, cmd, stderr=None, **_kw):
+    def __call__(self, cmd, stderr=None, **kw):
+        if cmd[0] == sys.executable:
+            return _POPEN(cmd, stderr=stderr, **kw)
         self.handed.append((cmd[0], stderr))
-        if self.says and hasattr(stderr, "write"):
+        if self.says and isinstance(stderr, int) and stderr >= 0:
+            os.write(stderr, self.says.encode("utf-8"))    # the server's pipe
+        elif self.says and hasattr(stderr, "write"):
             stderr.write(self.says.encode("utf-8"))
             stderr.flush()
         return self
@@ -222,6 +231,21 @@ def server(monkeypatch):
 
 def said(capsys):
     return " ".join(capsys.readouterr().out.split())
+
+
+def _kept(monkeypatch) -> list:
+    """Every _KeptStart begun, each with the end Chrome was handed."""
+    begun = []
+    real = browser._KeptStart.begin
+
+    def begin():
+        said = real()
+        if said is not None:
+            said.handed_end = said.write_end
+            begun.append(said)
+        return said
+    monkeypatch.setattr(browser._KeptStart, "begin", staticmethod(begin))
+    return begun
 
 
 def _looks(monkeypatch, timeout=None) -> list:
@@ -312,10 +336,35 @@ def test_a_server_chrome_that_failed_otherwise_says_what_it_always_said_and_offe
 def test_what_the_server_chrome_wrote_is_read_and_not_kept(monkeypatch, tmp_path, port, server):
     started = _Ended(SUID)
     monkeypatch.setattr(browser.subprocess, "Popen", started)
+    kept = _kept(monkeypatch)
     browser._launch("/usr/bin/google-chrome-stable", browser.CHROME, tmp_path / "p", port,
                     "https://bank.example/")
     (_exe, handed), = started.handed
-    assert handed is not subprocess.DEVNULL and handed.closed
+    said, = kept
+    assert handed is not subprocess.DEVNULL and handed == said.handed_end
+    assert said.write_end is None and said.log.closed
+    said.helper.wait(timeout=30)    # Chrome's end is closed, so the helper is done
+
+
+def test_a_server_whose_helper_cannot_start_starts_chrome_as_before(
+        monkeypatch, tmp_path, port, capsys, server):
+    """Chrome then writes to nowhere, as before #110, and the host check
+    alone names the cause once the wait is out, here cut to a second."""
+    server["host"] = DSM
+    started = _Ended(SUID)
+
+    def popen(cmd, **kw):
+        if cmd[0] == sys.executable:
+            raise OSError(errno.EMFILE, "Too many open files")
+        return started(cmd, **kw)
+    monkeypatch.setattr(browser.subprocess, "Popen", popen)
+    _looks(monkeypatch, timeout=1.0)
+    assert browser._launch("/usr/bin/google-chrome-stable", browser.CHROME, tmp_path / "p",
+                           port, "https://bank.example/") is None
+    assert started.handed == [("/usr/bin/google-chrome-stable", subprocess.DEVNULL)]
+    words = said(capsys)
+    assert "This host's kernel has no user namespaces" in words
+    assert "window opened" not in words
 
 
 @pytest.mark.skipif(os.name == "nt", reason="a shell script stands in for Chrome")
@@ -351,6 +400,7 @@ def test_off_the_server_their_chrome_is_started_and_told_as_before(
     monkeypatch.setattr(host_sandbox, "check", asked)
     started = _Ended(SUID)
     monkeypatch.setattr(browser.subprocess, "Popen", started)
+    _no_helper(monkeypatch)
     waits = []
     monkeypatch.setattr(browser, "wait_for_debug_port",
                         lambda port, timeout=20.0, **kw: waits.append(kw) or False)
@@ -370,9 +420,20 @@ def test_off_the_server_the_bundled_chromium_hears_only_its_own_words(
     monkeypatch.delenv("PAPERPULL_SERVER", raising=False)
     monkeypatch.setattr(browser.sys, "platform", "linux")
     monkeypatch.setattr(browser, "_real_browsers", lambda: [])
-    monkeypatch.setattr(browser.subprocess, "Popen", _Ended(SUID))
+    started = _Ended(SUID)
+    monkeypatch.setattr(browser.subprocess, "Popen", started)
+    _no_helper(monkeypatch)
     asked = _looks(monkeypatch, timeout=1.0)
     assert browser._launch("/x/chrome", browser.CHROMIUM, tmp_path / "p", port,
                            "https://bank.example/") is None
     assert asked and all(asked), "the desktop's wait was ended by the server's words"
     assert "The window opened, but no debugging port answered" in said(capsys)
+    # It still writes straight into its file with no name, as before.
+    (_exe, handed), = started.handed
+    assert hasattr(handed, "write") and handed.closed
+
+
+def _no_helper(monkeypatch):
+    def begin():
+        raise AssertionError("the desktop started the server's helper")
+    monkeypatch.setattr(browser._KeptStart, "begin", staticmethod(begin))

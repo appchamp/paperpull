@@ -61,7 +61,8 @@ def test_the_launch_hands_the_switches_and_drivers_to_the_browser(tmp_path, monk
     monkeypatch.setattr(browser.subprocess, "Popen", popen)
     browser._launch("/x/chrome", browser.CHROME, tmp_path / "p", "9333",
                     "https://example.invalid/", explain_failure=False)
-    argv, env = started[0]
+    # The helper that keeps the start of what Chrome writes is started first.
+    (argv, env), = [s for s in started if s[0][0] == "/x/chrome"]
     assert "--use-angle=vulkan" in argv and argv[-1] == "https://example.invalid/"
     assert "VK_ICD_FILENAMES" in env
 
