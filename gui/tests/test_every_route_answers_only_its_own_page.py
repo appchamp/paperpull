@@ -23,7 +23,9 @@ marks same-origin, so a request it marks none, the browser opening an
 address by itself as it does for a link opened from an email, a chat or a
 PDF, is one of those refused there. Then every request that has to be
 refused goes to every route, and each one has to be refused, change
-nothing and still say that no other site may frame it.
+nothing and still say that no other site may frame it. Every answer, the
+panel's own page's and every refusal alike, also has to say nosniff, and
+no-store unless it is one of the few that are the same for everyone.
 
 Changing something means writing, moving or deleting a file, starting a
 program, opening the Browser Screen's connection, or changing what the
@@ -42,6 +44,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -122,9 +125,14 @@ class Started:
 
 
 def held():
-    """What the panel holds in memory that a request may change."""
+    """What the panel holds in memory that a request may change, the
+    sessions the Browser Screen opens for among it."""
     return (app_module._SAMPLE, app_module._LAST_EXPORT, tuple(sorted(app_module._RUNNING)),
             tuple(sorted(server_mode._SESSIONS)),
+            # Read from each session as it is, since asking screen_open
+            # would end a session that no longer holds, a change of its own.
+            tuple(sorted(t for t, s in server_mode._SESSIONS.items()
+                         if time.time() - s["screen"] <= server_mode.SCREEN_IDLE_SECONDS)),
             tuple(sorted((k, v[0]) for k, v in server_mode._FAILS.items())),
             server_mode._SETUP["code"])
 
@@ -212,6 +220,12 @@ def _no_password(box) -> None:
     data.pop("password", None)
     server_mode._write(data)
     box.code = server_mode.setup_code()
+
+
+def _screen_unused(box) -> None:
+    """The session gone unused too long for the Browser Screen, so the
+    password typed again is what opens it."""
+    server_mode._SESSIONS[box.token]["screen"] -= 2 * server_mode.SCREEN_IDLE_SECONDS
 
 
 def _history(box) -> dict:
@@ -318,6 +332,9 @@ ROUTES = {
     ("GET", "/screen"): dict(page=True, desktop="reads", server="reads"),
     ("GET", "/screen/novnc/{rest:path}"): dict(page=True, ask="/screen/novnc/vnc.html",
                                                desktop="reads", server="reads"),
+    ("POST", "/screen/again"): dict(form=True, before=_screen_unused,
+                                    body={"password": PASSWORD, "to": "dock"},
+                                    desktop="reads", server="changes"),
     ("WEBSOCKET", "/screen/websockify"): dict(desktop="reads", server="changes"),
 }
 
@@ -497,18 +514,30 @@ def to_refuse(edition: str, page: bool) -> list:
     ]
 
 
-def framing_problem(path: str, answer: dict) -> str:
-    """What is wrong with what an answer says about frames, or "". The frame
-    policy stands beside any other policy the answer carries."""
+# The answers the same for everyone, which a browser may keep.
+ANYONES = ("/favicon.ico", "/fonts/{name}", "/screen/novnc/{rest:path}")
+
+
+def header_problem(path: str, answer: dict) -> str:
+    """What is wrong with what an answer says about frames, about the kind
+    of file it is and about keeping a copy, or "". The frame policy stands
+    beside any other policy the answer carries. Every answer says nosniff,
+    and every one but those the same for everyone says no-store."""
     if answer.get("sent") is not None:
         return ""
-    own = path.startswith("/screen/novnc/")
+    own = path.startswith("/screen/novnc/") or path == "/screen/again"
     frames = [v for k, v in answer["headers"] if k == "x-frame-options"]
     if frames != ["SAMEORIGIN" if own else "DENY"]:
         return "X-Frame-Options was %r" % frames
     policies = [v for k, v in answer["headers"] if k == "content-security-policy"]
     if ("frame-ancestors 'self'" if own else "frame-ancestors 'none'") not in policies:
         return "no frame-ancestors policy among %r" % policies
+    sniffing = [v for k, v in answer["headers"] if k == "x-content-type-options"]
+    if sniffing != ["nosniff"]:
+        return "X-Content-Type-Options was %r" % sniffing
+    keeping = [v for k, v in answer["headers"] if k == "cache-control"]
+    if path not in ANYONES and (len(keeping) != 1 or "no-store" not in keeping[0]):
+        return "Cache-Control was %r" % keeping
     return ""
 
 
@@ -532,7 +561,7 @@ def own_page_problems(how: dict, edition: str, path: str, answer: dict, changed:
                         "prove nothing here")
     if how[edition] == "reads" and changed:
         problems.append("it is said to change nothing, and changed %s" % changed)
-    bad_frame = framing_problem(path, answer)
+    bad_frame = header_problem(path, answer)
     if bad_frame:
         problems.append("the answer to the panel's own page, %s" % bad_frame)
     return problems
@@ -567,7 +596,7 @@ def test_a_route_does_what_it_says_and_nothing_for_a_request_it_refuses(box, edi
             problems.append("%s was answered %s" % (what, answer["status"] or answer.get("sent")))
         if changed:
             problems.append("%s changed something, %s" % (what, changed))
-        bad_frame = framing_problem(path, answer)
+        bad_frame = header_problem(path, answer)
         if bad_frame:
             problems.append("the answer to %s, %s" % (what, bad_frame))
     if how[edition] == "changes":

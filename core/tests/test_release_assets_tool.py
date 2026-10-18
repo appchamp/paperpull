@@ -16,6 +16,8 @@ sys.path.insert(0, str(REPO / "tools"))
 import release_assets  # noqa: E402
 
 COMPOSE = b"name: paperpull\nservices:\n  paperpull:\n    image: example\n"
+HTTPS = b"name: paperpull\nservices:\n  proxy:\n    image: caddy\n"
+CADDYFILE = b"{$PAPERPULL_NAMES} {\n\ttls internal\n}\n"
 PROFILE = b'{"defaultAction": "SCMP_ACT_ERRNO"}\n'
 
 
@@ -32,6 +34,8 @@ def tagged_repo(tmp_path):
     repo = tmp_path / "repo"
     (repo / "server").mkdir(parents=True)
     (repo / "server" / "compose.yaml").write_bytes(COMPOSE)
+    (repo / "server" / "compose.https.yaml").write_bytes(HTTPS)
+    (repo / "server" / "Caddyfile").write_bytes(CADDYFILE)
     (repo / "server" / "seccomp-chrome.json").write_bytes(PROFILE)
     (repo / "server" / "Dockerfile").write_bytes(b"FROM scratch\n")
     (repo / "VERSION").write_bytes(b"9.9.9\n")
@@ -43,7 +47,7 @@ def tagged_repo(tmp_path):
     return repo
 
 
-def test_the_server_kit_is_the_tags_two_files_and_a_note(tmp_path):
+def test_the_server_kit_is_the_tags_setup_files_and_a_note(tmp_path):
     repo = tagged_repo(tmp_path)
     out = release_assets.server_kit("9.9.9", tmp_path / "flat", repo=repo)
 
@@ -51,10 +55,14 @@ def test_the_server_kit_is_the_tags_two_files_and_a_note(tmp_path):
     with zipfile.ZipFile(out) as z:
         files = {n for n in z.namelist() if not n.endswith("/")}
         assert files == {"PaperPull-Server-9.9.9/compose.yaml",
+                         "PaperPull-Server-9.9.9/compose.https.yaml",
+                         "PaperPull-Server-9.9.9/Caddyfile",
                          "PaperPull-Server-9.9.9/seccomp-chrome.json",
                          "PaperPull-Server-9.9.9/README.txt"}
         assert z.read("PaperPull-Server-9.9.9/compose.yaml") == COMPOSE, \
             "the tag's compose.yaml, never the working copy's, and with LF endings"
+        assert z.read("PaperPull-Server-9.9.9/compose.https.yaml") == HTTPS
+        assert z.read("PaperPull-Server-9.9.9/Caddyfile") == CADDYFILE
         assert z.read("PaperPull-Server-9.9.9/seccomp-chrome.json") == PROFILE
         note = z.read("PaperPull-Server-9.9.9/README.txt").decode("utf-8")
     assert "https://github.com/rheeloaded/paperpull/blob/v9.9.9/SERVER.md" in note

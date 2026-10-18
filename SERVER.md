@@ -46,6 +46,9 @@ image goes out. Each image comes with a signed list of everything inside
 it, see "Its parts are listed and checked" in
 [SECURITY-SERVER.md](SECURITY-SERVER.md).
 
+`compose.https.yaml`, the setup with HTTPS, also names Caddy's own image,
+`caddy` on Docker Hub, by its version, under Caddy's Apache-2.0 license.
+
 If Docker cannot download it, no release has published that version yet.
 A release's own `PaperPull-Server-X.Y.Z.zip` always names an image that
 exists, while the copy in this repository names the next version for a
@@ -65,27 +68,45 @@ Google.
 
 ## Set it up
 
-1. **Make a folder for it** on the server, and put `compose.yaml` and
-   `seccomp-chrome.json` in it, from `PaperPull-Server-X.Y.Z.zip` on the
+There are two compose files. `compose.https.yaml` is the one to use. It
+puts Caddy in front of the panel, so your browser reaches it by HTTPS and
+nobody else on your network can read what you type into the panel or the
+sign-in window, see [HTTPS](#https). `compose.yaml` serves the panel by
+plain HTTP, as PaperPull Server always has, and keeps working for an
+installation that uses it.
+
+1. **Make a folder for it** on the server, and put `compose.https.yaml`,
+   `Caddyfile` and `seccomp-chrome.json` in it, from
+   `PaperPull-Server-X.Y.Z.zip` on the
    [newest release](https://github.com/rheeloaded/paperpull/releases/latest),
-   or from `server/` in this repository. The second
-   file is the container's security profile, see "Chrome's sandbox" in
-   [SECURITY-SERVER.md](SECURITY-SERVER.md).
-2. **Fill in `compose.yaml`.** At least these.
+   or from `server/` in this repository. `Caddyfile` holds Caddy's
+   settings, and needs no changes. `seccomp-chrome.json` is the
+   container's security profile, see "Chrome's sandbox" in
+   [SECURITY-SERVER.md](SECURITY-SERVER.md). For plain HTTP, put
+   `compose.yaml` and `seccomp-chrome.json` there instead.
+2. **Fill in the compose file.** At least these.
    - `PUID` and `PGID`, the ids of the NAS user your documents should
      belong to. Your NAS shows them, or run `id` over SSH.
    - `TZ`, your time zone.
    - The data folder, `./data` unless you point it at a shared folder.
+   - In `compose.https.yaml`, `x-address`, the server's address on your
+     home network, and `x-names`, any names you open it by, see
+     [HTTPS](#https).
    - If you use Paperless, its consume folder, see [Paperless](#paperless).
    - If the server has Intel or AMD graphics, the two `devices` lines,
      see [Graphics](#graphics).
 3. **Start it.**
    ```bash
-   docker compose up -d
+   docker compose -f compose.https.yaml up -d
    ```
-4. **Choose a password.** Open `http://<the server's address>:8765` in a
-   browser on your home network. The first visit asks you to choose a
-   password, with a setup code the container prints in its log.
+   With `compose.yaml`, `docker compose up -d` alone.
+4. **Choose a password.** With `compose.https.yaml`, first have the device
+   trust Caddy's certificate authority, see
+   [Trust Caddy's certificate authority](#trust-caddys-certificate-authority),
+   then open `https://<the server's address>:8765` in a browser on your
+   home network. With `compose.yaml`, open
+   `http://<the server's address>:8765`. The first visit asks you to choose
+   a password, with a setup code the container prints in its log.
    ```bash
    docker logs paperpull
    ```
@@ -95,6 +116,8 @@ Google.
    `.localdomain`. To reach it
    by any other name, a VPN's or a reverse proxy's, list that name in
    `PAPERPULL_HOSTS` in `compose.yaml`, more than one separated by commas.
+   With `compose.https.yaml` it is the address and names in `x-address`
+   and `x-names`, since Caddy has a certificate for those alone.
 5. **Add your providers** from the panel. Each one gets a folder in the data
    folder. Coming from the desktop app, bring them instead, see
    [Coming from the desktop app](#coming-from-the-desktop-app).
@@ -137,14 +160,17 @@ record is all the server needs to skip them.
 
 The labels in the UGOS Docker app may differ a little from these.
 
-1. Put `compose.yaml` and `seccomp-chrome.json` in a shared folder of their
-   own, and fill in `compose.yaml` as above. UGOS shows your user's
-   `PUID` and `PGID` above the compose editor.
+1. Put `compose.https.yaml`, `Caddyfile` and `seccomp-chrome.json` in a
+   shared folder of their own, and fill in `compose.https.yaml` as above.
+   UGOS shows your user's `PUID` and `PGID` above the compose editor.
 2. Open **Project**, create one with that folder as its path, and paste or
-   import `compose.yaml`. Leave **Run immediately after creation** ticked.
-   The Docker app downloads the image itself.
+   import `compose.https.yaml`. Leave **Run immediately after creation**
+   ticked. The Docker app downloads the images itself.
 3. The setup code is in the container's log. Open the `paperpull` container
-   in the Docker app and look at its log.
+   in the Docker app and look at its log. Caddy's certificate authority is
+   copied out over SSH, as in
+   [Trust Caddy's certificate authority](#trust-caddys-certificate-authority),
+   with `sudo` in front.
 
 With an image you built yourself, import `paperpull-server.tar` first. In
 the Docker app, open **Image** and choose to add or import a local image.
@@ -154,16 +180,103 @@ the Docker app, open **Image** and choose to add or import a local image.
 A tester ran it on Unraid 7.3.3 with the Compose Manager plugin, from
 Community Applications.
 
-1. Put `compose.yaml` and `seccomp-chrome.json` together in a folder of
-   their own, such as `/mnt/user/appdata/paperpull`, and fill in
-   `compose.yaml` as above.
-2. Write the two paths in `compose.yaml` that start with `./` as absolute
-   paths to that folder, `seccomp=/mnt/user/appdata/paperpull/seccomp-chrome.json`
-   and `/mnt/user/appdata/paperpull/data:/data`.
-3. In Compose Manager, add a new stack, paste `compose.yaml` into it and
-   start it with Compose Up. The setup code is in the container's log.
+1. Put `compose.https.yaml`, `Caddyfile` and `seccomp-chrome.json`
+   together in a folder of their own, such as `/mnt/user/appdata/paperpull`,
+   and fill in `compose.https.yaml` as above.
+2. Write the three paths in `compose.https.yaml` that start with `./` as
+   absolute paths to that folder,
+   `seccomp=/mnt/user/appdata/paperpull/seccomp-chrome.json`,
+   `/mnt/user/appdata/paperpull/data:/data` and
+   `/mnt/user/appdata/paperpull/Caddyfile:/etc/caddy/Caddyfile:ro`.
+3. In Compose Manager, add a new stack, paste `compose.https.yaml` into it
+   and start it with Compose Up. The setup code is in the container's log.
 
 Synology should work the same way and has not been tried yet.
+
+## HTTPS
+
+Over plain HTTP, anyone else on your network can read what passes between
+your browser and the panel, your password as you sign in and everything you
+type in the sign-in window, a provider's password included. A guest network,
+or any device on yours you do not trust, is reason enough to use HTTPS.
+
+`compose.https.yaml` is the same server with Caddy in front of it. Caddy
+answers by HTTPS on port 8765, with a certificate from a certificate
+authority it makes for itself at its first start, and passes each request
+on to the panel. The sign-in window travels over that same connection. The
+panel itself is published on no port, so your network is offered no plain
+HTTP to it, and the sign-in cookie is one that travels over HTTPS only. It is the same project as `compose.yaml`, with the same
+volumes, so your password, sign-ins and settings stay the same.
+
+### Trust Caddy's certificate authority
+
+A browser trusts a certificate only from an authority it knows, so each
+device you open the panel from has to know Caddy's, once. Copy it out of the
+container on the server, then copy the file to each device yourself, never
+from a link someone sent you.
+
+```bash
+docker cp paperpull-proxy:/data/caddy/pki/authorities/local/root.crt paperpull-root.crt
+```
+
+Then add `paperpull-root.crt` to each device's trusted authorities. The
+labels differ a little between versions.
+
+- **Windows.** Double-click the file, choose **Install Certificate**, then
+  **Current User**, then **Place all certificates in the following store**,
+  and choose **Trusted Root Certification Authorities**.
+- **Mac.** Double-click the file to add it to your login keychain, open
+  **Caddy Local Authority** in Keychain Access, and under **Trust** choose
+  **Always Trust**.
+- **iPhone and iPad.** Open the file on the device and install the profile
+  in Settings, then turn on full trust for it in **Settings**, **General**,
+  **About**, **Certificate Trust Settings**.
+- **Android.** **Settings**, **Security**, **Encryption and credentials**,
+  **Install a certificate**, **CA certificate**.
+- **Firefox** may keep a list of its own. Import the file under
+  **Settings**, **Privacy & Security**, **Certificates**, **View
+  Certificates**, **Authorities**.
+
+The authority lasts ten years, and Caddy renews the panel's own
+certificate by itself. Its key is in the `proxy-data` volume, and whoever
+has that key can make certificates your devices trust for any website. So
+keep that volume out of shared folders and out of backups others can read.
+If it may have been copied, see "If something may have been exposed" in
+[SECURITY-SERVER.md](SECURITY-SERVER.md).
+
+### Its names
+
+`x-address` is the server's address on your home network, the one you
+would open `http://<address>:8765` by, and `x-names` any names you open it
+by as well, such as `nas.local`, more than one separated by spaces. Caddy
+makes a certificate for each and for nothing else, so open the panel by
+one of them. After changing either, run
+`docker compose -f compose.https.yaml up -d` again.
+
+### Moving to HTTPS
+
+An installation that runs `compose.yaml` keeps everything when it moves. In
+its folder, put `compose.https.yaml` and `Caddyfile` beside `compose.yaml`,
+fill in `compose.https.yaml` the way `compose.yaml` is filled in, with
+`x-address` and `x-names` besides, then stop the old one and start the new.
+
+```bash
+docker compose down
+docker compose -f compose.https.yaml up -d
+```
+
+On a NAS's Docker app, replace the project's compose file with your
+`compose.https.yaml`, put `Caddyfile` in the project's folder, and redeploy
+the project. The old address, `http://<address>:8765`, then answers that
+the browser sent plain HTTP to an HTTPS server, so open
+`https://<address>:8765`. From then on the commands on this page take
+`-f compose.https.yaml`, `docker compose -f compose.https.yaml pull` when
+updating for instance.
+
+### A reverse proxy of your own
+
+If you already run one, keep `compose.yaml` and put the panel behind it,
+as "HTTPS" in [SECURITY-SERVER.md](SECURITY-SERVER.md) describes.
 
 ## Graphics
 
@@ -248,6 +361,13 @@ documents to Paperless".
 - **"Robot or human?"** Some providers check, especially Walmart. Press and
   hold the button in the sign-in window yourself. PaperPull never answers
   one for you.
+- **The sign-in window asks for your password again** when you open it
+  more than 15 minutes after typing the password or last using the window,
+  since it is live control of every site you are signed in to there. Your
+  browser's password manager can fill it in. One left open closes 15
+  minutes after it was opened or last had a key pressed or the mouse moved
+  on it, and says so. The panel signs you out after eight hours without
+  use, and then shows its sign-in page.
 - **How long you stay signed in** depends on the provider. In testing, Best
   Buy stayed signed in for more than a day and through a restart, Verizon
   for more than a day but not through a restart, and T-Mobile and Navy
@@ -265,19 +385,25 @@ documents to Paperless".
   run the same two commands. Chrome brings itself up to date at every
   start. If you would rather take every release without editing the file,
   write `latest` in place of the version, which always names the newest
-  release, and then the two commands alone update it.
+  release, and then the two commands alone update it. With
+  `compose.https.yaml`, add `-f compose.https.yaml` to both commands. Its
+  `caddy` image line names Caddy's version, which you update the same way.
 - **Backing up.** Your documents are in the data folder. The `profiles`
   volume holds your live sign-ins, so a backup of it is as sensitive as your
   passwords, and you can always sign in again instead. The `settings` volume
-  holds the password's hash and the panel's own settings.
+  holds the password's hash and the panel's own settings. With HTTPS, the
+  `proxy-data` volume holds Caddy's certificate authority, so keep it out
+  of any backup others can read. Without it, Caddy makes a new authority,
+  and each device has to trust the new one.
 - **A forgotten password.** This signs everyone out, and the next visit asks
   for a new password with a new setup code.
   ```bash
   docker exec paperpull python /opt/paperpull/server/reset_password.py
   ```
 - **Removing it.** Delete the project, then its volumes, the `profiles`
-  volume above all, since it holds live sign-ins. The data folder is yours
-  and stays where it is.
+  volume above all, since it holds live sign-ins, and with HTTPS the
+  `proxy-data` volume, then take Caddy's authority off each device that
+  trusted it. The data folder is yours and stays where it is.
 
 ## When something is wrong
 
@@ -296,13 +422,20 @@ docker exec paperpull python /opt/paperpull/server/selftest.py
   to download Chrome. After that it starts without a connection and uses
   the Chrome it has.
 - **The panel does not load.** Check that nothing else uses port 8765 on the
-  server, or publish the panel on another port in `compose.yaml`.
+  server, or publish the panel on another port in `compose.yaml`, or Caddy
+  on another in `compose.https.yaml`.
+- **The browser says the connection is not private.** The device does not
+  trust Caddy's certificate authority yet, see
+  [Trust Caddy's certificate authority](#trust-caddys-certificate-authority),
+  or the panel was opened by an address or name that is not in `x-address`
+  or `x-names`.
 - **The panel says it was asked for by a name that is not one of its
   names.** It answers only to the names in step 4 of the setup, so that a
   website cannot reach it through your browser by pointing a name of its
   own at your server. Add the name you use to `PAPERPULL_HOSTS` in
-  `compose.yaml`, then recreate the container, with `docker compose up -d`
-  or from your NAS's Docker app, as when updating.
+  `compose.yaml`, or to `x-names` in `compose.https.yaml`, then recreate
+  the container, with `docker compose up -d` or from your NAS's Docker
+  app, as when updating.
 - **A file to attach to an issue.** After a run that stops early, a support
   report or a recording, the run's page offers its file to download, where
   the desktop opens the folder. Each is built from PaperPull's fixed word

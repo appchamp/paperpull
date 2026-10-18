@@ -1,0 +1,127 @@
+# PaperPull Server with HTTPS, the setup SERVER.md recommends.
+#
+#   docker compose -f server/compose.https.yaml up -d
+#
+# The same server as compose.yaml, with Caddy in front of it. Caddy is the
+# only part your network can reach. It answers by HTTPS on port 8765, with a
+# certificate from a certificate authority of its own, and passes each
+# request on to the panel. The panel is published on no port, so your
+# network is offered no plain HTTP to it. Write the server's address
+# and the names you open PaperPull by in x-address and x-names below, then
+# open https://<that address or name>:8765. Each device you open it from has
+# to trust Caddy's certificate authority once, see "HTTPS" in SERVER.md.
+# Keep Caddyfile and seccomp-chrome.json next to this file.
+#
+# This is the same project as compose.yaml, with the same volumes, so moving
+# from that file keeps your password, your sign-ins and your settings.
+#
+# Keep the port to your home network. Reach it from outside through your
+# own VPN, never by forwarding the port on your router.
+#
+#   docker exec paperpull python /opt/paperpull/server/selftest.py
+name: paperpull
+# The server's address on your home network, the one you would open
+# http://<address>:8765 by. Caddy makes a certificate for it.
+x-address: &address "192.168.1.20"
+# Any names you open PaperPull by as well, separated by spaces, such as
+# "nas nas.local". Caddy makes a certificate for each, and the panel
+# answers to them. Leave it empty, "", to open it by its address alone.
+x-names: &names "nas.local"
+services:
+  paperpull:
+    # Published by every PaperPull release, one tag per version, so the
+    # version you run changes only when you change this line. To update,
+    # write the newer version here, see "Updating" in SERVER.md. For an
+    # image built with server/build.py, write paperpull-server:dev instead.
+    image: ghcr.io/rheeloaded/paperpull-server:0.55.0
+    container_name: paperpull
+    init: true
+    # Time for the sign-in browsers to close properly and keep their sessions.
+    stop_grace_period: 30s
+    # Chrome draws pages in shared memory, and Docker's default is too small.
+    shm_size: "2gb"
+    # If this machine has Intel or AMD graphics, remove the # from the next
+    # two lines. The sign-in window then draws on the graphics chip, and
+    # without it some sites, Best Buy among them, refuse a sign-in from the
+    # server. Leave them as they are on a machine with no /dev/dri, since
+    # Docker will not start a container that names a missing device. See
+    # "Graphics" in SERVER.md.
+    #devices:
+    #  - /dev/dri:/dev/dri
+    # Chrome's own sandbox needs the container to allow user namespaces,
+    # which Docker's default security profile forbids. This profile is
+    # Docker's default with that one thing allowed, see seccomp-chrome.json.
+    security_opt:
+      - seccomp=./seccomp-chrome.json
+    # No ports. Only Caddy reaches the panel, on this project's own network.
+    environment:
+      TZ: America/New_York
+      # The NAS user and group the saved documents should belong to.
+      PUID: "1000"
+      PGID: "1000"
+      # To choose the password here instead of on the first visit, at least
+      # ten characters. Only its hash is kept, so it can come out of this
+      # file once the container has started with it.
+      # PAPERPULL_PASSWORD: "choose one"
+      # The names in x-names above, which the panel answers to besides its
+      # address.
+      PAPERPULL_HOSTS: *names
+      # Every request comes from Caddy, which says which browser sent it, so
+      # that wrong passwords count against that browser and not Caddy.
+      PAPERPULL_PROXY: proxy
+      # With Paperless, 1 puts each provider's documents in a folder of the
+      # provider's name inside the consume folder, which Paperless turns into
+      # a tag when PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS is on there.
+      # PAPERLESS_SUBFOLDERS: "1"
+    volumes:
+      # Each provider's folder, its documents, records and logs. A shared
+      # folder on a NAS, so the documents can be opened and imported.
+      - ./data:/data
+      # The signed-in browser profiles. Kept out of the shared folder.
+      - profiles:/profiles
+      # The server's own settings and its password's hash.
+      - settings:/config
+      # Chrome, downloaded from Google at the first start.
+      - browser:/browser
+      # Paperless's consume folder, if you use Paperless. Each run's new
+      # documents are copied into it, and PaperPull keeps its own copies.
+      # Leave this out and nothing is copied.
+      # - /path/to/paperless/consume:/paperless
+    restart: unless-stopped
+  proxy:
+    # Caddy, from its own publisher on Docker Hub. To update it, write the
+    # newer version here.
+    image: caddy:2.11.7
+    container_name: paperpull-proxy
+    depends_on:
+      - paperpull
+    ports:
+      - "8765:8765"
+    environment:
+      PAPERPULL_ADDRESS: *address
+      PAPERPULL_NAMES: *names
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddy's certificate authority and the certificates it makes. Whoever
+      # can read this volume can make certificates your devices trust, so
+      # keep it out of shared folders and out of backups others can read.
+      - proxy-data:/data
+      - proxy-config:/config
+    # It keeps one of the powers a container is given, and changes no file
+    # outside its two volumes. Caddy's program is marked as able to listen
+    # on a port below 1024, and Linux will not start it without that power,
+    # though it listens on 8765 here.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+volumes:
+  profiles:
+  settings:
+  browser:
+  proxy-data:
+  proxy-config:

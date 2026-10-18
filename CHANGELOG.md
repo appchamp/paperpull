@@ -97,6 +97,48 @@ All notable changes to PaperPull are recorded here. Versioning follows
   built from the tag at that commit, reads each run's commit again before
   downloading its files, and stops when GitHub's tag names another commit
   than the checkout's.
+- **PaperPull Server has an HTTPS setup, and the guide recommends it.**
+  `server/compose.https.yaml` puts Caddy in front of the panel. Caddy
+  answers by HTTPS on port 8765, with a certificate from a certificate
+  authority of its own, carries the sign-in window as wss over the same
+  connection, and is the only part on your network, since the panel is
+  published on no port. The sign-in cookie is then the `__Host-` one that
+  travels over HTTPS only, and wrong passwords count against the browser
+  behind Caddy, never against Caddy itself. It is the same project with
+  the same volumes as `compose.yaml`, so moving to it keeps the password
+  and every sign-in, and `compose.yaml` goes on serving plain HTTP for an
+  installation that has not moved. SERVER.md walks through trusting
+  Caddy's authority on each device, and the release's server zip carries
+  both files.
+- **PaperPull Server ends a session nobody uses for eight hours.** A
+  session lasted 14 days whether anyone used it or not, so a browser left
+  signed in stayed signed in for two weeks. Only what the panel's own page
+  asks for keeps a session going, never what a page of another program on
+  the same server asks for with the same cookie. 14 days is still the most
+  a session lasts.
+- **The sign-in window asks for the password again after 15 minutes
+  without use.** It is live control of every provider signed in there,
+  and any session could open it. It now opens, and stays open, only
+  within 15 minutes of someone being seen at it, the password typed, the
+  window opened from the panel, or a key pressed or the mouse moved on it,
+  whatever the panel does meanwhile, Run All included, and noVNC
+  connecting again by itself starts no time of its own. After that it
+  closes and says why. Signing out, a new password and the reset tool
+  still close an open one within seconds. An open panel that was signed
+  out shows the sign-in page on its next request.
+- **Every answer of the panel says what it is, and that it is not to be
+  kept.** On the desktop and the server, each answer carries
+  `X-Content-Type-Options: nosniff`, and each but the icon, the typefaces
+  and noVNC's files carries `Cache-Control: no-store`, a run's stream
+  among them, which said no-cache. The panel's page carries a script
+  policy that lets only its own script run, named by its hash. A census of
+  every route checks every answer, refusals included. noVNC's own files
+  are checked again on each visit, so a newer image never shows a page
+  made of two noVNCs.
+- **The security pages say what to do if something may have been
+  exposed.** SECURITY.md and SECURITY-SERVER.md say how to end
+  PaperPull's own sessions and the providers' sign-ins, how a release with
+  a security fix is announced, and how to report a problem.
 
 ## [0.55.0] - 2026-10-17
 

@@ -2,13 +2,23 @@
 
     python server/smoke.py --image paperpull-server:dev
 
-It copies compose.yaml and the container's security profile into a folder
-of its own and starts them there with Docker Compose, under a project and
-container name of its own, so it can never touch a real installation or
-its volumes. Then it does what a person does on the first visit, choosing a
-password with the setup code from the container's log, signs in, sets up a
-provider, and runs the self-test inside the container. The project is taken
-down with its volumes at the end, whatever happened.
+It copies compose.yaml, compose.https.yaml, Caddyfile and the container's
+security profile into a folder of its own and starts them there with Docker
+Compose, under a project and container names of its own, so it can never
+touch a real installation or its volumes. Then it does what a person does
+on the first visit, choosing a password with the setup code from the
+container's log, signs in, sets up a provider, and runs the self-test
+inside the container.
+
+Then it moves the same project to compose.https.yaml, as a person moving to
+HTTPS does, and checks what that file promises. The panel answers by HTTPS
+through Caddy, with a certificate of Caddy's own authority, and keeps the
+password chosen before. Its sign-in cookie is the __Host- one, marked
+Secure. The Browser Screen connects over wss. The panel is published on no
+port, so plain HTTP reaches it from its own project's network and from no
+other. And wrong passwords count against the browser behind Caddy, never
+against Caddy. The project is taken down with its volumes at the end,
+whatever happened.
 
 Each line says what was checked and whether it held. It exits 0 only when
 every check held. The Server image workflow runs it on every change before
@@ -22,11 +32,14 @@ that only works from its own folder is found here and not by a person.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
 import secrets
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -34,12 +47,20 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parent
 PROJECT = "paperpull-smoke"
 CONTAINER = "paperpull-smoke"
+PROXY = "paperpull-smoke-proxy"
 PANEL = "http://127.0.0.1:8765"
+# The name and address compose.https.yaml is given here, in place of a NAS's.
+HTTPS_NAME = "localhost"
+HTTPS_PANEL = "https://localhost:8765"
+# Where Caddy keeps its certificate authority's own certificate, the one a
+# person copies to their devices.
+ROOT_CERT = "/data/caddy/pki/authorities/local/root.crt"
 # The first start downloads Chrome, about 110 MB from Google.
 START_LIMIT = 600
 CODE_LINE = re.compile(r"^ {4}([A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4})\s*$", re.M)
@@ -98,8 +119,11 @@ def docker(*args, timeout: int = 300) -> subprocess.CompletedProcess:
                           encoding="utf-8", errors="replace", timeout=timeout)
 
 
-def compose(folder: Path, *args, timeout: int = 300) -> subprocess.CompletedProcess:
-    files = ["-f", str(folder / "compose.yaml"), "-f", str(folder / "compose.smoke.yaml")]
+def compose(folder: Path, *args, timeout: int = 300, https: bool = False) -> subprocess.CompletedProcess:
+    if https:
+        files = ["-f", str(folder / "compose.https.yaml"), "-f", str(folder / "compose.https.smoke.yaml")]
+    else:
+        files = ["-f", str(folder / "compose.yaml"), "-f", str(folder / "compose.smoke.yaml")]
     return subprocess.run(["docker", "compose", "-p", PROJECT, *files, *args],
                           cwd=SERVER.parent, capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=timeout)
@@ -109,17 +133,27 @@ def write_project(folder: Path, image: str) -> None:
     """compose.yaml and the profile as a person copies them, and beside them
     only what keeps this run apart from a real one, its own image, name and
     ids."""
-    shutil.copy2(SERVER / "compose.yaml", folder / "compose.yaml")
-    shutil.copy2(SERVER / "seccomp-chrome.json", folder / "seccomp-chrome.json")
+    for name in ("compose.yaml", "compose.https.yaml", "Caddyfile", "seccomp-chrome.json"):
+        shutil.copy2(SERVER / name, folder / name)
     (folder / "data").mkdir()
     lines = ["services:", "  paperpull:", "    image: %s" % image,
              "    container_name: %s" % CONTAINER]
+    ids = []
     if hasattr(os, "getuid"):
         # The documents belong to whoever runs this, so the folder can be
         # cleaned up afterwards, as a person's would belong to them.
-        lines += ["    environment:", '      PUID: "%d"' % os.getuid(),
-                  '      PGID: "%d"' % os.getgid()]
+        ids = ['      PUID: "%d"' % os.getuid(), '      PGID: "%d"' % os.getgid()]
+    if ids:
+        lines += ["    environment:"] + ids
     (folder / "compose.smoke.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # The HTTPS file as a person fills it in, with this computer's name and
+    # address in place of a NAS's.
+    lines = (["services:", "  paperpull:", "    image: %s" % image,
+              "    container_name: %s" % CONTAINER, "    environment:"] + ids
+             + ['      PAPERPULL_HOSTS: "%s"' % HTTPS_NAME,
+                "  proxy:", "    container_name: %s" % PROXY, "    environment:",
+                '      PAPERPULL_ADDRESS: "127.0.0.1"', '      PAPERPULL_NAMES: "%s"' % HTTPS_NAME])
+    (folder / "compose.https.smoke.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def running() -> bool:
@@ -223,6 +257,226 @@ def self_test() -> None:
     report("selftest", r.returncode == 0, "the container's own checks, exit %d" % r.returncode)
 
 
+# -- the HTTPS file ------------------------------------------------------------------
+
+def root_certificate(folder: Path) -> Path | None:
+    """Caddy's root certificate, copied out the way SERVER.md tells a person
+    to, once Caddy has made it."""
+    started = time.time()
+    while time.time() - started < 120:
+        r = docker("exec", PROXY, "cat", ROOT_CERT, timeout=30)
+        if r.returncode == 0 and "BEGIN CERTIFICATE" in r.stdout:
+            path = folder / "paperpull-root.crt"
+            path.write_text(r.stdout, encoding="ascii")
+            return path
+        time.sleep(2)
+    return None
+
+
+def https(context, method: str, path: str, form=None, cookie: str = ""):
+    """(status, headers, text) of one request to the panel through Caddy,
+    sent as its own page sends it."""
+    headers = {"Origin": HTTPS_PANEL}
+    data = None
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode()
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    if cookie:
+        headers["Cookie"] = cookie
+    conn = HTTPSConnection(HTTPS_NAME, 8765, context=context, timeout=30)
+    try:
+        conn.request(method, path, body=data, headers=headers)
+        r = conn.getresponse()
+        return r.status, r.headers, r.read().decode("utf-8", "replace")
+    finally:
+        conn.close()
+
+
+def screen_over_wss(context, cookie: str):
+    """(the first line of the answer, the screen's version, the ways in it
+    offers once told this end's version) for a Browser Screen connection
+    over wss through Caddy, as noVNC opens it. A screen turned away sends
+    its version too, then no way in, a count of 0 and the reason."""
+    raw = socket.create_connection((HTTPS_NAME, 8765), timeout=30)
+    with context.wrap_socket(raw, server_hostname=HTTPS_NAME) as s:
+        lines = ["GET /screen/websockify HTTP/1.1", "Host: %s:8765" % HTTPS_NAME,
+                 "Upgrade: websocket", "Connection: Upgrade",
+                 "Sec-WebSocket-Key: " + base64.b64encode(os.urandom(16)).decode("ascii"),
+                 "Sec-WebSocket-Version: 13", "Sec-WebSocket-Protocol: binary",
+                 "Origin: " + HTTPS_PANEL] + (["Cookie: " + cookie] if cookie else [])
+        s.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+        got = b""
+        while b"\r\n\r\n" not in got:
+            piece = s.recv(4096)
+            if not piece:
+                break
+            got += piece
+        head, _, rest = got.partition(b"\r\n\r\n")
+        first = head.split(b"\r\n", 1)[0].decode("latin-1")
+        if first.split(" ")[1:2] != ["101"]:
+            return first, b"", b""
+
+        def held(n):
+            nonlocal rest
+            while len(rest) < n:
+                piece = s.recv(4096)
+                if not piece:
+                    raise OSError("the screen closed before its next message")
+                rest += piece
+
+        def message():
+            """One frame from the server, which a server never masks."""
+            nonlocal rest
+            held(2)
+            size, at = rest[1] & 0x7F, 2
+            if size == 126:
+                held(4)
+                size, at = int.from_bytes(rest[2:4], "big"), 4
+            elif size == 127:
+                held(10)
+                size, at = int.from_bytes(rest[2:10], "big"), 10
+            held(at + size)
+            payload, rest = rest[at:at + size], rest[at + size:]
+            return payload
+
+        version = message()
+        # This end's version, as a binary frame masked as every frame from a
+        # browser is.
+        mask, said = os.urandom(4), b"RFB 003.008\n"
+        s.sendall(bytes([0x82, 0x80 | len(said)]) + mask
+                  + bytes(b ^ mask[i % 4] for i, b in enumerate(said)))
+        return first, version, message()
+
+
+# Five wrong passwords and then the sixth, sent from inside the panel's own
+# container through Caddy, so Caddy sees another address than this
+# computer's. Its certificate is not checked, since the point here is the
+# address and not the certificate.
+_WRONG_FROM_ELSEWHERE = r"""
+import socket, ssl, sys
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+body = b"password=not+it"
+out = []
+for _ in range(int(sys.argv[1])):
+    with ctx.wrap_socket(socket.create_connection(("proxy", 8765), timeout=30),
+                         server_hostname="localhost") as s:
+        s.sendall(b"POST /login HTTP/1.1\r\nHost: localhost:8765\r\n"
+                  b"Origin: https://localhost:8765\r\nConnection: close\r\n"
+                  b"Content-Type: application/x-www-form-urlencoded\r\n"
+                  b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
+        out.append(s.recv(64).split(b" ")[1].decode())
+print(" ".join(out))
+"""
+
+
+def https_phase(folder: Path, image: str, password: str) -> None:
+    r = compose(folder, "up", "-d", "--remove-orphans", timeout=600, https=True)
+    if not report("https-up", r.returncode == 0,
+                  "the same project moved to compose.https.yaml, %s"
+                  % ("started" if r.returncode == 0 else "failed")):
+        print(r.stdout + r.stderr, flush=True)
+        return
+    root = root_certificate(folder)
+    if not report("root", root is not None, "Caddy's root certificate copied out of %s" % PROXY):
+        return
+    context = ssl.create_default_context(cafile=str(root))
+    # The panel's container was made anew and starts as it did before, so
+    # until it answers, Caddy says it cannot reach it, 502.
+    started, status = time.time(), None
+    while time.time() - started < START_LIMIT and status in (None, 502, 503, 504):
+        try:
+            status = https(context, "GET", "/login")[0]
+        except OSError:
+            status = None
+        if status in (None, 502, 503, 504):
+            if not running():
+                break
+            time.sleep(2)
+    if not report("https", status == 200,
+                  "the panel answers by HTTPS through Caddy, %s, its certificate checked "
+                  "against Caddy's own authority, and still has its password" % status):
+        return
+    try:
+        conn = HTTPConnection("127.0.0.1", 8765, timeout=30)
+        conn.request("GET", "/login")
+        answer = conn.getresponse()
+        plain = (answer.status, answer.read().decode("utf-8", "replace").strip())
+        conn.close()
+    except OSError as e:
+        plain = (None, str(e))
+    report("no-plain", plain[0] == 400 and "HTTPS" in plain[1],
+           "plain HTTP to the published port meets Caddy, %s %s" % plain)
+    r = docker("port", CONTAINER, timeout=30)
+    report("no-port", r.returncode == 0 and not r.stdout.strip(),
+           "the panel's container publishes %s" % (r.stdout.strip() or "no port"))
+    # Plain HTTP to the panel itself, from inside its project's network, as
+    # Caddy reaches it, and from a container on another network.
+    r = docker("exec", PROXY, "wget", "-q", "-O", "-", "-T", "10", "http://paperpull:8765/login",
+               timeout=60)
+    inside = r.returncode == 0 and "Sign in" in r.stdout
+    r = docker("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}",
+               CONTAINER, timeout=30)
+    address = (r.stdout.split() or [""])[0]
+    r = docker("run", "--rm", "--network", "bridge", "--entrypoint", "python", image, "-c",
+               "import socket\ntry:\n    socket.create_connection((%r, 8765), 5)\n    print('reached')\n"
+               "except OSError as e:\n    print('not reached', e)" % address, timeout=120)
+    report("isolated", inside and address and "not reached" in r.stdout,
+           "plain HTTP reaches the panel from its project's network %s, and from another "
+           "network %s" % ("yes" if inside else "NO", r.stdout.strip() or r.stderr.strip()))
+
+    status, headers, _ = https(context, "POST", "/login", form={"password": password})
+    cookies = headers.get_all("Set-Cookie") or []
+    parts = [part.strip().lower() for part in (cookies[0] if cookies else "").split(";")]
+    named = parts[0].split("=", 1)[0] if parts else ""
+    report("cookie", status == 303 and len(cookies) == 1 and named == "__host-paperpull_session"
+           and {"secure", "httponly", "samesite=strict", "path=/"} <= set(parts)
+           and not any(part.startswith("domain=") for part in parts),
+           "signing in by HTTPS sets %s" % "; ".join(
+               [cookies[0].split("=", 1)[0]] + [p for p in parts[1:] if not p.startswith("max-age")])
+           if cookies else "signing in by HTTPS sets no cookie, %s" % status)
+    cookie = cookies[0].split(";", 1)[0] if cookies else ""
+    status, _, text = https(context, "GET", "/api/providers", cookie=cookie)
+    try:
+        answer = json.loads(text)
+    except ValueError:
+        answer = {}
+    report("tls-api", status == 200 and answer.get("server") is True,
+           "signed in by HTTPS, the API answers %d, server %s" % (status, answer.get("server")))
+    try:
+        first, version, ways = screen_over_wss(context, cookie)
+    except OSError as e:
+        first, version, ways = str(e), b"", b""
+    report("wss", first.split(" ")[1:2] == ["101"] and version.startswith(b"RFB 003.")
+           and ways[:1] not in (b"", b"\x00"),
+           "the Browser Screen over wss answers %r, the screen says %r and offers %d ways in"
+           % (first, version[:12], ways[0] if ways else 0))
+    try:
+        first, _, _ = screen_over_wss(context, "")
+    except OSError as e:
+        first = str(e)
+    report("wss-gate", first.split(" ")[1:2] != ["101"],
+           "with no session the Browser Screen over wss answers %r" % first)
+
+    r = docker("exec", CONTAINER, "python", "-c", _WRONG_FROM_ELSEWHERE,
+               str(server_mode_free_tries() + 1), timeout=120)
+    elsewhere = r.stdout.split()
+    status = https(context, "POST", "/login", form={"password": password})[0]
+    report("per-ip", elsewhere[:-1] == ["401"] * (len(elsewhere) - 1) and elsewhere[-1:] == ["429"]
+           and status == 303,
+           "wrong passwords from another browser behind Caddy answer %s, and this one still "
+           "signs in, %d" % (" ".join(elsewhere) or r.stderr.strip()[-200:], status))
+    self_test()
+
+
+def server_mode_free_tries() -> int:
+    """How many wrong passwords an address may send before it waits, as the
+    panel sets it, read rather than imported."""
+    text = (SERVER.parent / "gui" / "server_mode.py").read_text(encoding="utf-8")
+    return int(re.search(r"^FREE_TRIES = (\d+)$", text, re.M).group(1))
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--image", default="paperpull-server:dev",
@@ -247,6 +501,8 @@ def main(argv=None) -> int:
                     if cookie:
                         set_up_provider(cookie)
                 self_test()
+                if not FAILED:
+                    https_phase(folder, args.image, password)
         else:
             print(r.stdout + r.stderr, flush=True)
         if FAILED:
@@ -255,9 +511,12 @@ def main(argv=None) -> int:
                 print("  " + line, flush=True)
     finally:
         if args.keep:
-            print("left running, take it down with\n  docker compose -p %s down -v" % PROJECT)
+            print("left running, take it down with\n  docker compose -p %s -f %s down -v"
+                  % (PROJECT, folder / "compose.https.yaml"))
         else:
-            down = compose(folder, "down", "-v", "--remove-orphans", timeout=300)
+            # The HTTPS file names every volume the plain one does, and
+            # Caddy's besides.
+            down = compose(folder, "down", "-v", "--remove-orphans", timeout=300, https=True)
             if down.returncode:
                 print(down.stdout + down.stderr, flush=True)
             shutil.rmtree(folder, ignore_errors=True)
