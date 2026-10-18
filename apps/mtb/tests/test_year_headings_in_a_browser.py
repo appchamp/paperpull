@@ -330,3 +330,56 @@ def test_headings_in_the_page_itself_are_opened_too(show):
     rows = site.collect_statement_rows(page)
     assert said(page.main_frame) == ["open-2025", "open-2024", "open-2023"]
     assert listed_years(rows) == ["2023", "2024", "2025", "2026"]
+
+
+# A count of collapsed headings that falls is not every year opened. The
+# three below each left 2024 unread while the collector returned normally,
+# found by review, and the list went on to be marked whole.
+
+def test_a_press_that_takes_another_years_mark_away_stops_the_run(show):
+    """Pressing 2025 lists it, and the redraw drops 2024's open-table class
+    without listing 2024, so the count falls to none left."""
+    drop = ("listYear(this, '2025'); "
+            "document.getElementById('spViewStatementsElectronic-2024').className = 'x'")
+    page = show(heading(2026, open_=True) + heading(2025, onclick=drop) + heading(2024))
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
+    assert stopped.value.reason == "a year opened and listed nothing"
+    assert stopped.value.facts == {"closed": 1}
+    assert said(page.frame(name="statements")) == ["open-2025"]
+
+
+def test_a_press_that_sends_the_frame_elsewhere_stops_the_run(show):
+    page = show(heading(2026, open_=True)
+                + heading(2025, onclick="location.href='/gone'") + heading(2024))
+    with pytest.raises(site.YearsLeftClosed):
+        site.collect_statement_rows(page)
+
+
+def test_a_press_that_takes_the_frame_away_stops_the_run(show):
+    """The core's own look after the press may stop it first, since the
+    frame it looked into is gone. Either way the run stops."""
+    page = show(heading(2026, open_=True)
+                + heading(2025, onclick="window.frameElement.remove()") + heading(2024))
+    with pytest.raises(pressing.Stop):
+        site.collect_statement_rows(page)
+
+
+def test_opening_that_fails_partway_stops_the_run(show, monkeypatch):
+    """An error that is no stop, Playwright's own when a press tears the
+    page down, say, was logged and the years on screen read."""
+    def torn(fr):
+        raise RuntimeError("Execution context was destroyed")
+    monkeypatch.setattr(site, "_open_years", torn)
+    page = show(years())
+    with pytest.raises(site.YearsLeftClosed) as stopped:
+        site.collect_statement_rows(page)
+    assert stopped.value.reason == "opening the years failed"
+    assert stopped.value.facts == {"closed": 3}
+
+
+def test_a_list_with_no_year_closed_is_read_without_a_press(show):
+    page = show(heading(2026, open_=True) + heading(2025, open_=True))
+    rows = site.collect_statement_rows(page)
+    assert listed_years(rows) == ["2025", "2026"]
+    assert said(page.frame(name="statements")) == []

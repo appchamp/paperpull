@@ -422,6 +422,12 @@ _TAX_ROWS_JS = r"""() => {
 # only when nothing covers it in its frame or covers the frame in the page.
 _OPEN_TABLE = "span.open-table"
 _OPEN_TABLE_COUNT_JS = r"""() => document.querySelectorAll('span.open-table').length"""
+# The words of every collapsed year's heading, read the way _HEADING_WORDS_JS
+# reads one.
+_CLOSED_WORDS_JS = r"""() => [...document.querySelectorAll('span.open-table')].map((s) => {
+  const h = s.closest('h2') || s.parentElement;
+  return ((h ? h.innerText : s.innerText) || '').replace(/\s+/g, ' ').trim();
+})"""
 _HEADING_WORDS_JS = r"""(s) => {
   const h = s.closest('h2') || s.parentElement;
   return ((h ? h.innerText : s.innerText) || '').replace(/\s+/g, ' ').trim();
@@ -570,17 +576,23 @@ def collect_statement_rows(page) -> List[dict]:
     rows: List[dict] = []
     seen = set()
 
-    def harvest_statement_links(links):
+    def harvest_statement_links(links, years=None):
+        """Add the statements among `links` not seen yet, and put the year
+        of every statement among them, seen or not, into `years`."""
         added = 0
         for a in links:
             href = a.get("href") or ""
-            if not href or href in seen:
+            if not href:
                 continue
             full = _abs(href)
             # Judge the PATH, not a substring of the URL. This is what stops a
             # crafted on-host link (a payment route carrying the endpoint name
             # as a query parameter) from being queued as a "statement".
             if _endpoint_of(full) != "statement":
+                continue
+            if years is not None:
+                years.add(_date_from_stmt_href(href, a.get("label") or "")[:4])
+            if href in seen:
                 continue
             label = re.sub(r"\s+", " ", a.get("label") or "").strip()
             m = re.search(r"[?&]t=([A-Z]+)", href)
@@ -623,17 +635,39 @@ def collect_statement_rows(page) -> List[dict]:
         # noticed). Each press is guarded like any other control (_open_years),
         # and a stop at a press is a SystemExit, which passes this except and
         # ends the run.
+        #
+        # A count of collapsed headings that falls is not every year opened.
+        # A redraw can take a heading's mark away without listing its year, a
+        # press can send the frame elsewhere, and the frame can go. So the
+        # years closed before the first press are kept, and once the frame
+        # is read each of them must have a statement listed, or the run stops
+        # (YearsLeftClosed) rather than read a short list as the whole one.
+        try:
+            closed = [w for w in (fr.evaluate(_CLOSED_WORDS_JS) or []) if isinstance(w, str)]
+        except Exception as e:
+            log.info("could not read the year headings of a frame: %s",
+                     str(e).splitlines()[0][:80])
+            closed = []
+        want = {m.group(0) for m in (_YEAR_RE.search(w) for w in closed) if m}
         try:
             _open_years(fr)
         except Exception as e:
+            if closed:
+                raise _left_closed(len(closed), "opening the years failed",
+                                   "Opening the years of the statements list failed "
+                                   "partway.", after_a_press=True)
             log.info("year expansion stopped: %s", str(e).splitlines()[0][:80])
-        # Harvest regardless of whether expansion worked, so a failed expand
-        # still yields the years already on screen.
+        listed: set = set()
         try:
-            found_statements += harvest_statement_links(fr.evaluate(_COLLECT_JS) or [])
+            found_statements += harvest_statement_links(fr.evaluate(_COLLECT_JS) or [], listed)
         except Exception as e:
             log.info("could not read links from a frame: %s",
                      str(e).splitlines()[0][:80])
+        missing = want - listed
+        if missing:
+            raise _left_closed(len(missing), "a year opened and listed nothing",
+                               "A year on the statements list showed no statements "
+                               "once it was opened.", after_a_press=True)
     if found_statements == 0:
         log.warning("No statements found in any open tab. On the Statements and "
                     "Notices page, pick your account and click View so they "
