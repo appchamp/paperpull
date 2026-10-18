@@ -1199,23 +1199,43 @@ def accept(pdfs: list, blob_result: dict, *, new_pages: int, popups: int, downlo
 
 def _entries(dl_dir) -> Optional[dict]:
     """Each entry of the run's download folder with its size and time, or
-    None when the folder cannot be read. Nothing in it is opened."""
+    None when the folder cannot be read. Nothing in it is opened.
+
+    The browser deletes or renames a download in its own time, so an entry
+    can be listed and gone before its size is read. It is still an entry,
+    with None for its size and time (_changed_entries says what that means).
+    Until 2026-10-18 one such entry made the whole folder unreadable, and a
+    press that brought exactly its statement stopped the run as a download."""
     if not dl_dir:
         return {}
+    out = {}
     try:
-        return {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in Path(dl_dir).iterdir()}
+        for p in Path(dl_dir).iterdir():
+            try:
+                st = p.stat()
+            except FileNotFoundError:
+                out[p.name] = None
+                continue
+            out[p.name] = (st.st_size, st.st_mtime_ns)
     except OSError:
         return None
+    return out
 
 
 def _changed_entries(dl_dir, before: Optional[dict]) -> int:
     """How many entries of the folder are new or rewritten since `before`,
     each removed, since this app keeps nothing a download left. A folder
-    that cannot be read counts as one, so nothing is taken on a guess."""
+    that cannot be read counts as one, so nothing is taken on a guess.
+
+    An entry that went as it was read before the press is not in the folder
+    after it unless something wrote it again. One that goes as it is read
+    after the press counts as changed, whatever it was before, since the
+    browser was moving a file there while the folder was read."""
     now = _entries(dl_dir)
     if before is None or now is None:
         return 1
-    changed = [name for name, stamp in now.items() if before.get(name) != stamp]
+    changed = [name for name, stamp in now.items()
+               if stamp is None or name not in before or before[name] != stamp]
     for name in changed:
         try:
             (Path(dl_dir) / name).unlink()

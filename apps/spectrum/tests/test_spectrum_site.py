@@ -5,13 +5,15 @@ import base64
 import io
 import json
 import logging
+import os
 import re
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
@@ -499,6 +501,24 @@ def fake_print(page, out_path):
     Path(out_path).write_bytes(data)
 
 
+@contextmanager
+def gone_when_read(name):
+    """The file called `name` goes the moment anything reads its size, as a
+    download the browser deletes or renames can between a listing of its
+    folder and the next look."""
+    real = Path.stat
+
+    def stat(path, *args, **kwargs):
+        if path.name == name:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        return real(path, *args, **kwargs)
+    with mock.patch.object(Path, "stat", stat):
+        yield
+
+
 class WithFakeClick(unittest.TestCase):
     def setUp(self):
         self._click = pressing.click
@@ -922,6 +942,34 @@ class Acceptance(WithFakeClick):
 
     def test_an_unreadable_folder_stops_the_run(self):
         self.stops(good_press, dl_dir=self.tmp / "no such folder")
+
+    def test_a_file_the_browser_deletes_as_the_folder_is_read_is_no_download(self):
+        """The browser deletes a download it was told to drop in its own
+        time, so a file can be listed and gone before its size is read. It
+        is not in the folder then. The whole folder used to count as
+        unreadable, and a press that brought exactly its statement stopped
+        the run as though it had begun a download."""
+        dl = self.tmp / "dl"
+        dl.mkdir()
+        (dl / "Earlier.pdf.crdownload").write_bytes(b"x")
+        with gone_when_read("Earlier.pdf.crdownload"):
+            ok, out, _trace = self.take(Page(), dl_dir=dl)
+        self.assertTrue(ok)
+        self.assertEqual(out.read_bytes(), PDF)
+        self.assertEqual(list(dl.iterdir()), [])
+
+    def test_a_file_the_press_brought_that_goes_as_it_is_read_stops_the_run(self):
+        """A file that came with the press and went before its size was
+        read, as the browser renames a download it finished, still came."""
+        dl = self.tmp / "dl"
+        dl.mkdir()
+
+        def comes(p):
+            good_press(p)
+            (dl / "Other.pdf.crdownload").write_bytes(b"x")
+        with gone_when_read("Other.pdf.crdownload"):
+            self.stops(comes, dl_dir=dl)
+        self.assertEqual(list(dl.iterdir()), [])
 
     def test_a_passcode_after_the_press(self):
         def otp(p):
