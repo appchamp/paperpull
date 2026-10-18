@@ -57,10 +57,12 @@ WHAT THE LIVE PROBE ESTABLISHED (2026-08-19):
     guessed at.
   * Discover shows an inactivity "stay logged in?" modal. Of that modal only
     the keep-alive control is ever clicked (dismiss_timeout). Elsewhere a run
-    presses only the site's own Statements link when the address does not
-    reach the page (click_documents_nav), and a "Show more" or a period in
-    the page's own fallback (expand_all, _select_option), each through
-    is_safe_control or the blocklist.
+    presses only what reaches the statements when the address does not
+    (click_documents_nav), the site's own nav control (Activity, Statements
+    or Documents, through is_safe_control) and then, when that opens a
+    submenu, its link reading Statements or Tax Forms whole, and a "Show
+    more" or a period in the page's own fallback (expand_all, _select_option,
+    through the blocklist).
 
 STILL UNVERIFIED:
   * A login with MORE THAN ONE Discover card. This account has one, so no card
