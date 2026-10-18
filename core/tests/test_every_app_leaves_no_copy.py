@@ -692,8 +692,11 @@ LISTENERS = {"on", "once", "wait_for_event", "expect_event"}
 
 # What an observation-only download listener may do with the download it is
 # handed: end it, and remove a file the browser had already written. Nothing
-# of the download is read or saved.
+# of the download is read or saved. intake.discard is those two, the delete
+# waiting only for the cancel, or as long as a download is given where the
+# cancel raised, so the download handed to it alone is ended the same way.
 OBSERVER_CALLS = {"cancel", "delete"}
+DISCARDS = {("intake", "discard"), ("_intake", "discard")}
 
 
 def observes_only(func) -> bool:
@@ -703,7 +706,8 @@ def observes_only(func) -> bool:
     stop it, without that counting as taking one. The function takes a
     single plain parameter, and every use of that name in its body is an
     exact direct call with no arguments, `download.cancel()` or
-    `download.delete()`. The name appearing anywhere else, read through
+    `download.delete()`, or the name handed alone to the core's
+    `intake.discard(download)`. The name appearing anywhere else, read through
     (`download.cancel.__self__.path()`), handed on (`keep(download.cancel)`),
     rebound (`drop = download.delete; drop()`), or reused as another
     function's parameter, and the listener is a taker like any other. A
@@ -731,6 +735,8 @@ def observes_only(func) -> bool:
             continue
         attr = parent.get(node)
         call = parent.get(attr)
+        if _discarded(node, attr):
+            continue
         if not (isinstance(node.ctx, ast.Load)
                 and isinstance(attr, ast.Attribute) and attr.value is node
                 and attr.attr in OBSERVER_CALLS
@@ -738,6 +744,16 @@ def observes_only(func) -> bool:
                 and not call.args and not call.keywords):
             return False
     return True
+
+
+def _discarded(node, call) -> bool:
+    """Whether `node` is the one argument of an intake.discard(...) call."""
+    if not (isinstance(node.ctx, ast.Load) and isinstance(call, ast.Call)
+            and call.args == [node] and not call.keywords):
+        return False
+    f = call.func
+    return isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) \
+        and (f.value.id, f.attr) in DISCARDS
 
 
 def is_observer(tree, handler) -> bool:
@@ -849,7 +865,10 @@ def test_a_listener_handed_over_by_keyword_is_found(tmp_path):
     "    download.cancel.__self__.path()\n",
     "    keep(download.cancel)\n",
     "    drop = download.delete\n    drop()\n",
-], ids=["read-through", "handed-on", "rebound"])
+    "    intake.discard(download, keep)\n",
+    "    intake.save_download_as(download, 'kept.pdf')\n",
+    "    other.discard(download)\n",
+], ids=["read-through", "handed-on", "rebound", "discard-and-more", "saved", "another-discard"])
 def test_a_listener_that_does_more_than_end_the_download_is_found(tmp_path, body):
     """A listener is let off only when it does nothing with the download
     but call its cancel() or delete() directly. Each of these reaches the
@@ -902,7 +921,12 @@ def test_a_listener_that_only_ends_the_download_takes_nothing(tmp_path):
         "        download.delete()\n"
         "    page.on('download', on_download)\n"
         "    page.context.on(event='download', f=on_download)\n"
-        "    page.remove_listener('download', on_download)\n", encoding="utf-8")
+        "    page.remove_listener('download', on_download)\n"
+        "def press_again(page, seen):\n"
+        "    def on_download(download):\n"
+        "        seen.append(1)\n"
+        "        intake.discard(download)\n"
+        "    page.on('download', on_download)\n", encoding="utf-8")
     assert takes_from_a_folder(app) == []
 
 
