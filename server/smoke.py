@@ -10,6 +10,11 @@ on the first visit, choosing a password with the setup code from the
 container's log, signs in, sets up a provider, and runs the self-test
 inside the container.
 
+Then it takes the # off the two cap_add lines of compose.yaml, as SERVER.md
+tells a person with a Synology to, and checks that the sandbox helper of the
+Chrome in use is made setuid root and the self-test still holds. With the
+lines put back, no copy of the helper keeps the bit.
+
 Then it moves the same project to compose.https.yaml, as a person moving to
 HTTPS does, and checks what that file promises. The panel answers by HTTPS
 through Caddy, with a certificate of Caddy's own authority, and keeps the
@@ -257,6 +262,73 @@ def self_test() -> None:
     report("selftest", r.returncode == 0, "the container's own checks, exit %d" % r.returncode)
 
 
+# -- the setuid sandbox, for a kernel without user namespaces ---------------------
+
+
+def with_setuid_sandbox(text: str) -> str:
+    """A compose file as a person turns on the setuid sandbox, the # taken
+    off its two cap_add lines and nothing else changed, or '' when the file
+    has no such lines."""
+    out, changed = [], 0
+    for line in text.splitlines(keepends=True):
+        if line.rstrip("\r\n") in ("    #cap_add:", "    #  - SYS_ADMIN"):
+            line = line.replace("#", "", 1)
+            changed += 1
+        out.append(line)
+    return "".join(out) if changed == 2 else ""
+
+
+def setuid_helpers() -> list:
+    """Every copy of Chrome's sandbox helper in the browser volume that has
+    its setuid bit, as 'mode owner:group path'."""
+    r = docker("exec", CONTAINER, "find", "/browser", "-name", "chrome-sandbox",
+               "-perm", "-4000", "-printf", "%m %u:%g %p\\n", timeout=60)
+    return [line for line in r.stdout.splitlines() if line.strip()]
+
+
+def setuid_phase(folder: Path) -> None:
+    """The two cap_add lines taken off their #, as SERVER.md tells a person
+    with a Synology, make the helper of the Chrome in use setuid root, and
+    the self-test still holds. Put back, no copy keeps the bit, not even one
+    in an older Chrome's folder. This computer's kernel has user namespaces,
+    so Chrome still chooses them here, and the setuid sandbox itself shows
+    only on a kernel without them."""
+    report("suid-off", not setuid_helpers(), "by default no sandbox helper in the volume is setuid")
+    path = folder / "compose.yaml"
+    plain = path.read_bytes()
+    turned_on = with_setuid_sandbox(plain.decode("utf-8"))
+    if not report("cap-file", bool(turned_on), "compose.yaml has the two cap_add lines to uncomment"):
+        return
+    path.write_bytes(turned_on.encode("utf-8"))
+    try:
+        r = compose(folder, "up", "-d", timeout=600)
+        if not report("cap-up", r.returncode == 0, "compose up with cap_add SYS_ADMIN %s"
+                      % ("started it" if r.returncode == 0 else "failed")):
+            print(r.stdout + r.stderr, flush=True)
+            return
+        if not wait_for_panel():
+            return
+        helpers = setuid_helpers()
+        report("suid-on", len(helpers) == 1 and helpers[0].startswith("4755 root:root ")
+               and "setuid sandbox helper is set up" in log(),
+               "setuid helpers %s" % (", ".join(helpers) or "none"))
+        self_test()
+        # An older Chrome's folder left with its helper setuid, as a version
+        # kept beside a newer one would be after the opt-in.
+        docker("exec", CONTAINER, "sh", "-c",
+               "mkdir -p /browser/0.0.0.0/opt/google/chrome"
+               " && touch /browser/0.0.0.0/opt/google/chrome/chrome-sandbox"
+               " && chmod 4755 /browser/0.0.0.0/opt/google/chrome/chrome-sandbox", timeout=60)
+    finally:
+        path.write_bytes(plain)
+    r = compose(folder, "up", "-d", timeout=600)
+    if report("cap-out", r.returncode == 0, "compose up without cap_add %s"
+              % ("started it" if r.returncode == 0 else "failed")) and wait_for_panel():
+        helpers = setuid_helpers()
+        report("no-suid", not helpers, "with the lines put back no helper is setuid (%s)"
+               % (", ".join(helpers) or "none left"))
+
+
 # -- the HTTPS file ------------------------------------------------------------------
 
 def root_certificate(folder: Path) -> Path | None:
@@ -501,6 +573,8 @@ def main(argv=None) -> int:
                     if cookie:
                         set_up_provider(cookie)
                 self_test()
+                if not FAILED:
+                    setuid_phase(folder)
                 if not FAILED:
                     https_phase(folder, args.image, password)
         else:

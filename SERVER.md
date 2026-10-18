@@ -19,7 +19,9 @@ it listens on your network.
 
 On your home network, on a machine with Docker and an Intel or AMD
 processor. Google publishes no Chrome for ARM Linux, so ARM machines such as
-a Raspberry Pi cannot run it.
+a Raspberry Pi cannot run it. Its kernel needs seccomp, which every common
+Linux has and some NAS kernels lack, see
+[On a Synology NAS](#on-a-synology-nas).
 
 - **Memory.** About 120 MB with no sign-in window open. Each provider's
   window you leave open adds a few hundred MB, and Chrome grows the longer
@@ -191,7 +193,59 @@ Community Applications.
 3. In Compose Manager, add a new stack, paste `compose.https.yaml` into it
    and start it with Compose Up. The setup code is in the container's log.
 
-Synology should work the same way and has not been tried yet.
+### On a Synology NAS
+
+Chrome's sandbox needs two things from the kernel, user namespaces for its
+first layer and seccomp for its second. Whether a Synology model can run
+PaperPull Server depends on which of them its kernel was built with, and
+these two commands over SSH tell you. `uname -r` shows which kernel it is.
+
+```bash
+grep Seccomp /proc/self/status
+```
+
+```bash
+cat /proc/sys/user/max_user_namespaces
+```
+
+- **No `Seccomp` line, not supported.** Synology's 4.4 kernels, which
+  many models still run under DSM 7, are built without seccomp, and Chrome
+  would start there with half its sandbox. PaperPull Server does not start
+  on such a kernel, and its log says why. Docker there also refuses the
+  container's security profile, saying seccomp is not enabled in your
+  kernel. No setting changes this, it is how the kernel was built.
+- **A `Seccomp` line and a number above `0`.** The setup above works as it
+  is, as on a UGREEN NAS.
+- **A `Seccomp` line, and a `0` or "No such file or directory", use
+  Chrome's setuid sandbox.** The kernel has no user namespaces, so Chrome's
+  usual sandbox cannot start and the sign-in window is refused, as it
+  should be. Chrome's setuid sandbox builds the same first layer without
+  them. It is not `--no-sandbox`, and the browser still never starts
+  without its whole sandbox. Set up as above with `compose.https.yaml`,
+  then remove the `#` from the two `cap_add` lines under `security_opt`,
+  so that they read
+  ```yaml
+      cap_add:
+        - SYS_ADMIN
+  ```
+  and recreate the container with
+  `sudo docker compose -f compose.https.yaml up -d`, or from Container
+  Manager. The container's log then says Chrome's setuid sandbox helper
+  is set up, and the self-test's `sandbox` line says
+  `layer 1 SUID, seccomp on`. The setuid sandbox has started on a Synology
+  without user namespaces, but that one had no seccomp either, so a whole
+  sandbox on a Synology has not been seen yet. Tell us how it goes.
+
+At each start, a container given `SYS_ADMIN` has the helper of the Chrome in
+use made setuid root, and a container without it has the bit taken off
+every copy, so removing the two lines again undoes it. `SYS_ADMIN` lets the
+helper build the sandbox's own namespaces and chroot. It is given to the
+container, never to the pages, and the helper gives up every privilege
+before a page runs. Never put `privileged` or `--no-sandbox` in its place,
+which would leave no sandbox at all. Leave `no-new-privileges` off this
+container, since it turns the setuid bit off, and for the same reason keep
+the `browser` volume on a file system mounted without `nosuid`, as Docker's
+own volumes are.
 
 ## HTTPS
 
@@ -417,7 +471,13 @@ docker exec paperpull python /opt/paperpull/server/selftest.py
 - **Chrome does not start.** The security profile is probably not applied.
   Check that `seccomp-chrome.json` sits next to `compose.yaml` and that
   `security_opt` names it. Docker's default profile stops Chrome's sandbox,
-  see [SECURITY-SERVER.md](SECURITY-SERVER.md).
+  see [SECURITY-SERVER.md](SECURITY-SERVER.md). On a NAS whose kernel has
+  no user namespaces at all, some Synology models among them, the profile
+  is not enough, see [On a Synology NAS](#on-a-synology-nas).
+- **The container stops at once, saying the kernel was built without
+  seccomp, or Docker says seccomp is not enabled in your kernel.** That
+  kernel cannot give Chrome its whole sandbox, so PaperPull Server does not
+  run on that machine, see [On a Synology NAS](#on-a-synology-nas).
 - **The first start ends at once.** It needs to reach `dl.google.com` once
   to download Chrome. After that it starts without a connection and uses
   the Chrome it has.

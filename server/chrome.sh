@@ -22,6 +22,24 @@ installed() {
   [ -x "$BROWSER/$1/opt/google/chrome/chrome" ]
 }
 
+# CAP_SYS_ADMIN in this container's bounding set, bit 21 of CapBnd, which it
+# holds only when the person added it with cap_add.
+given_sys_admin() {
+  bnd=$(awk '/^CapBnd:/ {print $2}' /proc/self/status 2>/dev/null)
+  case "$bnd" in ""|*[!0-9a-fA-F]*) return 1 ;; esac
+  [ $(( (0x$bnd >> 21) & 1 )) -eq 1 ]
+}
+
+SETUID_SANDBOX=0
+if given_sys_admin; then
+  SETUID_SANDBOX=1
+  say "The container has SYS_ADMIN, so Chrome's setuid sandbox helper is set up, for a kernel without user namespaces."
+  if awk '$2 == "/browser" {print $4}' /proc/mounts | grep -qw nosuid; then
+    say "But /browser is mounted nosuid, so the kernel ignores the helper's setuid bit, and where"
+    say "the kernel has no user namespaces Chrome will refuse to start. Mount it without nosuid."
+  fi
+fi
+
 have=""
 if [ -L "$BROWSER/current" ]; then
   have=$(basename "$(readlink "$BROWSER/current")")
@@ -39,6 +57,33 @@ fi
 # by an earlier version of this script is put right too.
 readable() {
   chmod -R a+rX "$BROWSER/$1"
+  sandbox_helpers "$1"
+}
+
+# chrome-sandbox is Chrome's setuid helper, and the package ships it setuid
+# root. Where the kernel gives user namespaces, Chrome's sandbox needs no
+# helper that runs as root, so by default no copy in the volume keeps the
+# bit. Some NAS kernels, Synology's among them, have no user namespaces at
+# all, and there Chrome builds the same sandbox through this helper, which
+# needs CAP_SYS_ADMIN to make the sandbox's namespaces. So in a container
+# given SYS_ADMIN with cap_add, see "On a Synology NAS" in SERVER.md, the
+# helper of the Chrome in use ($1) is made setuid root, and every other copy
+# loses the bit, so taking SYS_ADMIN away again, or an older Chrome kept
+# beside the new one, leaves none behind. The sandbox is on either way, this
+# is never --no-sandbox. Runs after the recursive chmod above, the owner is
+# set before the mode since a change of owner drops the bit, and a link is
+# never followed.
+sandbox_helpers() {
+  for entry in "$BROWSER"/*; do
+    [ -L "$entry" ] && continue
+    helper="$entry/opt/google/chrome/chrome-sandbox"
+    { [ -f "$helper" ] && [ ! -L "$helper" ]; } || continue
+    if [ "$SETUID_SANDBOX" = 1 ] && [ "$entry" = "$BROWSER/$1" ]; then
+      chown 0:0 "$helper" && chmod 4755 "$helper" || say "Chrome's setuid sandbox helper could not be set up."
+    else
+      chmod 0755 "$helper" 2>/dev/null || true
+    fi
+  done
 }
 
 if [ -z "$wanted" ]; then
@@ -77,9 +122,6 @@ fi
 rm -rf "$BROWSER/$wanted.part" "$BROWSER/$wanted"
 dpkg-deb -x "$work"/google-chrome-stable_*.deb "$BROWSER/$wanted.part"
 rm -rf "$work"
-# Chrome's own sandbox needs no helper that runs as root here, it uses the
-# container's user namespaces, so the helper is not left setuid in a volume.
-chmod 0755 "$BROWSER/$wanted.part/opt/google/chrome/chrome-sandbox" 2>/dev/null || true
 readable "$wanted.part"
 mv "$BROWSER/$wanted.part" "$BROWSER/$wanted"
 ln -sfn "$wanted" "$BROWSER/current.new"

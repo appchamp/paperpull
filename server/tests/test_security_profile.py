@@ -60,7 +60,7 @@ def test_chrome_can_make_its_namespaces():
 
 def test_nothing_else_docker_keeps_for_an_admin_is_let_out():
     """mount, setns, bpf and the rest still need CAP_SYS_ADMIN, which the
-    container is never given."""
+    container is not given unless the Synology opt-in adds it."""
     admin = [r for r in DEFAULT["syscalls"]
              if r.get("includes", {}).get("caps") == ["CAP_SYS_ADMIN"]
              and r["action"] == "SCMP_ACT_ALLOW"]
@@ -95,8 +95,48 @@ def test_every_other_rule_is_dockers_own():
         {k: v for k, v in DEFAULT.items() if k != "syscalls"}
 
 
+def active(text: str) -> str:
+    """The lines a compose file acts on, its comments left out."""
+    return "\n".join(line for line in text.splitlines()
+                     if not line.lstrip().startswith("#"))
+
+
 def test_compose_uses_it_and_never_switches_the_filter_off():
     text = (SERVER / "compose.yaml").read_text(encoding="utf-8")
     assert "seccomp=./seccomp-chrome.json" in text
     assert "unconfined" not in text
-    assert "SYS_ADMIN" not in text and "privileged" not in text
+    # The Synology setuid-sandbox fallback is offered as a commented-out
+    # opt-in (cap_add: SYS_ADMIN, see the test below), so those words appear
+    # in a comment. Nothing the file acts on by default weakens the sandbox.
+    on = active(text)
+    assert "SYS_ADMIN" not in on and "privileged" not in on and "cap_add" not in on
+
+
+def test_the_synology_fallback_is_offered_but_off_by_default():
+    """A NAS kernel without user namespaces (some Synology) cannot run the
+    namespace sandbox, so both compose files offer Chrome's setuid sandbox to
+    turn on, commented out until then. It keeps the sandbox on, adding a
+    capability rather than taking the filter away, and removing the # leaves
+    valid YAML, the trap the graphics block met once."""
+    for name in ("compose.yaml", "compose.https.yaml"):
+        lines = (SERVER / name).read_text(encoding="utf-8").splitlines()
+        for commented, uncommented in (("    #cap_add:", "    cap_add:"),
+                                        ("    #  - SYS_ADMIN", "      - SYS_ADMIN")):
+            assert commented in lines, (name, commented)
+            assert commented.replace("#", "", 1) == uncommented
+
+
+def test_the_setuid_helper_follows_the_capability():
+    """chrome.sh makes Chrome's sandbox helper setuid root only in a
+    container holding CAP_SYS_ADMIN, bit 21 of CapBnd, the one sign of the
+    opt-in, and takes the bit off every other copy. It sets the owner before
+    the mode, since a change of owner drops the bit. server/smoke.py checks
+    the same in a running container."""
+    script = (SERVER / "chrome.sh").read_text(encoding="utf-8")
+    assert "/^CapBnd:/" in script and ">> 21) & 1" in script
+    helpers = script[script.index("sandbox_helpers() {"):]
+    assert helpers.index('chown 0:0 "$helper"') < helpers.index('chmod 4755 "$helper"')
+    assert 'chmod 0755 "$helper"' in helpers and '[ ! -L "$helper" ]' in helpers
+    # Set after the recursive chmod, in the function every start path calls.
+    readable = script[script.index("readable() {"):script.index("sandbox_helpers() {")]
+    assert readable.index('chmod -R a+rX') < readable.index('sandbox_helpers "$1"')

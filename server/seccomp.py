@@ -12,9 +12,12 @@ filesystems and much else. Chrome shuts every page it shows inside a user
 namespace of its own, and needs exactly that and nothing more.
 
 So here `clone` with namespace flags and `unshare` are allowed for every
-process, and everything else is left exactly as Docker ships it. The
-container is never given CAP_SYS_ADMIN, so the other calls Docker keeps
-behind it stay refused. The experiment ran with the filter switched off
+process, and everything else is left exactly as Docker ships it. By
+default the container is not given CAP_SYS_ADMIN, so the other calls Docker
+keeps behind it stay refused. Only the opt-in for a kernel without user
+namespaces, cap_add SYS_ADMIN (see "On a Synology NAS" in SERVER.md), gives
+it, and those calls then follow Docker's own rules for a container that
+holds it. The experiment ran with the filter switched off
 altogether (seccomp=unconfined), which is fine for a test and not for a
 container holding signed-in sessions.
 """

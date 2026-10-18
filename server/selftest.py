@@ -6,8 +6,9 @@ Each line says what was checked and whether it held. It exits 0 only when
 every check held.
 
   chrome     Chrome is in the browser volume and starts
-  sandbox    Chrome runs inside its own sandbox, the namespace sandbox and
-             the seccomp filter both on, which is what the container's
+  sandbox    Chrome runs inside its own sandbox, the namespace sandbox (or
+             the setuid sandbox, where a NAS kernel forbids user namespaces)
+             and the seccomp filter both on, which is what the container's
              security profile is for
   screen     a Chrome window opens on the virtual screen
   print      a page prints to a PDF, the way every receipt app saves one
@@ -95,11 +96,16 @@ def browser_checks() -> None:
                 if any(line.startswith("Seccomp-BPF sandbox") for line in lines):
                     break
                 page.wait_for_timeout(250)
-            namespace = "Layer 1 Sandbox Namespace" in lines
+            # The layer-1 engine is the namespace sandbox by default, or the
+            # setuid (SUID) sandbox where a NAS kernel forbids user namespaces
+            # (see "On a Synology NAS" in SERVER.md). Both are real sandboxes,
+            # "None" is not.
+            layer1 = next((line[len("Layer 1 Sandbox"):].strip() for line in lines
+                           if line.startswith("Layer 1 Sandbox")), "")
             seccomp = "Seccomp-BPF sandbox Yes" in lines
-            check("sandbox", namespace and seccomp,
-                  "namespace %s, seccomp %s" % ("on" if namespace else "OFF",
-                                                "on" if seccomp else "OFF"))
+            check("sandbox", layer1 in ("Namespace", "SUID") and seccomp,
+                  "layer 1 %s, seccomp %s" % (layer1 or "OFF",
+                                              "on" if seccomp else "OFF"))
 
             windows = page.evaluate("[window.outerWidth, window.outerHeight]")
             check("screen", windows[0] > 0 and windows[1] > 0,

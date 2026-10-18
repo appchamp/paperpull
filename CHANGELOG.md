@@ -18,6 +18,17 @@ All notable changes to PaperPull are recorded here. Versioning follows
   a month already saved. One Citi no longer lists is marked No Longer
   Listed rather than failed. The app still never submits a request itself.
   Thanks to @appchamp for the request and for recording the page (#103).
+- **PaperPull Server can run on a NAS whose kernel has no user
+  namespaces.** Chrome's usual sandbox needs them, so the sign-in window
+  was refused on such a kernel, since PaperPull never starts a browser
+  without its sandbox. Removing the `#` from two `cap_add: SYS_ADMIN`
+  lines in the compose file now has Chrome use its setuid sandbox instead,
+  which builds the same sandbox without user namespaces, and the self-test
+  accepts either. Every other installation is unchanged, with no
+  capability added and no setuid helper kept in the browser volume. It
+  has not yet been seen whole on a Synology. "On a Synology NAS" in
+  SERVER.md says how to tell whether a model can use it, and which models
+  cannot run PaperPull Server at all.
 
 ### Fixed
 - **The transactions export no longer stops at half of an emoji.** A
@@ -66,6 +77,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
   looked for again.
 
 ### Security
+- **PaperPull Server does not start on a kernel without seccomp.** Chrome's
+  sandbox needs the kernel's seccomp for its second layer, and on a kernel
+  built without it, as Synology's 4.4 kernels are, Chrome started with half
+  its sandbox and only the self-test said so. Docker refuses the server's
+  security profile on such a kernel, so this took removing the profile by
+  hand, and the container now stops at start and says why instead.
 - **A Diagnose file no longer names your cards or accounts.** The detailed
   file Diagnose writes kept a word whenever it was on PaperPull's fixed
   list, and a card's product name is made of ordinary words, so Citi's

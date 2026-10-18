@@ -23,6 +23,13 @@ chmod 700 /profiles /config
 # can write to it.
 chown pp:pp /data 2>/dev/null || true
 
+# Chrome's sandbox needs the kernel's seccomp for its second layer, and on a
+# kernel built without it Chrome would start with half its sandbox, so the
+# container does not start there. kernel_check.py says why.
+if ! python /opt/paperpull/server/kernel_check.py; then
+  exit 1
+fi
+
 if ! /opt/paperpull/server/chrome.sh; then
   echo "PaperPull cannot start without Chrome. See the lines above." >&2
   exit 1
