@@ -34,6 +34,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
   named Statements & Documents, since Wells Fargo draws its links with no
   address and the file had counted none. Thanks to @crazyhorse90210 for
   the failure files (#27).
+- **Diagnose keeps its detailed file in fifteen more apps when it stops
+  early.** In Alpaca, Bilt, Chase Business, First Horizon, IRS, SDG&E,
+  Shelby County Trustee, Simmons Bank, Spectrum, Venmo, Best Buy,
+  Coinbase, M&T Bank, Nelnet and Optum Bank, a Diagnose that stopped at a
+  page it could not open, or at a press it would not make, left before it
+  wrote its detailed file, so only the survey was there to send. Each now
+  writes it the way Wells Fargo does. It surveys the page the window shows
+  without following any link and says where and why it stopped, and the
+  survey beside it says so too.
 - **The transactions export no longer stops at half of an emoji.** A
   statement's text can carry half of an emoji, from a font that names its
   characters in an unusual way, and a CSV has no way to write half a

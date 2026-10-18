@@ -832,7 +832,7 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send.
 
         Diagnose writes a detailed file for repairing this provider, and
@@ -850,13 +850,15 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='M&T Bank')
+            provider='M&T Bank',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         self.stats["mode"] = "diagnose"
         words = words_for('M&T Bank', site)
         page = self.page()
         info = {"timestamp": now_iso()}
+        stopped = None
         try:
             info["signed_out"] = site.looks_signed_out(page)
             info["challenge"] = site.detect_security_challenge(page)
@@ -873,6 +875,14 @@ class App:
                 info["years_left_closed"] = {"reason": stop.reason,
                                              "closed": stop.facts.get("closed"),
                                              "heading": getattr(stop, "heading", "")}
+            except pressing.Stop as stop:
+                # A press the list needed that it would not make, a year's
+                # heading something covers say. Nothing past it was pressed,
+                # and the file says the list was not read and why.
+                stopped = stop
+                docs = []
+                info["documents_page_opened"] = False
+                info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
             info["collected"] = len(docs)
             info["samples"] = []
             for d in docs[:12]:
@@ -883,10 +893,19 @@ class App:
                     "category": cat, "summary": summ})
             page.screenshot(path=str(self.paths.diagnostics / "diagnose-documents.png"),
                             full_page=True)
+        except pressing.Stop as stop:
+            # A press it would not make anywhere else in the look ends it
+            # there, and the file still says what was seen and why.
+            stopped = stop
+            info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
         except Exception as e:
             info["error"] = str(e)
+        self._diagnose_stopped = stopped
         out = self.paths.diagnostics / "diagnose-documents.json"
         write_shaped(out, info, words)
+        if stopped is not None:
+            # The stop's own words, as a run says them (pressing.say).
+            pressing.say(stopped)
         print(f"Wrote {out}")
         print("  That is the detailed file, for repairing this provider. Any word")
         print("  in it that is not on PaperPull's fixed list is written as its")
