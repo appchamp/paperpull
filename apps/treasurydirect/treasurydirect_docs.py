@@ -993,7 +993,7 @@ class App:
         print("  Read it through, then attach it to this provider's issue on")
         print("  GitHub. It is the one thing that saves a round of guessing.")
 
-    def write_survey(self) -> None:
+    def write_survey(self, stopped=None) -> None:
         """The survey Diagnose is safe to send.
 
         Diagnose writes a detailed file for repairing this provider, and
@@ -1011,7 +1011,8 @@ class App:
             selectors=getattr(site, "FALLBACK", None),
             journal=self._journal,
             requests=self._requests,
-            provider='TreasuryDirect')
+            provider='TreasuryDirect',
+            stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
         """Survey the TreasuryDirect tab as it is and write a file a tester can attach
@@ -1025,20 +1026,41 @@ class App:
         info = {"timestamp": now_iso(),
                 "note": Fixed("A survey of the TreasuryDirect page open in the tab. It is what "
                               "the first repair of the site layer is checked against.")}
+        stopped = None
         try:
             info["landed_on"] = site.redact(self._url_of(page))
             info["signed_out"] = site.looks_signed_out(page)
             info["challenge"] = site.detect_security_challenge(page)
-            info["documents_page_found"] = site.goto_documents(page)
+            try:
+                found = site.goto_documents(page)
+            except pressing.Stop as stop:
+                # The page would not open, and nothing past the stop was
+                # pressed. What the window shows is surveyed all the same,
+                # and no link on it is followed.
+                stopped = stop
+                found = False
+                info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
+            info["documents_page_found"] = found
+            info["documents_page_opened"] = bool(found)
             info["survey"] = site.survey(page)
             docs = site.collect_documents(page)
             info["links_collected"] = len(docs)
             info["samples"] = [{"title": d.title[:90], "path": d.href[:100], "section": d.text[:90]}
                                for d in docs[:40]]
+        except pressing.Stop as stop:
+            # A press past the documents page it would not make ends the
+            # look there, and the file still says what was seen and why it
+            # stopped.
+            stopped = stop
+            info["stopped"] = {"step": stop.step, "reason": stop.reason, "facts": stop.facts}
         except Exception as e:
             info["error"] = type(e).__name__ + ": " + site.redact(str(e))[:300]
+        self._diagnose_stopped = stopped
         out = self.paths.diagnostics / "diagnose-documents.json"
         write_shaped(out, info, words)
+        if stopped is not None:
+            # The stop's own words, as a run says them (pressing.say).
+            pressing.say(stopped)
         print(f"Wrote {out}")
         print("  That is the detailed file, for repairing this provider. Any word")
         print("  in it that is not on PaperPull's fixed list is written as its")

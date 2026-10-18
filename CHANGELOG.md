@@ -43,6 +43,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
   writes it the way Wells Fargo does. It surveys the page the window shows
   without following any link and says where and why it stopped, and the
   survey beside it says so too.
+- **Every other app's Diagnose keeps its detailed file when it stops early
+  too.** ADP Workforce Now, American Family, Apple Card, AT&T, E*TRADE,
+  Golden 1, Meijer, Newrez, SBA, SMUD, State Farm, TreasuryDirect and
+  Verizon Mobile now write it the Wells Fargo way when a stop interrupts
+  their look, and say where and why it stopped. Apple Card opens no
+  statements section after its documents page would not open. PG&E's
+  Diagnose, which kept its file when its walk of the history stopped, now
+  keeps it when the documents page itself would not open, and walks no
+  history after that.
 - **The transactions export no longer stops at half of an emoji.** A
   statement's text can carry half of an emoji, from a font that names its
   characters in an unusual way, and a CSV has no way to write half a
