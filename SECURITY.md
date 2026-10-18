@@ -82,15 +82,15 @@ The `.gitignore` already blocks all of the following. Do not override it.
     they need.
   - **Apps that click nothing at all during a run** (Affirm, Amazon, Anthem,
     Apple, Citi, E-ZPass Virginia, FedEx, Fidelity, Gap, GitHub, Home Depot,
-    IRS, Kroger, Lowe's, MILITARY STAR, myPay, NetBenefits, Optum Bank,
-    Paylocity, SDG&E, Stripe, TSP, Uber, UKG and UPS) open the provider's
+    Invest529, IRS, Kroger, Lowe's, MILITARY STAR, myPay, NetBenefits, Optum
+    Bank, Paylocity, SDG&E, Stripe, TSP, Uber, UKG and UPS) open the provider's
     pages by their address and read them, or ask for the same lists and
     files the provider's own page asks for, from inside the signed-in page or
     with its cookies. On a site that can also change direct deposit and tax
     withholding, not activating a control is the strongest guarantee
     available, and UKG additionally refuses any URL whose path says `EDIT`
-    rather than `VIEW`. The Diagnose command of Affirm, Fidelity, NetBenefits
-    and TSP, run by hand to help repair a provider, may follow up to six
+    rather than `VIEW`. The Diagnose command of Affirm, Fidelity, Invest529,
+    NetBenefits and TSP, run by hand to help repair a provider, may follow up to six
     links whose whole text is a section name it knows, such as Statements or
     Documents, each through `is_safe_control()`.
   - **Every app has a host allowlist.** A stored or page-supplied URL that
