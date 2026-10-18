@@ -53,6 +53,50 @@ All notable changes to PaperPull are recorded here. Versioning follows
   covers what Diagnose prints in every app, the file a failed download
   writes, and the controls clicked and options picked during Record.
   Thanks to appchamp for spotting it (#103).
+- **The Windows package carries Python 3.12.14, with every 3.12 security
+  fix since 3.12.10.** It was built on python.org's embeddable Python
+  3.12.10, the last 3.12 for which python.org publishes Windows files, so
+  no later security fix could reach it. It now carries the same Python as
+  the Mac package, from python-build-standalone, checked against the
+  SHA-256 its publisher lists before anything is built from it. The
+  packaged Python still ignores `PYTHONPATH`, `PYTHONHOME` and the folder
+  it is started in, as before. Each build and each package workflow asks
+  the packaged Python which version it is and stops on any other answer.
+  python-build-standalone does not sign its files the way the Python
+  Software Foundation signed the embeddable ones, and `PaperPull.exe` and
+  the installer are signed as before.
+- **The Windows and Mac packages install only the package files they were
+  built with.** They installed whatever release of each package was newest
+  on the day of the build, anything above a lower bound, and nothing
+  checked a file. Each now installs from a lock for its system and
+  architecture that names every package at one version with the hashes of
+  its built files, and pip refuses a file whose hash is not there. The
+  locks are written by `packaging/lock.py` from the pins in
+  `packaging/requirements.in`, the versions the server image carries and
+  the test suites run on, so the next packages carry Playwright 1.63.0,
+  pypdf 6.19.0, FastAPI 0.141.1 and Uvicorn 0.52.3 where 0.55.0 had taken
+  newer ones. The Tests workflow installs the Windows lock too, so the
+  suites run on what the package ships. A Mac lock takes only packages
+  that run on macOS 11, the oldest the bundle opens on, and the Intel Mac
+  package carries cryptography 48.0.1, the last release with a built
+  package for Intel Macs. The Windows build no longer runs a
+  `get-pip.py` fetched unchecked, it uses the pip inside the checked Python
+  download, and PaperPull's own core is built with the setuptools from the
+  lock.
+- **Every action the workflows run is named by its commit.** Most were
+  named by a tag, which whoever holds the action can move to other code,
+  the steps that sign the Windows package among them. Each is now named by
+  its full commit with its version beside it, and Dependabot proposes
+  their updates each week.
+- **A release is made only from a commit whose tests passed.**
+  `tools/release.sh` waited for the two package runs alone, found by the
+  tag's name, so a commit whose Tests run was red could be published once
+  its packages built, and a tag pushed again from another commit could
+  hand over an earlier build's files. It now waits for a Tests run of the
+  tag's own commit and stops unless one passes, takes only package runs
+  built from the tag at that commit, reads each run's commit again before
+  downloading its files, and stops when GitHub's tag names another commit
+  than the checkout's.
 
 ## [0.55.0] - 2026-10-17
 

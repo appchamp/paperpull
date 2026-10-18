@@ -4,12 +4,16 @@
 #     bash tools/release.sh 0.31.0
 #     bash tools/release.sh 0.31.0-kroger.1 --prerelease
 #
-# It finds the two package runs for the tag, waits for them if they are
-# still going, downloads their artifacts, checks every file against the
-# checksums the runs published, and then creates the release with the
-# notes at .release/notes-<version>.md. If any file the release carries did
-# not come down, both Mac disk images included, it stops and names it, and
-# nothing is published.
+# It reads which commit the tag names, here and on GitHub, which must be the
+# same one. It waits for a Tests run of that commit to succeed and stops if
+# none does, so a red commit is never published. Then it finds the two
+# package runs built from the tag at that commit, waits for them if they are
+# still going, reads each run's commit again just before downloading its
+# artifacts, checks every file against the checksums the runs published, and
+# then creates the release with the notes at .release/notes-<version>.md. If
+# any file the release carries did not come down, both Mac disk images
+# included, it stops and names it, and nothing is published.
+# tools/release_runs.py decides which run each workflow may give.
 #
 # Beside the packages it puts PaperPull Server's setup files, compose.yaml
 # and the security profile from the tag itself, as one zip, gives every file
@@ -82,7 +86,7 @@ NOTES="$HERE/.release/notes-$VERSION.md"
 
 cd "$HERE"
 [ -f "$NOTES" ] || { echo "no notes at $NOTES" >&2; exit 2; }
-git rev-parse "$TAG" >/dev/null 2>&1 || { echo "no tag $TAG" >&2; exit 2; }
+SHA="$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}")" || { echo "no tag $TAG" >&2; exit 2; }
 
 # tools/release_assets.py makes the server's zip, the labels and the
 # Downloads section. The checkout's own Python first, since a Windows shell
@@ -104,16 +108,41 @@ pypath() {
   if [ "$PY_WANTS_WINDOWS_PATHS" = 1 ]; then wslpath -w "$1"; else printf '%s' "$1"; fi
 }
 ASSETS_PY="$(pypath "$HERE/tools/release_assets.py")"
+RUNS_PY="$(pypath "$HERE/tools/release_runs.py")"
 
-echo "waiting for the package runs on $TAG ..."
+# The tag a release is made from is GitHub's, so a tag moved here and not
+# pushed, or pushed again from another commit, would publish one commit's
+# files under another's name.
+REMOTE_SHA="$("$GH" api "repos/{owner}/{repo}/commits/refs/tags/$TAG" --jq .sha | tr -d '\r')" \
+  || { echo "GitHub has no tag $TAG" >&2; exit 1; }
+[ "$REMOTE_SHA" = "$SHA" ] \
+  || { echo "$TAG is $SHA here and $REMOTE_SHA on GitHub, so nothing was published" >&2; exit 1; }
+
+# The run of the named workflow that passed for exactly this commit, waited
+# for while it is still going. Its commit is read again by its own id at the
+# end, the one the files are about to come from.
+take_run() {
+  local name="$1" runs verdict head
+  while :; do
+    runs="$("$GH" run list --workflow "$name" --commit "$SHA" --limit 50 \
+            --json databaseId,name,headSha,headBranch,event,status,conclusion | tr -d '\r')" \
+      || { echo "gh could not list the $name runs, so nothing was taken. Run this again." >&2; return 1; }
+    verdict="$(printf '%s' "$runs" | "$PY" "$RUNS_PY" pick "$name" "$SHA" "$TAG" | tr -d '\r')" \
+      || return 1
+    [ "$verdict" = "wait" ] || break
+    sleep 20
+  done
+  head="$("$GH" run view "$verdict" --json headSha --jq .headSha | tr -d '\r')" \
+    || { echo "gh could not read $name run $verdict, so nothing was taken. Run this again." >&2; return 1; }
+  [ "$head" = "$SHA" ] || { echo "$name run $verdict is for $head, and $TAG is $SHA" >&2; return 1; }
+  printf '%s' "$verdict"
+}
+
+echo "waiting for the Tests run and the package runs on $TAG ($SHA) ..."
+id="$(take_run "Tests")" || { echo "stopped before anything was downloaded or published" >&2; exit 1; }
+echo "  Tests run $id: success"
 for name in "Windows package" "macOS package"; do
-  id=$("$GH" run list --limit 20 --json databaseId,name,headBranch \
-       --jq "[.[] | select(.name==\"$name\" and .headBranch==\"$TAG\")] | first | .databaseId")
-  id="$(printf '%s' "$id" | tr -d '\r')"
-  [ -n "$id" ] && [ "$id" != "null" ] || { echo "no $name run for $TAG" >&2; exit 1; }
-  until [ "$("$GH" run view "$id" --json status --jq .status | tr -d '\r')" = "completed" ]; do sleep 20; done
-  [ "$("$GH" run view "$id" --json conclusion --jq .conclusion | tr -d '\r')" = "success" ] \
-    || { echo "$name run $id did not succeed" >&2; exit 1; }
+  id="$(take_run "$name")" || { echo "stopped before anything was published" >&2; exit 1; }
   echo "  $name run $id: success"
   rm -rf "$WORK/$name"; mkdir -p "$WORK/$name"
   "$GH" run download "$id" -D "$(winpath "$WORK/$name")" >/dev/null

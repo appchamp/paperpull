@@ -14,8 +14,8 @@ HOW IT IS BUILT, AND WHY THIS WAY
 
 The same idea as the Windows package. Nothing is frozen. The bundle carries a
 relocatable CPython (python-build-standalone, the build that uv ships) with
-the packages every app needs installed into it once, and the repo's own code
-beside it. The panel and every app run under that interpreter exactly as they
+the packages every app needs installed into it once, from a lock that names
+each file's hash, and the repo's own code beside it. The panel and every app run under that interpreter exactly as they
 do in a checkout, so nothing has to know it is packaged.
 
 One architecture per build, arm64 for Apple Silicon or x86_64 for Intel, and
@@ -72,9 +72,15 @@ RES = CONTENTS / "Resources"
 MACOS = CONTENTS / "MacOS"
 
 # python-build-standalone, the install_only_stripped flavor. It unpacks to a
-# folder called python/ that is a complete, relocatable CPython with pip.
+# folder called python/ that is a complete, relocatable CPython with pip. The
+# same release and Python as packaging/build_windows.py, and core/tests holds
+# the two to each other.
 PBS_TAG = "20260901"
 PY_VERSION = "3.12.14"
+
+# The oldest macOS the bundle opens on. Info.plist and the launcher say so,
+# and packaging/lock.py takes only wheels that run on it.
+MACOS_MIN = "11.0"
 
 # The architecture being built, set from --arch in main(). Ours is Apple's
 # name, which clang, Info.plist and the dmg's name use, and the other is
@@ -92,22 +98,35 @@ PBS_SHA256 = {
 }
 
 
+def triple(arch: str | None = None) -> str:
+    """The platform as python-build-standalone names it, and uv in
+    packaging/lock.py."""
+    return "%s-apple-darwin" % ARCHES[arch or ARCH]
+
+
 def pbs_asset() -> str:
-    return "cpython-%s+%s-%s-apple-darwin-install_only_stripped.tar.gz" % (
-        PY_VERSION, PBS_TAG, ARCHES[ARCH])
+    return "cpython-%s+%s-%s-install_only_stripped.tar.gz" % (PY_VERSION, PBS_TAG, triple())
 
 
 def pbs_url() -> str:
     return "https://github.com/astral-sh/python-build-standalone/releases/download/%s/%s" % (
         PBS_TAG, pbs_asset())
 
+
+def lock_file(arch: str | None = None) -> Path:
+    """What the bundle installs, written by packaging/lock.py from the same
+    packaging/requirements.in as the Windows locks. One for each
+    architecture, since a package can have a built wheel for one and not
+    the other, or only for a newer macOS than MACOS_MIN."""
+    return REPO / "packaging" / ("requirements-macos-%s.txt" % (arch or ARCH))
+
 BUNDLE_ID = "io.github.rheeloaded.paperpull"
 
 # Imported from the Windows build so the two packages cannot drift apart on
-# what they carry.
+# what they carry or how they install it.
 sys.path.insert(0, str(REPO / "packaging"))
-from build_windows import (PACKAGES, EXCLUDE_PARTS, INCLUDE_TOP,  # noqa: E402
-                           tracked_files, version, fetch, say)
+from build_windows import (EXCLUDE_PARTS, INCLUDE_TOP, check_python_version,  # noqa: E402
+                           install_locked, tracked_files, version, fetch, say)
 from icons import ico_largest_png  # noqa: E402
 
 
@@ -144,26 +163,7 @@ def stage_python() -> Path:
 
 
 def install_packages(py: Path) -> None:
-    say("Packages")
-    env = dict(os.environ, PYTHONNOUSERSITE="1")
-    subprocess.run([str(py), "-m", "pip", "install", "-q", "--no-warn-script-location",
-                    *PACKAGES], check=True, env=env)
-    say("  shared core")
-    wheels = DIST / "cache" / "wheels"
-    wheels.mkdir(parents=True, exist_ok=True)
-    for old in wheels.glob("paperpull_core-*.whl"):
-        old.unlink()
-    subprocess.run([sys.executable, "-m", "pip", "wheel", "-q", "--no-deps",
-                    "-w", str(wheels), str(REPO / "core")], check=True)
-    wheel = next(wheels.glob("paperpull_core-*.whl"))
-    subprocess.run([str(py), "-m", "pip", "install", "-q", "--no-warn-script-location",
-                    str(wheel)], check=True, env=env)
-    have = subprocess.run([str(py), "-m", "pip", "list", "--format=freeze"],
-                          capture_output=True, text=True, env=env).stdout.lower()
-    gone = [n for n in ("pip", "setuptools", "wheel") if n + "==" in have]
-    if gone:
-        subprocess.run([str(py), "-m", "pip", "uninstall", "-q", "-y", *gone],
-                       check=False, capture_output=True, env=env)
+    install_locked(py, lock_file(), env=dict(os.environ, PYTHONNOUSERSITE="1"))
     # Byte-compiled files and pip's leftovers are not needed and every extra
     # file is one more thing to sign.
     for p in RES.rglob("__pycache__"):
@@ -269,7 +269,7 @@ def write_bundle() -> None:
         '    execl("/usr/bin/open", "open", "-a", "Terminal", script, (char *)0);\n'
         '    perror("open"); return 1;\n'
         '}\n', encoding="utf-8")
-    subprocess.run(["clang", "-arch", ARCH, "-O2", "-mmacosx-version-min=11.0",
+    subprocess.run(["clang", "-arch", ARCH, "-O2", "-mmacosx-version-min=" + MACOS_MIN,
                     "-o", str(MACOS / "PaperPull"), str(launcher_c)], check=True)
 
     # The terminal command, preferring the bundled Python.
@@ -317,7 +317,7 @@ def write_bundle() -> None:
         "CFBundlePackageType": "APPL",
         "CFBundleExecutable": "PaperPull",
         "CFBundleInfoDictionaryVersion": "6.0",
-        "LSMinimumSystemVersion": "11.0",
+        "LSMinimumSystemVersion": MACOS_MIN,
         "LSArchitecturePriority": [ARCH],
         "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "Copyright (c) 2026 PaperPull, a trade name of TNE Enterprises LLC. AGPL-3.0. https://github.com/rheeloaded/paperpull",
@@ -348,6 +348,7 @@ def audit() -> None:
 def smoke_test(py: Path) -> None:
     say("Smoke test")
     env = dict(os.environ, PYTHONNOUSERSITE="1", PYTHONDONTWRITEBYTECODE="1")
+    check_python_version(py, PY_VERSION, env=env)
     r = subprocess.run([str(py), "-c",
                         "import playwright, pypdf, fastapi, uvicorn, paperpull_core; print('ok')"],
                        capture_output=True, text=True, env=env)
