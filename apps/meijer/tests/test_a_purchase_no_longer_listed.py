@@ -672,7 +672,10 @@ def test_discovery_reads_a_list_that_draws_its_rows_a_few_at_a_time(attached, tm
     """The rows come one at a time, one more each time the app counts them.
     Read at its first rows, discovery found the two drawn by then and left
     the rest for a later run."""
-    monkeypatch.setattr(site, "LIST_WAIT_MS", 10000, raising=False)
+    # A row is drawn each time the rows are counted, so the wait holds a
+    # count for every row. Ten seconds ran out on a busy machine with two
+    # rows still to come, and a wait ends once the rows hold still.
+    monkeypatch.setattr(site, "LIST_WAIT_MS", 30000, raising=False)
     monkeypatch.setattr(site, "ROWS_STEADY_MS", 1500, raising=False)
     SITE.orders = orders_page(GROWING, grows=True)
     took = run(tmp_path, attached, "--discover")
@@ -689,7 +692,8 @@ def test_a_list_still_drawing_its_rows_is_judged_once_they_stop(attached, tmp_pa
     looked for again and saved. The one that has dropped off is judged
     against the whole list, so the date it names is the oldest of all of
     it, not of the rows drawn when the press gave up."""
-    monkeypatch.setattr(site, "LIST_WAIT_MS", 10000, raising=False)
+    # A count for every row, as in the test above.
+    monkeypatch.setattr(site, "LIST_WAIT_MS", 30000, raising=False)
     monkeypatch.setattr(site, "ROWS_STEADY_MS", 1500, raising=False)
     SITE.orders = orders_page(GROWING + [GONE])
     run(tmp_path, attached, "--discover")
