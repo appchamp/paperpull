@@ -386,8 +386,19 @@ class App:
 
 
 
-        raw = site.usbank_collect_structured(
-            page, keep=scope.period_filter(self.args, self.config))
+        try:
+            raw = site.usbank_collect_structured(
+                page, keep=scope.period_filter(self.args, self.config))
+        except site.RowUnread:
+            # A heading, a row or a button that would not answer could be
+            # any statement, so the list is not whole and the run stops as
+            # one that did not finish (paperpull_core.listing), rather than
+            # list what it could read as all there is (#106).
+            print("\n  A part of U.S. Bank's statement list would not answer, so the")
+            print("  list was not read whole and nothing more is taken this run.")
+            print("  Run this again in a little while to read the list whole.")
+            self.write_failure("read the statement list", "some of the list would not answer")
+            raise SystemExit(0)
         if raw:
             log.info("U.S. Bank: %d document(s) read from the page's own pickers", len(raw))
         else:

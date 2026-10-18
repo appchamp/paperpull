@@ -987,15 +987,19 @@ def read_rows(page, account: str = "") -> List[dict]:
         return _rows_generic(page, account)
 
     out: List[dict] = []
-    for row, heading in _statement_rows(page):
+    try:
+        rows = list(_statement_rows(page))
+    except RowUnread as e:
+        log.info("the statement list could not be read whole, %s", e)
+        raise
+    for row, heading in rows:
         _button, aria = _row_download_button(row)
         if not aria:
             continue
         if not is_safe_row_control(aria):
             log.info("row control %r did not clear the guard", aria[:70])
             continue
-        m = ROW_DOWNLOAD_ARIA_RE.match(aria)
-        date, _period = parse_period_date(m.group(1))
+        date = row_date(aria)
         if not date:
             log.info("no date in row control %r", aria[:70])
             continue
@@ -1046,13 +1050,20 @@ def usbank_collect_structured(page, keep=None) -> List[dict]:
                      (acct or "(account)")[:34], period or "(current)", len(rows))
             found.extend(rows)
 
-    out, seen = [], set()
+    out, seen, twins = [], set(), 0
     for rec in found:
         key = (rec["account"], rec["date"], rec["title"])
         if key in seen:
+            twins += 1
             continue
         seen.add(key)
         out.append(rec)
+    if twins:
+        # The same year can be read under more than one picker choice, so a
+        # repeat is often the same row. Two rows of one date are told apart
+        # by nothing, and the download refuses that date (find_row_control).
+        log.info("U.S. Bank: %d listed row(s) repeat another's account and date and are listed once",
+                 twins)
     out.sort(key=lambda r: (r["date"], r["account"]), reverse=True)
     return out
 
@@ -1112,25 +1123,49 @@ def usbank_download(page, ctx, account: str, date: str, out_path,
     return _click_row_and_capture(page, ctx, account, date, out_path)
 
 
+class RowUnread(Exception):
+    """A part of the statement list that would not answer a read, a
+    section's heading, its rows or a row's buttons. One that could not be
+    read is never taken to be absent, since it may be the very statement
+    asked for or its twin (#106)."""
+
+
 def _statement_rows(page):
+    """Each row of each statements section, with its section's heading.
+    Raises RowUnread when a heading or a section's rows would not answer."""
     try:
         sections = page.locator(f"{SEL['list']} {SEL['section']}")
         n = sections.count()
-    except Exception:
-        return
+    except Exception as e:
+        raise RowUnread("the statement sections would not answer") from e
     for i in range(n):
         sec = sections.nth(i)
         try:
+            headings = sec.locator("h3").count()
+        except Exception as e:
+            raise RowUnread("a section's heading would not answer") from e
+        if not headings:
+            # A list with no heading at all is no statements section when it
+            # holds no rows either, and is passed over as before. One with
+            # rows could be statements under a heading not drawn, so it is
+            # not taken as absent.
+            try:
+                if not sec.locator(SEL["row"]).count():
+                    continue
+            except Exception as e:
+                raise RowUnread("a section's rows would not answer") from e
+            raise RowUnread("a section with rows has no heading")
+        try:
             heading = " ".join((sec.locator("h3").first.inner_text(timeout=2000) or "").split())
-        except Exception:
-            heading = ""
+        except Exception as e:
+            raise RowUnread("a section's heading would not answer") from e
         if not STATEMENT_SECTION_RE.search(heading):
             continue
         try:
             rows = sec.locator(SEL["row"])
             rn = min(rows.count(), 400)
-        except Exception:
-            continue
+        except Exception as e:
+            raise RowUnread("a section's rows would not answer") from e
         for j in range(rn):
             yield rows.nth(j), heading
 
@@ -1142,37 +1177,77 @@ def account_in_heading(heading: str) -> str:
 
 
 def _row_download_button(row):
+    """A row's Download button and its label, or (None, "") for a row with
+    none. Raises RowUnread when the row's buttons would not answer."""
     try:
         btns = row.locator("button")
         n = min(btns.count(), 4)
-    except Exception:
-        return None, ""
+    except Exception as e:
+        raise RowUnread("a row's buttons would not answer") from e
     for k in range(n):
         b = btns.nth(k)
         try:
             aria = " ".join((b.get_attribute("aria-label") or "").split())
-        except Exception:
-            continue
+        except Exception as e:
+            raise RowUnread("a row's button would not answer") from e
         if ROW_DOWNLOAD_ARIA_RE.match(aria):
             return b, aria
     return None, ""
 
 
+_ORDINAL_RE = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)\b", re.I)
+
+
+def row_date(aria: str) -> str:
+    """The date a row's Download label names, read one way for the list and
+    for the download (#106). A day written as an ordinal, "September 15th,
+    2031", is read as that day, where before it matched no date and fell
+    to the year alone, the last day of December for every such row. A month
+    and a year alone is that month's last day. "" for a label naming none."""
+    m = ROW_DOWNLOAD_ARIA_RE.match(aria or "")
+    if not m:
+        return ""
+    return parse_period_date(_ORDINAL_RE.sub(r"\1", m.group(1)))[0] or ""
+
+
 def find_row_control(page, date: str, account: str = ""):
+    """The Download button of the statement of `date`, read the way the
+    list read it (read_rows), or (None, "").
 
-
-    rx = row_label_re(date)
-    for row, heading in _statement_rows(page):
-        if account and account_in_heading(heading) not in ("", account):
-            continue
-        button, aria = _row_download_button(row)
-        if button is None or not rx.search(aria):
-            continue
-        if not is_safe_row_control(aria):
-            log.info("row control %r did not clear the guard", aria[:70])
-            continue
-        return button, aria
-    return None, ""
+    The download used to look for the row again with a pattern of its own
+    that wanted the exact day, while the list took a statement's date from
+    its button's label with parse_period_date, which also reads a month and
+    a year alone, and files that statement on the month's last day. On a
+    page whose labels name only the month, or write the day another way,
+    every statement listed was then not found, and a Pilot stopped on the
+    first one before any press, with every part of the list on the page
+    (#106). Now a row is this statement's when its label reads to this very
+    date the same way (row_date). Two rows reading to one date cannot be told apart,
+    so neither is pressed, whether or not the guard would pass the other.
+    A heading, a row or a button that would not answer could be this
+    statement or its twin, so nothing is pressed then either (RowUnread)."""
+    found = []
+    try:
+        for row, heading in _statement_rows(page):
+            if account and account_in_heading(heading) not in ("", account):
+                continue
+            button, aria = _row_download_button(row)
+            if button is None or row_date(aria) != date:
+                continue
+            found.append((button, aria))
+    except RowUnread as e:
+        log.info("pressed nothing for %s, %s", date, e)
+        return None, ""
+    if len(found) > 1:
+        log.info("%d rows read as the statement of %s, so none is pressed", len(found), date)
+        return None, ""
+    if not found:
+        return None, ""
+    button, aria = found[0]
+    if not is_safe_row_control(aria):
+        log.info("row control %r did not clear the guard", aria[:70])
+        return None, ""
+    return button, aria
 
 
 def _click_row_and_capture(page, ctx, account: str, date: str,
