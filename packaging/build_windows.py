@@ -12,9 +12,10 @@ WHAT IT PRODUCES
 
 HOW IT IS BUILT, AND WHY THIS WAY
 
-Nothing is frozen. The folder carries the official embeddable CPython from
-python.org, with the packages every app needs installed into it once. That was
-chosen over PyInstaller for three reasons.
+Nothing is frozen. The folder carries a relocatable CPython from
+python-build-standalone, the same release the Mac bundle carries, with the
+packages every app needs installed into it once from a lock that names each
+file's hash. That was chosen over PyInstaller for three reasons.
 
 Every app needs the same few packages, so one shared
 environment serves all of them, and there is nothing to gain from per-app
@@ -28,6 +29,14 @@ using them, which is the upgrade path, and a fresh install uses the shared one.
 A real interpreter means sys.frozen is False, so "python -m playwright install"
 works as documented and the frozen-build fallback in browser.py stays a safety
 net rather than the main path.
+
+WHY NOT PYTHON.ORG'S EMBEDDABLE BUILD
+
+It was used until 0.55.0. python.org publishes Windows binaries for a Python
+only while that version takes bug fixes, and 3.12.10 was the last for 3.12,
+so every later 3.12 security fix would have stayed out of this package.
+python-build-standalone builds each release from source, and its archive is
+checked against the SHA-256 written below before anything is built from it.
 
 WHAT IS NOT IN IT
 
@@ -46,6 +55,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -58,28 +68,58 @@ sys.path.insert(0, str(REPO / "packaging"))
 import msix  # noqa: E402
 from icons import ico_largest_png  # noqa: E402
 
-PY_VERSION = "3.12.10"
-GET_PIP = "https://bootstrap.pypa.io/get-pip.py"
+# python-build-standalone, the install_only_stripped flavor, which unpacks to
+# a folder called python/ holding a complete CPython with pip. Stripped
+# leaves out only its debugging symbols. The same release and Python as
+# packaging/build_macos.py, and core/tests holds the two to each other.
+PBS_TAG = "20260901"
+PY_VERSION = "3.12.14"
 
 # The architecture being built. x64 is the default and the one every release
 # ships. arm64 is a native Windows on ARM build from the same source, which
-# python.org ships as an embeddable zip too, and every package the apps need
-# has a native wheel for it. It is not shipped by default because the x64
-# build already runs on ARM64 Windows under emulation, and nobody would
-# measure the difference in a program that waits on a browser. The switch
-# exists so that changes when a user asks for it, not when someone rebuilds
-# this script. Only run on a machine of the same architecture, since the
-# packages are installed by running the staged Python.
-ARCHES = {"x64": "amd64", "arm64": "arm64"}     # ours -> python.org's name
+# python-build-standalone ships too, and packaging/lock.py checks that every
+# package the apps need has a built wheel for it. It is not shipped by
+# default because the x64 build already runs on ARM64 Windows under
+# emulation, and nobody would measure the difference in a program that waits
+# on a browser. The switch exists so that changes when a user asks for it,
+# not when someone rebuilds this script. Only run on a machine of the same
+# architecture, since the packages are installed by running the staged Python.
+ARCHES = {"x64": "x86_64", "arm64": "aarch64"}     # ours -> python-build-standalone's name
 ARCH = "x64"
 
+# Each architecture's archive as python-build-standalone's SHA256SUMS for
+# PBS_TAG lists it, which is also the digest GitHub shows for the asset. The
+# download must match before anything is built from it. A new PBS_TAG or
+# PY_VERSION takes both lines again from that release's SHA256SUMS, and the
+# Mac's in packaging/build_macos.py with them.
+PBS_SHA256 = {
+    "x64": "7c45c9622400d578709a9b2cddbe8124cc21d382409d9f13406d706d28e31b14",
+    "arm64": "72f4713d056a17961bdba7b43be82a878035040fa1eee30cfd5e43b91a2852d9",
+}
 
-def python_zip() -> str:
-    return "python-%s-embed-%s.zip" % (PY_VERSION, ARCHES[ARCH])
+
+def triple(arch: str | None = None) -> str:
+    """The platform as python-build-standalone names it, and uv in
+    packaging/lock.py."""
+    return "%s-pc-windows-msvc" % ARCHES[arch or ARCH]
 
 
-def python_url() -> str:
-    return "https://www.python.org/ftp/python/%s/%s" % (PY_VERSION, python_zip())
+def pbs_asset() -> str:
+    return "cpython-%s+%s-%s-install_only_stripped.tar.gz" % (PY_VERSION, PBS_TAG, triple())
+
+
+def pbs_url() -> str:
+    return "https://github.com/astral-sh/python-build-standalone/releases/download/%s/%s" % (
+        PBS_TAG, pbs_asset())
+
+
+def lock_file(arch: str | None = None) -> Path:
+    """What the package installs, every package the panel and the apps need
+    at one version with the hash of each of its files, written by
+    packaging/lock.py from packaging/requirements.in. One for each
+    architecture, since a package can have a built wheel for one and not
+    the other."""
+    return REPO / "packaging" / ("requirements-windows-%s.txt" % (arch or ARCH))
 
 
 def suffix() -> str:
@@ -87,11 +127,15 @@ def suffix() -> str:
     names every release has carried stay the same."""
     return "" if ARCH == "x64" else "-" + ARCH
 
-# What the panel and every app need. pytest is left out of the package because
-# a user does not run the test suite, and it is the one thing on every app's
-# requirements list that is not needed to run.
-PACKAGES = ["playwright>=1.44", "pypdf>=4.2", "fastapi>=0.110", "openpyxl>=3.1", "pdfplumber>=0.11",
-            "uvicorn>=0.27", "anyio>=4"]
+# What python-build-standalone carries that the package has no use for, none
+# of which the embeddable build from python.org had either. Tk and IDLE, the
+# C headers and import libraries for compiling extensions, CPython's own test
+# extensions, and venv with ensurepip, whose bundled pip is older than the one
+# the build uses and then removes. Each is a glob under python/.
+PRUNE = ("tcl", "include", "libs", "Lib/tkinter", "Lib/idlelib", "Lib/turtledemo",
+         "Lib/turtle.py", "Lib/__pycache__/turtle.*", "Lib/ensurepip", "Lib/venv",
+         "DLLs/_tkinter.pyd", "DLLs/tcl*.dll", "DLLs/tk*.dll", "DLLs/_test*.pyd",
+         "DLLs/_ctypes_test.pyd")
 
 # Top-level paths from the repo that belong in the package. apps/ is filtered
 # further below so only code goes, never a venv or data folder that happens to
@@ -172,39 +216,49 @@ def wanted(rel: str) -> bool:
 
 
 def stage_python() -> Path:
-    say("Python %s, embeddable build, %s" % (PY_VERSION, ARCH))
+    say("Python %s, python-build-standalone %s, %s" % (PY_VERSION, PBS_TAG, ARCH))
     cache = DIST / "cache"
-    fetch(python_url(), cache / python_zip())
-    fetch(GET_PIP, cache / "get-pip.py")
-
+    fetch(pbs_url(), cache / pbs_asset(), sha256=PBS_SHA256[ARCH])
+    with tarfile.open(cache / pbs_asset()) as t:
+        t.extractall(STAGE, filter="data")
     pydir = STAGE / "python"
-    pydir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(cache / python_zip()) as z:
-        z.extractall(pydir)
+    py = pydir / "python.exe"
+    if not py.is_file():
+        raise SystemExit("the Python archive did not unpack to python\\python.exe")
+    for pattern in PRUNE:
+        for p in pydir.glob(pattern):
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
 
-    # The ._pth file IS sys.path for the embeddable build, and two things about
-    # that matter here.
+    # On its own this Python is set up like an installed one. It reads
+    # PYTHONPATH and PYTHONHOME, puts the script's folder or the current one
+    # first on sys.path, and would behave differently on every machine. A
+    # ._pth file beside its DLL ends that, as the embeddable build's own did.
+    # The file IS sys.path, and its presence puts Python in isolated mode,
+    # where the environment is ignored and no folder is added for the script.
     #
-    # It does not add the directory of the script being run, which every app
-    # relies on to import its sibling *_site.py. And the usual fix, "import
-    # site", also switches on the user's Roaming site-packages, so the package
-    # would quietly pick up whatever that machine happened to have installed
-    # and behave differently on each one.
+    # Two things about that matter here. Every app relies on the directory of
+    # the script being run to import its sibling *_site.py. And the usual fix,
+    # "import site", also switches on the user's Roaming site-packages, so the
+    # package would quietly pick up whatever that machine happened to have
+    # installed.
     #
     # The ._pth format accepts exactly one import line, "import site", so that
     # is used, and site's own hook does the rest. site runs sitecustomize.py
     # from site-packages if one exists, and that module strips every path
     # outside the package and puts the script directory back. No app and no
     # part of the panel has to know it is running packaged.
-    pth = next(pydir.glob("python*._pth"))
-    pth.write_text("python312.zip\n.\nLib\\site-packages\nimport site\n",
-                   encoding="utf-8")
+    dll = next(p for p in pydir.glob("python3*.dll") if p.name.lower() != "python3.dll")
+    (pydir / (dll.stem + "._pth")).write_text("DLLs\nLib\nLib\\site-packages\nimport site\n",
+                                             encoding="utf-8")
     sp = pydir / "Lib" / "site-packages"
     sp.mkdir(parents=True, exist_ok=True)
     (sp / "sitecustomize.py").write_text(
         '"""Run by site at every startup of the packaged Python.\n'
         '\n'
-        'Two corrections to what the embeddable build does on its own.\n'
+        'Two corrections to what the ._pth file beside python.exe leaves.\n'
         '\n'
         'It drops every sys.path entry outside this package. "import site"\n'
         'also switches on the user\'s Roaming site-packages, so without this\n'
@@ -212,8 +266,8 @@ def stage_python() -> Path:
         'installed and behave differently on each one.\n'
         '\n'
         'It puts the directory of the script being run at the front, which a\n'
-        'normal Python does by itself and the embeddable build does not. Every\n'
-        'app imports its sibling *_site.py that way.\n'
+        'normal Python does by itself and isolated mode does not. Every app\n'
+        'imports its sibling *_site.py that way.\n'
         '"""\n'
         'import os\n'
         'import sys\n'
@@ -239,40 +293,52 @@ def stage_python() -> Path:
         '        _tmp = tempfile.gettempdir()\n'
         '    sys.pycache_prefix = os.path.join(_tmp, "PaperPull", "pycache")\n',
         encoding="utf-8")
-
-    py = pydir / "python.exe"
-    say("  bootstrapping pip")
-    subprocess.run([str(py), str(cache / "get-pip.py"), "--no-warn-script-location",
-                    "-q"], check=True)
     return py
 
 
-def install_packages(py: Path) -> None:
-    say("Packages")
-    subprocess.run([str(py), "-m", "pip", "install", "-q",
-                    "--no-warn-script-location", *PACKAGES], check=True)
+def install_locked(py: Path, lock: Path, env: dict | None = None) -> None:
+    """Every package in lock, then the shared core, into the staged Python,
+    with the pip that came in its own checked archive. The Mac build uses
+    this too.
+
+    pip refuses a file whose hash the lock does not hold and a package the
+    lock does not name, and takes built wheels only, so nothing is compiled
+    on the build machine and nothing comes in unchecked. The core is built
+    by the staged Python itself with the setuptools the lock just put there,
+    rather than in an isolated build that fetches a build backend of its own,
+    and goes in with nothing else, since its one dependency is in the lock."""
+    say("Packages, from %s" % lock.name)
+    pip = [str(py), "-m", "pip", "--disable-pip-version-check", "--no-input"]
+    subprocess.run([*pip, "install", "-q", "--no-warn-script-location", "--require-hashes",
+                    "--only-binary", ":all:", "-r", str(lock)], check=True, env=env)
     say("  shared core")
-    # Built as a wheel by the Python running this script, which has a build
-    # backend, then installed into the package. The embeddable build has no
-    # setuptools and cannot install from a source tree.
     wheels = DIST / "cache" / "wheels"
     wheels.mkdir(parents=True, exist_ok=True)
     for old in wheels.glob("paperpull_core-*.whl"):
         old.unlink()
-    subprocess.run([sys.executable, "-m", "pip", "wheel", "-q", "--no-deps",
-                    "-w", str(wheels), str(REPO / "core")], check=True)
+    subprocess.run([*pip, "wheel", "-q", "--no-deps", "--no-build-isolation",
+                    "-w", str(wheels), str(REPO / "core")], check=True, env=env)
     wheel = next(wheels.glob("paperpull_core-*.whl"))
-    subprocess.run([str(py), "-m", "pip", "install", "-q",
-                    "--no-warn-script-location", str(wheel)], check=True)
-    # pip itself is not needed at runtime and is not small. Only what is
-    # actually present is removed, and quietly, because pip prints a full
-    # traceback when asked to uninstall something that was never installed.
-    have = subprocess.run([str(py), "-m", "pip", "list", "--format=freeze"],
-                          capture_output=True, text=True).stdout.lower()
+    subprocess.run([*pip, "install", "-q", "--no-warn-script-location", "--no-deps",
+                    "--no-index", str(wheel)], check=True, env=env)
+    r = subprocess.run([*pip, "check"], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise SystemExit("the packages in the package do not fit together:\n"
+                         + r.stdout + r.stderr)
+    # pip itself is not needed at runtime and is not small, and setuptools
+    # was only there to build the core. Only what is actually present is
+    # removed, and quietly, because pip prints a full traceback when asked
+    # to uninstall something that was never installed.
+    have = subprocess.run([*pip, "list", "--format=freeze"],
+                          capture_output=True, text=True, env=env).stdout.lower()
     gone = [n for n in ("pip", "setuptools", "wheel") if n + "==" in have]
     if gone:
-        subprocess.run([str(py), "-m", "pip", "uninstall", "-q", "-y", *gone],
-                       check=False, capture_output=True)
+        subprocess.run([*pip, "uninstall", "-q", "-y", *gone],
+                       check=False, capture_output=True, env=env)
+
+
+def install_packages(py: Path) -> None:
+    install_locked(py, lock_file())
 
 
 def stage_code() -> int:
@@ -381,6 +447,12 @@ ArchitecturesInstallIn64BitMode=%(arch_allowed)s
 SetupIconFile=PaperPull\paperpull.ico
 UninstallDisplayIcon={app}\paperpull.ico
 
+[InstallDelete]
+; The bundled Python is replaced whole, so an upgrade keeps no file the new
+; one does not carry, neither an older version of a package nor the old
+; interpreter's own files. Nothing of the user's is ever kept in it.
+Type: filesandordirs; Name: "{app}\python"
+
 [Files]
 Source: "PaperPull\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
@@ -435,8 +507,23 @@ def audit() -> None:
     say("  no config, history, profile or PDF in the package")
 
 
+def check_python_version(py: Path, expected: str, env: dict | None = None) -> str:
+    """The packaged Python's own answer to which version it is, which must
+    be the one the build names. The Mac build asks the same question of its
+    bundle, and each package's workflow asks it again of what it installed."""
+    r = subprocess.run([str(py), "-c", "import platform; print(platform.python_version())"],
+                       capture_output=True, text=True, env=env)
+    have = r.stdout.strip()
+    if r.returncode != 0 or have != expected:
+        raise SystemExit("the packaged Python says it is %r, and the build names %s:\n%s"
+                         % (have, expected, r.stderr[-800:]))
+    say("  packaged Python is %s" % have)
+    return have
+
+
 def smoke_test(py: Path) -> None:
     say("Smoke test")
+    check_python_version(py, PY_VERSION)
     r = subprocess.run([str(py), "-c",
                         "import playwright, pypdf, fastapi, uvicorn, paperpull_core; "
                         "print('ok')"], capture_output=True, text=True)

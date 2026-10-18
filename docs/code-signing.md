@@ -30,11 +30,13 @@ Nothing that ships is built on a developer's machine.
 1. A maintainer pushes a version tag (`v0.19.0`, say) to this repository.
 2. The [Windows package](../.github/workflows/build-windows.yml) workflow
    runs on a clean GitHub-hosted Windows runner. It checks out that exact
-   commit, downloads the official embeddable CPython from python.org,
-   installs the project's dependencies from PyPI, stages only the files git
-   tracks, refuses to continue if any config, download history, browser
-   profile or PDF is found in the stage, runs a smoke test under the packaged
-   interpreter, and compiles the installer with Inno Setup.
+   commit, downloads CPython from python-build-standalone and checks it
+   against the SHA-256 its publisher lists, installs the project's
+   dependencies from PyPI with pip checking every file against the hash in
+   the lock, stages only the files git tracks, refuses to continue if any
+   config, download history, browser profile or PDF is found in the stage,
+   runs a smoke test under the packaged interpreter that also asks it which
+   Python it is, and compiles the installer with Inno Setup.
 3. Between staging and packaging, the workflow signs `PaperPull.exe` with
    Azure Artifact Signing, then builds the zip, the MSIX and the installer
    from the signed stage, and signs the installer. It signs in to Azure
@@ -52,25 +54,35 @@ Nothing that ships is built on a developer's machine.
    sends the bundle to Apple for notarization, staples the ticket, then does the same
    for the disk image. The certificate lives in a keychain that exists only
    for that job and is deleted when it ends. The Python inside the bundle
-   is checked against the SHA-256 its publisher lists before it is used.
-6. A maintainer runs `tools/release.sh`, which checks each artifact against
-   the checksums its run published and makes the GitHub release only when
-   every download is there. No step in the workflow publishes on its own.
+   is checked against the SHA-256 its publisher lists before it is used,
+   and its packages against the hashes in the Mac lock.
+6. A maintainer runs `tools/release.sh`, which waits for a passing Tests
+   run of the tag's own commit, takes only package runs built from that
+   commit, checks each artifact against the checksums its run published,
+   and makes the GitHub release only when every download is there. No step
+   in the workflow publishes on its own. Every action a workflow runs is
+   named by its full commit, so nobody can change one by moving its tag.
 
 Anyone can rebuild the package themselves with
 `python packaging/build_windows.py --installer` and compare checksums.
 
 ## What is inside the package, and who wrote it
 
-Everything in the installer is either this project's own source, the
-official CPython build (signed by the Python Software Foundation), or an
-open-source Python package installed from PyPI at build time. The packages
-are listed in `packaging/build_windows.py`. There is no proprietary code and
-nothing that is not also in this repository or on PyPI.
+Everything in the installer is either this project's own source, CPython
+as python-build-standalone builds it from the Python Software Foundation's
+source, or an open-source Python package installed from PyPI at build time.
+The packages are pinned in `packaging/requirements.in`, and
+`packaging/lock.py` writes the lock for each system and architecture,
+`packaging/requirements-windows-x64.txt` and the rest, with the hash of
+every file. There is no proprietary code and nothing that is not also in
+this repository, on PyPI or in python-build-standalone's releases.
 
 Only this project's own programs, the installer and `PaperPull.exe`, are
 signed with its certificate. The upstream components inside keep whatever
-signature their publishers gave them.
+signature their publishers gave them. python-build-standalone does not
+sign its CPython files, so the package's `python.exe` and the interpreter's
+own libraries carry no signature, and the archive they come in is checked
+against its pinned SHA-256 instead.
 
 ## Privacy
 

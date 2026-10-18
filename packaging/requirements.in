@@ -1,0 +1,20 @@
+# What the Windows and macOS packages carry, each pinned to the version the
+# panel's and the apps' test suites pass on, the same version the server
+# image's lock holds (core/tests compares them). Raise one here on purpose,
+# with a test run, then run python packaging/lock.py, which writes a lock for
+# each system and architecture the packages are built for, with every
+# package these bring in and the hashes of its files, so a package built
+# today and one built next month hold the same thing.
+fastapi==0.141.1
+uvicorn==0.52.3
+# gui/app.py imports it as well as reaching it through fastapi.
+anyio==4.15.1
+openpyxl==3.1.5
+pdfplumber==0.11.10
+# [crypto] as the shared core asks for it, so an AES-encrypted PDF opens.
+pypdf[crypto]==6.19.0
+playwright==1.63.0
+# What builds paperpull-core inside the package's own Python, taken from the
+# lock rather than fetched unchecked at build time (--no-build-isolation in
+# packaging/build_windows.py). The build removes it again.
+setuptools==84.0.0
