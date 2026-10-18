@@ -55,15 +55,19 @@ The `.gitignore` already blocks all of the following. Do not override it.
     allowlist (`SAFE_DOC_CONTROL_RE`). A control must pass **both**, so
     anything unrecognized is refused, deny by default. AAFMAA runs the same
     two patterns inline. Alpaca, Best Buy, Bilt, Chase Business, First
-    Horizon, M&T, Simmons Bank, Spectrum, TreasuryDirect and Venmo narrow the
+    Horizon, Simmons Bank, Spectrum, TreasuryDirect and Venmo narrow the
     allowlist to the whole labels they press, and all of them but
     TreasuryDirect give each control a guard of its own built the same way.
-    Best Buy presses only its year menu and a year in it, and M&T only the
-    year headings of its statements list, each heading reading the year
-    alone. Besides those, an app may press a control it finds by a selector
-    or by words written in the app, such as a session dialog's "Continue
-    session", an accordion, a year menu or a list's "Next", which a
-    document allowlist would refuse.
+    Best Buy presses only its year menu and a year in it. M&T presses only
+    the year headings of its statements list, and since a year is no
+    document word, `is_safe_control()` would refuse them. So the heading
+    has a guard of its own, the blocklists plus its whole words, a year
+    with at most the few words a heading carries beside it, and a year left
+    closed stops the run rather than leave the list short. Besides those,
+    an app may press a control it finds by a selector or by words written
+    in the app, such as a session dialog's "Continue session", an
+    accordion, a year menu or a list's "Next", which a document allowlist
+    would refuse.
   - **Apps that press only controls they find themselves** (Amex, Capital
     One, Navy Federal, Robinhood, Schwab, Target, USAA, Verizon, Walmart and
     Wealthfront) call no `is_safe_control()` during a run. They press

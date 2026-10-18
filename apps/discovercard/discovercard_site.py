@@ -55,8 +55,12 @@ WHAT THE LIVE PROBE ESTABLISHED (2026-08-19):
   * History observed: 24 statements, the oldest .. the newest - about two
     years. Older statements are not reachable from this page and are not
     guessed at.
-  * Discover shows an inactivity "stay logged in?" modal; only its keep-alive
-    control is ever clicked (dismiss_timeout).
+  * Discover shows an inactivity "stay logged in?" modal. Of that modal only
+    the keep-alive control is ever clicked (dismiss_timeout). Elsewhere a run
+    presses only the site's own Statements link when the address does not
+    reach the page (click_documents_nav), and a "Show more" or a period in
+    the page's own fallback (expand_all, _select_option), each through
+    is_safe_control or the blocklist.
 
 STILL UNVERIFIED:
   * A login with MORE THAN ONE Discover card. This account has one, so no card
