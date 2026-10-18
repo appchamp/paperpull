@@ -210,6 +210,13 @@ long on CI as in a full run here, while on a busy night on 2026-10-06 core
 took half again as long here as on CI, more than the rest. So the file is
 best refreshed from a run on a quiet machine.
 
+By 2026-10-18 the two had drifted apart. The file said core took 1380 s
+and gui 84, CI took 1636 to 2278 and 171 to 229, and part 1 of the 0.56.0
+tag ran out of its 45 minutes. So the file was set that day from CI's own
+times, each suite's median over five Tests runs, read from the line each
+part prints for each suite. A --write-times run keeps this machine's
+times instead, so compare them with a recent CI run before committing.
+
 WHAT IT PRINTS
 
 Somebody may paste the summary into a public issue, so it is built from

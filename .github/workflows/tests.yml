@@ -17,9 +17,16 @@
 # There were four parts until 2026-10-11. By then the suites took about
 # 8,500 s on CI, so even an even split of four was 35 minutes of tests a
 # part and 39 with setup, and a slow runner took core's part past the limit
-# (69d43fa8, cancelled at 45 minutes with nothing failed). Six parts plan
-# at about 24 minutes of tests each, so a part has room for a runner half
-# again as slow, and for the suites to grow.
+# (69d43fa8, cancelled at 45 minutes with nothing failed). Six parts
+# planned at about 24 minutes of tests each, so a part had room for a
+# runner half again as slow, and for the suites to grow.
+#
+# By 2026-10-18 the suites took about 11,000 s on CI, and six parts plan at
+# about 31 minutes of tests each. Part 1 of the 0.56.0 tag was canceled at
+# the limit with nothing failed, planned from times that had fallen behind
+# CI's own, which tools/suite_times.json holds since. Core alone took 27 to
+# 38 minutes of its part in five runs, and more parts cannot shorten the
+# part that holds it, since core is one suite. Splitting core again can.
 #
 # The runner's own tests also run on Linux and macOS, and "tests" answers
 # for them too. The parts run on Windows, where the runner's POSIX branches
