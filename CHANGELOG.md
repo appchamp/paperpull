@@ -64,6 +64,24 @@ All notable changes to PaperPull are recorded here. Versioning follows
   other look alone could set the purchase down as gone. A look that sees
   no list now counts as not finding the purchase gone, and it stays to be
   looked for again.
+- **E*TRADE no longer saves one account's statement for a statement the
+  list gives no account (#96).** On a sign-in with several accounts, the
+  list can leave a statement's account blank. Every check that compares
+  accounts let such a statement through, so of several accounts'
+  statements of one title and day, the one row the page showed was saved
+  for it, whichever account it belonged to, and Discover kept only one of
+  those statements and left the rest unlisted. Each one is listed now, and
+  one with no account on a day the list gives its title more than once
+  goes to Manual Review with nothing pressed. A statement is also left
+  alone when the page shows fewer rows of its title and day than the list
+  gave, since the one row shown may be another account's, and that goes
+  for statements with an account too. A new download that is byte for
+  byte the same file as another document of that day goes to Manual
+  Review rather than being kept, and under a naming pattern that leaves
+  the account out, a second account's file now ends in that account's
+  last digits rather than " (2)". A sign-in of one account keeps every
+  record and file name it had, and no saved file is renamed. No E*TRADE
+  PDF has been seen yet. Thanks to @appchamp for the report.
 
 ### Security
 - **A Diagnose file no longer names your cards or accounts.** The detailed
