@@ -50,6 +50,14 @@ migrate = pytest.importorskip("migrate")
 # a field of is taken for a record, so a new one is looked at, not passed.
 NOT_RECORDS = {"self.config"}
 
+# Core modules a skip decision reaches that read no saved record, each with
+# why, which are not followed. The dictionaries they read are their own.
+READS_NO_RECORD = {
+    "paperpull_core.pdf_reader":
+        "reads a PDF in a worker process for validate_pdf, and the dictionaries "
+        "it reads are its own messages to that worker and pypdf's own objects",
+}
+
 # A field read only inside one core function, which the tool carries
 # exactly when that function needs it. _skip_fields keeps a record's last
 # note when not_shown.asked_again holds, the only note that reads.
@@ -313,16 +321,19 @@ def skip_decisions(app: Path, mod: Module):
                       and _finds_a_saved_record(fn)]
 
 
-def fields_read(app: Path) -> dict:
+def fields_read(app: Path, passed_over=None) -> dict:
     """{field: [where]} for every record field the app's skip decisions
-    read, and everything they call in the app's own modules and the core."""
+    read, and everything they call in the app's own modules and the core.
+    The modules of READS_NO_RECORD they reach go in `passed_over`."""
     modules = modules_of(app)
     mod = modules[entry_of(app).stem]
     found, seen = {}, set()
     todo = [(mod, fn) for fn in skip_decisions(app, mod)]
     while todo:
         mod, fn = todo.pop()
-        if id(fn) in seen:
+        if mod.name in READS_NO_RECORD and passed_over is not None:
+            passed_over.add(mod.name)
+        if id(fn) in seen or mod.name in READS_NO_RECORD:
             continue
         seen.add(id(fn))
         for obj, key in _reads(fn, mod, modules):
@@ -335,6 +346,15 @@ def fields_read(app: Path) -> dict:
                 if reached is not None:
                     todo.append(reached)
     return found
+
+
+def test_every_module_passed_over_is_still_reached():
+    """A module named in READS_NO_RECORD that no skip decision reaches any
+    more is taken out, so the list never passes over a new one."""
+    reached = set()
+    for app in APPS:
+        fields_read(app, reached)
+    assert set(READS_NO_RECORD) <= reached, sorted(set(READS_NO_RECORD) - reached)
 
 
 @pytest.mark.parametrize("app", APPS, ids=IDS)
