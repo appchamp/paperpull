@@ -396,12 +396,14 @@ def press_something(page):
 # nothing calls is no path, and a use in a survey, a page summary or the
 # Diagnose command does not count, nor one in a function only they reach.
 
-# The functions that report on a page rather than fetch from it, by their
-# whole names, so a run's own function that happens to say "survey", Best
-# Buy's hide_survey or Wells Fargo's _survey, is not taken for one.
+# The functions that report on a page rather than fetch from it, each by its
+# whole name as the apps have it, so a run's own function that happens to
+# say "survey", Best Buy's hide_survey, Wells Fargo's _survey or a new
+# survey_years, is never taken for one. A run reaches only cmd_diagnose
+# (main's own call) and _page_summary (a failure file's) among them.
 _REPORT_FN = re.compile(
-    r"^(?:cmd_diagnose|_page_summary|_link_summary|_control_survey|survey|survey_\w+|"
-    r"_survey_\w+)$")
+    r"^(?:cmd_diagnose|_page_summary|_link_summary|_control_survey|survey|"
+    r"survey_history_page|survey_receipt_page|_survey_vendor_button)$")
 # Names that hold a control to a list of labels. FORBIDDEN_CONTROL_RE alone
 # is a blocklist, which lets anything it does not name through, so it is not
 # one of them, and is_safe_url guards where a fetch goes, not a press.
@@ -430,18 +432,46 @@ _DIAGNOSE_ONLY_WHEN_THE_CENSUS_CAME = frozenset({
 })
 
 
-def _functions(source: str):
-    """{name: the names its body refers to} for every function in `source`,
-    nested ones under their own name as well as inside the one around them."""
+def _locals(fn) -> set:
+    """The names a function binds itself, its arguments and what it
+    assigns, so a variable named like a function is not taken for a call."""
     import ast
+    args = fn.args
+    out = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
+    out |= {a.arg for a in (args.vararg, args.kwarg) if a}
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            out.add(node.id)
+        elif isinstance(node, ast.arg):
+            out.add(node.arg)
+    return out
+
+
+def _functions(source: str, stems=()):
+    """{name: the names its body refers to} for every function in `source`,
+    nested ones under their own name as well as inside the one around them.
+
+    A name counts when it is no name the function binds itself, and an
+    attribute only on self, cls or app, or on a module of the app's own,
+    `stems`, as imported here, so re.search is no call to a function named
+    search."""
+    import ast
+    tree = ast.parse(source)
+    own = {"self", "cls", "app"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            own.update(a.asname or a.name for a in node.names if a.name in stems)
     out = {}
-    for fn in ast.walk(ast.parse(source)):
+    for fn in ast.walk(tree):
         if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             seen = out.setdefault(fn.name, set())
+            bound = _locals(fn)
             for node in ast.walk(fn):
-                if isinstance(node, ast.Name):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) \
+                        and node.id not in bound:
                     seen.add(node.id)
-                elif isinstance(node, ast.Attribute):
+                elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                        and node.value.id in own:
                     seen.add(node.attr)
     return out
 
@@ -488,7 +518,7 @@ def _by_hand(modules: dict):
     """({stem: {function: names}}, the reporting functions and every one
     only they call). Everything else counts as a run's, a function nothing
     calls included, which is the careful side for a census of presses."""
-    modules = {stem: _functions(source) for stem, source in modules.items()}
+    modules = {stem: _functions(source, set(modules)) for stem, source in modules.items()}
     refs = _refs(modules)
     callers = {}
     for name, seen in refs.items():
@@ -504,19 +534,26 @@ def _by_hand(modules: dict):
     return modules, by_hand
 
 
-def _outside_functions(source: str) -> set:
+def _outside_functions(source: str, stems=()) -> set:
     """The names a module refers to outside its functions, an AppSpec's
-    hooks or a table of commands, say."""
+    hooks or a table of commands, say, an attribute only on a module of the
+    app's own."""
     import ast
+    tree = ast.parse(source)
+    own = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            own.update(a.asname or a.name for a in node.names if a.name in stems)
     out = set()
-    todo = list(ast.parse(source).body)
+    todo = list(tree.body)
     while todo:
         node = todo.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if isinstance(node, ast.Name):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             out.add(node.id)
-        elif isinstance(node, ast.Attribute):
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                and node.value.id in own:
             out.add(node.attr)
         todo.extend(ast.iter_child_nodes(node))
     return out
@@ -528,11 +565,12 @@ def run_reaches(sources: dict) -> set:
     functions each calls, never into a reporting one. A function nothing
     reaches, dead code, is not among them, which is the careful side for a
     census of guards."""
-    modules = {stem: _functions(source) for stem, source in sources.items()}
+    stems = set(sources)
+    modules = {stem: _functions(source, stems) for stem, source in sources.items()}
     refs = _refs(modules)
     roots = {name for name in refs if name.startswith("cmd_") or name == "main"}
     for source in sources.values():
-        roots |= _outside_functions(source) & set(refs)
+        roots |= _outside_functions(source, stems) & set(refs)
     todo = [name for name in roots if not _REPORT_FN.match(name)]
     reached = set()
     while todo:
@@ -554,7 +592,7 @@ def guards_asked_in_a_run(app) -> list:
     if not guards:
         return []
     reached = run_reaches(sources)
-    modules = {stem: _functions(source) for stem, source in sources.items()}
+    modules = {stem: _functions(source, set(sources)) for stem, source in sources.items()}
     return sorted("%s:%s" % (stem, name) for stem, fns in modules.items()
                   for name, seen in fns.items()
                   if name in reached and name not in guards and seen & guards)
@@ -720,6 +758,48 @@ def is_year_menu(name):
     return not _refused(name) and name == "Past 3 Years"
 ''', encoding="utf-8")
     assert guards_asked_in_a_run(app) == ["shop_site:pick_year"]
+
+
+def test_the_census_ties_a_call_to_what_it_calls_not_to_a_name(tmp_path):
+    """Found by review. re.search reached a dead function named search, a
+    variable named survey reached the function survey, and a run's own
+    function named survey_years was excused as a report."""
+    app = tmp_path / "shop"
+    app.mkdir()
+    (app / "shop_site.py").write_text('''
+import re
+FORBIDDEN_CONTROL_RE = re.compile("pay")
+SAFE_DOC_CONTROL_RE = re.compile("year")
+
+def is_safe_control(name):
+    return not FORBIDDEN_CONTROL_RE.search(name) and bool(SAFE_DOC_CONTROL_RE.search(name))
+
+def search(page):
+    if is_safe_control(page.locator("#menu").inner_text()):
+        page.locator("#menu").click()
+
+def survey(page):
+    return [is_safe_control("x")]
+
+def survey_years(page):
+    page.locator("#year").click()
+
+def pick_year(page, year):
+    survey = page.locator("#menu").inner_text()
+    return survey
+''', encoding="utf-8")
+    (app / "shop_docs.py").write_text('''
+import re
+import shop_site as site
+
+def cmd_run(page):
+    if re.search("x", "y"):
+        pass
+    site.pick_year(page, "2025")
+    site.survey_years(page)
+''', encoding="utf-8")
+    assert guards_asked_in_a_run(app) == []
+    assert "survey_years:click" in presses_in_a_run(app)
 
 
 # -- a real browser saves its own downloads ----------------------------------
