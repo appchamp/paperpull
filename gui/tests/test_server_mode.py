@@ -1125,6 +1125,42 @@ def test_each_edition_says_only_what_is_true_of_it_at_the_bottom(base, on_server
         assert "__FOOTER__" not in page and "__VERSION__" not in page
 
 
+def test_a_host_that_cannot_give_chrome_its_sandbox_is_said_on_every_page(
+        base, on_server, monkeypatch):
+    """On Synology DSM, whose kernel has no user namespaces, Chrome stops
+    the moment it starts and the Browser Screen stayed black with nothing
+    saying why (#110). The panel says why at the top of every page, in the
+    words the host check found, and says nothing on a host that can."""
+    from paperpull_core import host_sandbox
+    dsm = host_sandbox.Sandbox("no", "no", "no-kernel")
+    monkeypatch.setattr(host_sandbox, "check", lambda: dsm)
+    session = signed_in(base)
+    status, _, body = ask(base + "/api/apps", session=session)
+    assert status == 200
+    said = json.loads(body)["server"]["sandbox"]
+    assert said == host_sandbox.problem(dsm) and "no user namespaces" in said
+    monkeypatch.setattr(host_sandbox, "check",
+                        lambda: host_sandbox.Sandbox("yes", "yes", "applied"))
+    assert json.loads(ask(base + "/api/apps", session=session)[2])["server"]["sandbox"] == ""
+    page = ask(base + "/", session=session)[2]
+    bar = page[page.index('<div id="sandboxbar"'):]
+    assert bar.startswith('<div id="sandboxbar" class="notice warn" role="alert" hidden>')
+    assert "$('sandboxtext').textContent = sandbox;" in page
+    assert "$('sandboxbar').hidden = !sandbox;" in page
+    assert "const sandbox = (SERVER && META.server && META.server.sandbox) || '';" in page
+
+
+def test_off_the_server_the_host_is_never_asked(base, monkeypatch):
+    from paperpull_core import host_sandbox
+
+    def asked():
+        raise AssertionError("the desktop panel asked about Chrome's sandbox")
+    monkeypatch.setattr(host_sandbox, "check", asked)
+    status, _, body = ask(base + "/api/apps")
+    assert status == 200 and json.loads(body)["server"] is None
+    assert server_mode.sandbox_problem() == ""
+
+
 def test_the_shared_folder_is_the_only_one_offered(base, on_server, tmp_path):
     session = signed_in(base)
     status, _, page = ask(base + "/api/providers", session=session)

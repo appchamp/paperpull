@@ -1,6 +1,7 @@
 #!/bin/sh
 # Runs as pp. The virtual screen the providers' sign-in browsers open on,
-# its window manager and the screen sharing server, then the panel.
+# its window manager and the screen sharing server, a check of Chrome's
+# sandbox, then the panel.
 #
 # Only the panel listens beyond the container, behind its password. The
 # screen sharing server listens inside the container only, and the browser
@@ -40,6 +41,12 @@ fi
 fluxbox >"$LOGS/fluxbox.log" 2>&1 &
 x11vnc -display :99 -forever -shared -localhost -rfbport 5900 -nopw -quiet \
   >"$LOGS/x11vnc.log" 2>&1 &
+
+# Whether this host can give Chrome its sandbox, said in one line of the
+# container's log, as pp, the user Chrome runs as. A host that cannot, such
+# as Synology DSM, whose kernel has no user namespaces, otherwise showed
+# only a black Browser Screen (#110). It never stops the start.
+python -m paperpull_core.host_sandbox || true
 
 cd /opt/paperpull/gui
 exec python -m uvicorn app:app --host 0.0.0.0 --port 8765 --ws websockets-sansio

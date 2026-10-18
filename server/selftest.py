@@ -8,7 +8,9 @@ every check held.
   chrome     Chrome is in the browser volume and starts
   sandbox    Chrome runs inside its own sandbox, the namespace sandbox and
              the seccomp filter both on, which is what the container's
-             security profile is for
+             security profile is for. When it does not, or Chrome stops
+             before it opens a window, it says why, a host with no user
+             namespaces or no seccomp-bpf (paperpull_core.host_sandbox)
   screen     a Chrome window opens on the virtual screen
   print      a page prints to a PDF, the way every receipt app saves one
   panel      the panel answers, and with the PaperPull icon for the tab
@@ -54,6 +56,51 @@ def chrome_version() -> str:
     return (out.stdout or out.stderr).strip()
 
 
+class NotStarted(RuntimeError):
+    """Chrome opened no debugging port. said is everything it wrote."""
+
+    def __init__(self, message: str, said: str):
+        super().__init__(message)
+        self.said = said
+
+
+def core():
+    """paperpull_core, from the image's own copy."""
+    sys.path.insert(0, "/opt/paperpull/core")
+    import paperpull_core
+    return paperpull_core
+
+
+def sandbox_problem() -> str:
+    """Why this host cannot give Chrome its sandbox, asked before Chrome is
+    (paperpull_core.host_sandbox), or "" when nothing stands in its way or
+    it cannot be told."""
+    try:
+        core()
+        from paperpull_core import host_sandbox
+        return host_sandbox.problem(host_sandbox.check())
+    except Exception:
+        return ""
+
+
+def sandbox_cause(said: str) -> str:
+    """Why Chrome did not start, when its sandbox is why, or "". The host's
+    own answer names the cause. Without one, Chrome's own words for a
+    sandbox that could not start still say it was the sandbox (#110)."""
+    problem = sandbox_problem()
+    if problem:
+        return problem
+    try:
+        core()
+        from paperpull_core.browser import SERVER_NO_SANDBOX
+    except Exception:
+        return ""
+    if any(mark in said for mark in SERVER_NO_SANDBOX):
+        return ("Chrome could not start its sandbox, and PaperPull never starts it without "
+                "one. The host check found no reason, see \"Chrome does not start\" in SERVER.md.")
+    return ""
+
+
 def start_chrome(profile: Path) -> tuple[subprocess.Popen, str]:
     """Chrome the way the apps' sign-in step starts it, with no flag that
     would turn its sandbox off."""
@@ -70,9 +117,10 @@ def start_chrome(profile: Path) -> tuple[subprocess.Popen, str]:
         if proc.poll() is not None:
             break
         time.sleep(0.2)
-    tail = [line for line in said.read_text(errors="replace").splitlines() if line.strip()][-3:]
-    raise RuntimeError("Chrome did not open a debugging port. It said: %s"
-                       % (" | ".join(tail) or "nothing"))
+    wrote = said.read_text(errors="replace")
+    tail = [line for line in wrote.splitlines() if line.strip()][-3:]
+    raise NotStarted("Chrome did not open a debugging port. It said: %s"
+                     % (" | ".join(tail) or "nothing"), wrote)
 
 
 def browser_checks() -> None:
@@ -97,9 +145,13 @@ def browser_checks() -> None:
                 page.wait_for_timeout(250)
             namespace = "Layer 1 Sandbox Namespace" in lines
             seccomp = "Seccomp-BPF sandbox Yes" in lines
-            check("sandbox", namespace and seccomp,
-                  "namespace %s, seccomp %s" % ("on" if namespace else "OFF",
-                                                "on" if seccomp else "OFF"))
+            detail = "namespace %s, seccomp %s" % ("on" if namespace else "OFF",
+                                                   "on" if seccomp else "OFF")
+            if not (namespace and seccomp):
+                problem = sandbox_problem()
+                if problem:
+                    detail += ". " + problem
+            check("sandbox", namespace and seccomp, detail)
 
             windows = page.evaluate("[window.outerWidth, window.outerHeight]")
             check("screen", windows[0] > 0 and windows[1] > 0,
@@ -115,6 +167,13 @@ def browser_checks() -> None:
             check("print", pdf.startswith(b"%PDF"), "%d bytes" % len(pdf))
 
             browser.new_browser_cdp_session().send("Browser.close")
+    except NotStarted as e:
+        # A Chrome that could not start its sandbox opens no port either, so
+        # the sandbox line says why before the port is mentioned.
+        why = sandbox_cause(e.said)
+        if why:
+            check("sandbox", False, why)
+        check("browser", False, "%s: %s" % (type(e).__name__, e))
     except Exception as e:  # say what broke, then let the summary count it
         check("browser", False, "%s: %s" % (type(e).__name__, e))
     finally:

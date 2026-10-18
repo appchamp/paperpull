@@ -781,6 +781,21 @@ def server_bar() -> str:
             '</div>')
 
 
+def sandbox_problem() -> str:
+    """Why this host cannot give Chrome its sandbox, in a sentence, or ""
+    when nothing stands in its way. A host whose kernel has no user
+    namespaces, Synology DSM's among them, stops Chrome before it opens a
+    window, and the Browser Screen stayed black with nothing saying why
+    (#110). Asked once per panel (paperpull_core.host_sandbox.check)."""
+    if not enabled():
+        return ""
+    try:
+        from paperpull_core import host_sandbox
+        return host_sandbox.problem(host_sandbox.check())
+    except Exception:
+        return ""
+
+
 def paperless_connected() -> bool:
     """Whether the documents a run saves are copied to Paperless, which
     takes the Paperless plug-in and the folder it copies into, the consume
