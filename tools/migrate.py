@@ -175,6 +175,13 @@ PROVIDER_SKIP_FIELDS = {"Robinhood": ("undated_key", "source_url", "category", "
                         "American Family": ("pdf_sha256", "date", "account"),
                         "AT&T": ("category", "date", "account", "pdf_size", "pdf_pages"),
                         "Target": ("invoices",),
+                        # A requested statement of a card's month already
+                        # saved, as a regular statement the list has since
+                        # dropped, is the same statement and is not taken
+                        # again, found by each saved record's date and its
+                        # card's name, which the key holds too and which
+                        # carries no digits (citi_docs._saved_months, #103).
+                        "Citi": ("date", "account"),
                         # A combined statement covers its employer's other
                         # plans for one period, found by the plans' digests,
                         # the digest of its text and the parts of the key

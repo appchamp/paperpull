@@ -9,10 +9,10 @@ HOW THE SITE WORKS
   Citi Online is an Angular app on online.citi.com. Sign-in lands on the
   dashboard. The Account Statements page is /US/nga/accstatement, and it
   is fed by a JSON API the page calls itself. This app makes the same
-  three calls from inside the signed-in page, so the session never leaves
-  the browser and nothing on the page is clicked.
+  calls from inside the signed-in page, so the session never leaves the
+  browser and nothing on the page is clicked.
 
-  All three are POST with a JSON body, cookie session, plus the page's own
+  All four are POST with a JSON body, cookie session, plus the page's own
   app identity headers (APP_HEADERS below, the same for every customer):
     accounts  .../accounts/statementsAndLetters/eligibleAccounts/retrieve
               body {transactionCode: "1079_statements"}
@@ -29,17 +29,39 @@ HOW THE SITE WORKS
               body {accountId, statementDate "MM/DD/YYYY",
                     requestType "RECENT STATEMENTS"}
               -> application/pdf, the statement itself.
+    requested .../card/accounts/statements/archiveStatements/retrieve
+              body {accountId}
+              -> archivedStatementRequestStartDate "MM/DD/YYYY",
+                 archivedStatementsByMonth[] of {displayDate "Oct 2020",
+                 statementDate "202010" (the month alone, no day),
+                 statusIndicator "F" for ready, documentExpiryDate
+                 "20201204", documentExpirationDateText "Dec, 04"}.
+              The same pdf call takes one of them with requestType
+              "ARCHIVED STATEMENTS" and the month exactly as listed
+              (measured 2026-10-17, #103).
 
   IDENTITY is the card plus the statement date. There is no document id.
+  A requested statement is the card plus its month, dated the month's
+  last day, under a title without a day, so its key never meets a
+  regular statement's.
+
+REQUESTED STATEMENTS (#103)
+  Statements older than what the site lists online sit behind "Request
+  Older Statements". The holder asks for them on Citi, and Citi then
+  lists them as Requested Statements for a limited time. This app never
+  submits that request (it is an account action, and the guard refuses
+  "request" as a verb), it only takes what is already listed while it is
+  listed. The requested call has twice answered 200 with no start date
+  and an empty list while the page showed three, so an answer without
+  archivedStatementRequestStartDate is a list NOT read, never "none
+  requested".
 
 NOT COVERED
-  Statements older than what the site lists online sit behind "Request
-  Older Statements", a request this app will never submit. The Annual
-  Account Summary is a web page, not a PDF, and is left alone. Tax forms
-  are not offered for a credit card.
+  The Annual Account Summary is a web page, not a PDF, and is left
+  alone. Tax forms are not offered for a credit card.
 
 SAFETY (this is a credit card account that can move money):
-  Strictly READ-ONLY. This module makes the three calls above and nothing
+  Strictly READ-ONLY. This module makes the four calls above and nothing
   else. It never activates a control that pays, transfers, requests a
   credit line change, adds an authorized user, locks or replaces a card,
   redeems points, or edits any setting, and it clicks nothing at all.
@@ -51,7 +73,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -87,6 +109,15 @@ API = f"{BASE}/gcgapi/prod/public/v1/v2/digital"
 API_ACCOUNTS = f"{API}/accounts/statementsAndLetters/eligibleAccounts/retrieve"
 API_LIST = f"{API}/card/accounts/statements/accountsAndStatements/retrieve"
 API_PDF = f"{API}/card/accounts/statements/recent/retrieve"
+# The statements the holder asked Citi for, listed for a limited time (#103).
+API_REQUESTED = f"{API}/card/accounts/statements/archiveStatements/retrieve"
+RECENT = "RECENT STATEMENTS"
+ARCHIVED = "ARCHIVED STATEMENTS"
+# The status of a requested statement that is ready to download, measured.
+# Anything else is left alone.
+REQUESTED_READY = "F"
+# RawDoc.kind of a requested statement.
+REQUESTED = "requested"
 # The page's own app identity, sent by the page on every call. Not a
 # credential and not personal, the same for every customer.
 APP_HEADERS = {
@@ -222,6 +253,50 @@ def api_date(iso: str) -> str:
     """2026-09-15 -> 09/15/2026, the form the API takes."""
     y, m, d = iso.split("-")
     return f"{m}/{d}/{y}"
+
+
+def requested_date(month: str) -> Optional[str]:
+    """A requested statement's month as Citi lists it, "202010", as the
+    month's last day, "2020-10-31". Citi gives no day for these, so the
+    last day is what sorts and names them. None for anything else."""
+    m = re.fullmatch(r"((?:19|20)\d{2})(\d{2})", str(month or "").strip())
+    if not m:
+        return None
+    year, mon = int(m.group(1)), int(m.group(2))
+    if not 1 <= mon <= 12:
+        return None
+    return f"{year:04d}-{mon:02d}-{_last_day(year, mon):02d}"
+
+
+def month_title(month: str) -> str:
+    """"202010" -> "October 2020", for a requested statement's title."""
+    iso = requested_date(month) or ""
+    if not iso:
+        return ""
+    return f"{_MONTH_NAMES[int(iso[5:7]) - 1]} {iso[:4]}"
+
+
+_EXPIRY_TEXT_RE = re.compile(r"([A-Za-z]{3})[A-Za-z]*\.?,?\s*(\d{1,2})\b")
+
+
+def expiry_date(raw, text: str = "") -> str:
+    """The day a requested statement stops being listed, as YYYY-MM-DD, or
+    "" when it cannot be told. Citi sends 8 digits, read as YYYYMMDD, which
+    is not confirmed, so when the words beside it ("Dec, 04") name another
+    month or day the digits are not believed, and with no day the statement
+    stays until a later listing no longer has it."""
+    m = re.fullmatch(r"(20\d{2})(\d{2})(\d{2})", str(raw or "").strip())
+    if not m:
+        return ""
+    iso = _checked_date(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", "")
+    if not iso:
+        return ""
+    t = _EXPIRY_TEXT_RE.search(text or "")
+    if t:
+        mon = _MONTHS.get(t.group(1).lower())
+        if mon != int(iso[5:7]) or int(t.group(2)) != int(iso[8:10]):
+            return ""
+    return iso
 
 def account_label(nickname: str) -> str:
     """The card's name as it goes into a filename. "Costco Anywhere Visa
@@ -375,6 +450,52 @@ def statements_for(page, account: dict) -> List[dict]:
             for iso in statement_dates(r.get("json") or {})]
 
 
+def read_requested(answer: dict) -> Optional[List[dict]]:
+    """Every entry of one requested-statements answer, as {month, date,
+    status, expires}, or None when the answer is not a list that was read.
+
+    Citi has answered 200 with no archivedStatementRequestStartDate and an
+    empty list while its own page showed three requested statements, twice
+    (measured). So only an answer that carries the start date is a list,
+    and one with the start date and no entries is "none requested". An
+    entry whose month is not six digits keeps month "" and is never taken.
+    """
+    j = (answer or {}).get("json")
+    if (answer or {}).get("status") != 200 or not isinstance(j, dict):
+        return None
+    if not str(j.get("archivedStatementRequestStartDate") or "").strip():
+        return None
+    entries = j.get("archivedStatementsByMonth") or []
+    if not isinstance(entries, list):
+        return None
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        month = str(e.get("statementDate") or "").strip()
+        date = requested_date(month)
+        out.append({"month": month if date else "", "date": date or "",
+                    "status": str(e.get("statusIndicator") or "").strip().upper(),
+                    "expires": expiry_date(e.get("documentExpiryDate"),
+                                           str(e.get("documentExpirationDateText") or ""))})
+    return out
+
+
+def requested_for(page, account: dict) -> Optional[List[dict]]:
+    """The requested statements Citi lists for one card (read_requested),
+    or None when the list was not read. Only a sign-in answer stops the
+    run, since the regular statements are already in hand and a list not
+    read is said as one (Listing.unread)."""
+    try:
+        r = _post(page, API_REQUESTED, {"accountId": account["id"]})
+    except SessionExpired:
+        raise
+    except Exception as e:
+        log.info("the requested statements list could not be read: %s", type(e).__name__)
+        return None
+    return read_requested(r)
+
+
 @dataclass
 class RawDoc:
     title: str
@@ -384,30 +505,125 @@ class RawDoc:
     text: str = ""
     row_index: int = -1
     kind: str = "statement"
+    # A requested statement's month exactly as Citi listed it, "202010",
+    # which the download sends back, and the day it stops being listed.
+    archived_month: str = ""
+    expires: str = ""
+    period: str = ""
+
+
+@dataclass
+class Listing:
+    """What one reading of every card's lists found. `unread` and `read`
+    are the labels of the cards whose requested list was and was not read,
+    `requested` counts what the requested lists held, by fixed words."""
+    docs: List[RawDoc] = field(default_factory=list)
+    unread: List[str] = field(default_factory=list)
+    read: List[str] = field(default_factory=list)
+    requested: dict = field(default_factory=dict)
+
+
+def regular_list_read(answer: dict) -> bool:
+    """Whether a list answer is one that was read, a 200 JSON body that
+    carries statementsByYear. An odd answer reads as no statements, which
+    must never let a requested statement of a month the regular list really
+    has through as one it lacks."""
+    j = (answer or {}).get("json")
+    return ((answer or {}).get("status") == 200 and isinstance(j, dict)
+            and "statementsByYear" in j)
+
+
+def collect_listing(page) -> Listing:
+    """Every statement across every card, from the API, then each card's
+    requested statements. `href` carries the card's opaque account id,
+    which the download needs. It is a uuid the site made up, not the card
+    number.
+
+    A requested statement is taken only when it is ready (REQUESTED_READY)
+    and its month is not one the card's regular list already has, so
+    nothing downloads twice. Its list is asked for only after the card's
+    regular list was read, since the regular months are what that check
+    stands on. Two cards of one name share the name their records are
+    keyed by, and a requested statement has only its month to tell it by,
+    so such cards' requested statements are left, counted. A card the
+    regular list says is not eligible for older statements is not asked."""
+    out = Listing(requested={"listed": 0, "ready": 0, "not ready": 0,
+                             "on the regular list": 0, "no month": 0,
+                             "cards sharing a name": 0, "cards not eligible": 0})
+    counts = out.requested
+    cards = accounts(page)
+    names = [c["label"] for c in cards]
+    for acct in cards:
+        r = _post(page, API_LIST, {"accountId": acct["id"]})
+        j = r.get("json") if isinstance(r.get("json"), dict) else {}
+        months = set()
+        for iso in statement_dates(j):
+            disp = _human_date(iso)
+            months.add(iso[:7])
+            out.docs.append(RawDoc(title=f"Monthly Statement - {disp}", account=acct["label"],
+                                   date_text=iso, href=acct["id"],
+                                   text=f"Citi {acct['label']} statement {disp}"))
+        if names.count(acct["label"]) > 1:
+            counts["cards sharing a name"] += 1
+            continue
+        if not regular_list_read(r):
+            out.unread.append(acct["label"])
+            continue
+        if j.get("archivedStatementsEligibleFlag") is False:
+            counts["cards not eligible"] += 1
+            continue
+        entries = requested_for(page, acct)
+        if entries is None:
+            out.unread.append(acct["label"])
+            continue
+        out.read.append(acct["label"])
+        for e in entries:
+            counts["listed"] += 1
+            if e["status"] != REQUESTED_READY:
+                counts["not ready"] += 1
+                continue
+            if not e["month"]:
+                counts["no month"] += 1
+                continue
+            if e["date"][:7] in months:
+                counts["on the regular list"] += 1
+                continue
+            counts["ready"] += 1
+            disp = month_title(e["month"])
+            out.docs.append(RawDoc(title=f"Monthly Statement - {disp}", account=acct["label"],
+                                   date_text=e["date"], href=acct["id"],
+                                   text=f"Citi {acct['label']} requested statement {disp}",
+                                   kind=REQUESTED, archived_month=e["month"],
+                                   expires=e["expires"], period=disp))
+    return out
 
 
 def collect_download_docs(page) -> List[RawDoc]:
-    """Every statement across every card, from the API. `href` carries the
-    card's opaque account id, which the download needs. It is a uuid the
-    site made up, not the card number."""
-    docs: List[RawDoc] = []
-    for acct in accounts(page):
-        for s in statements_for(page, acct):
-            disp = _human_date(s["date"])
-            docs.append(RawDoc(title=f"Monthly Statement - {disp}", account=s["account"],
-                               date_text=s["date"], href=s["account_id"],
-                               text=f"Citi {s['account']} statement {disp}"))
-    return docs
+    """Every statement across every card, requested ones included
+    (collect_listing)."""
+    return collect_listing(page).docs
 
 
 def download_bill(page, dl_dir, iso_date: str, out_path, account_id: str = "",
-                  account: str = "") -> bool:
+                  account: str = "", archived_month: str = "") -> bool:
     """Fetch one statement's PDF from inside the page and write it. A record
     that carries no account id (an index written by an older copy, say) is
     matched to a card by its label. `dl_dir` is unused, kept for the
-    orchestrator."""
+    orchestrator.
+
+    A requested statement (#103) is asked for by its month exactly as Citi
+    listed it, `archived_month`, with requestType ARCHIVED STATEMENTS, and
+    only when that month is the month of the record's date, so a record
+    can never save one month's statement under another's."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if archived_month:
+        if (requested_date(archived_month) or "")[:7] != (iso_date or "")[:7]:
+            log.info("a requested statement's month does not match its record, not asked for")
+            return False
+        body = {"statementDate": archived_month, "requestType": ARCHIVED}
+    else:
+        body = {"statementDate": api_date(iso_date), "requestType": RECENT}
     if not goto_documents(page):
         return False
     if not account_id:
@@ -418,15 +634,25 @@ def download_bill(page, dl_dir, iso_date: str, out_path, account_id: str = "",
     if not account_id:
         log.info("no account id for %s %s", account, iso_date)
         return False
-    r = _post(page, API_PDF, {"accountId": account_id, "statementDate": api_date(iso_date),
-                              "requestType": "RECENT STATEMENTS"})
+    r = _post(page, API_PDF, dict({"accountId": account_id}, **body))
+    # The PDF comes back as the answer's own bytes, application/pdf, for a
+    # recent statement and a requested one alike (measured). Anything else,
+    # a JSON answer included, is refused, and so are bytes that are not a
+    # PDF.
     if "pdf" not in (r.get("ct") or "") or not r.get("b64"):
-        log.info("no PDF for %s %s: status %s, %s", account, iso_date, r.get("status"), r.get("ct"))
+        if archived_month:
+            log.info("no PDF for a requested statement: status %s, %s",
+                     r.get("status"), r.get("ct"))
+        else:
+            log.info("no PDF for %s %s: status %s, %s", account, iso_date, r.get("status"), r.get("ct"))
         return False
-    body = intake.decode(r["b64"])
-    if body[:5] != b"%PDF-":
+    try:
+        pdf = intake.decode(r["b64"], validate=True)
+    except (ValueError, TypeError):
         return False
-    out_path.write_bytes(body)
+    if pdf[:5] != b"%PDF-":
+        return False
+    out_path.write_bytes(pdf)
     return True
 
 
@@ -478,11 +704,17 @@ def survey(page, dwell_ms: int = 2000, max_follow: int = 0) -> dict:
             report["accounts"].append(label)
             r = _post(page, API_LIST, {"accountId": c["id"]})
             j = r.get("json") or {}
+            requested = requested_for(page, c)
             report["api"][label] = {
                 "years": [(y.get("displayYearTitle"), len(y.get("statementsByMonth") or []))
                           for y in j.get("statementsByYear") or []],
                 "archived_eligible": j.get("archivedStatementsEligibleFlag"),
-                "shape": _shape(j)}
+                "shape": _shape(j),
+                # Counts only, never a month or an expiry (#103).
+                "requested_read": requested is not None,
+                "requested_listed": len(requested or []),
+                "requested_ready": sum(1 for e in requested or []
+                                       if e["status"] == REQUESTED_READY)}
     except Exception as e:
         report["error"] = str(e)[:200]
     return report

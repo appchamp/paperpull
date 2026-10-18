@@ -12,22 +12,43 @@ transaction export reads all twenty-four to the cent.
 
 After sign-in the browser is on Citi Online at `online.citi.com`, an
 Angular app. Statements live on the **Account Statements** page, which is
-fed by a JSON API the page calls itself. This app makes the same three
+fed by a JSON API the page calls itself. This app makes the same four
 calls from inside the signed-in page, so the session never leaves the
 browser, and it clicks nothing. One call lists the cards, one lists the
-statements the site has online for a card, and one returns a statement's
-PDF. Every card on the sign-in is read, so one sign-in covers them all.
+statements the site has online for a card, one lists the statements you
+requested for a card, and one returns a statement's PDF. Every card on
+the sign-in is read, so one sign-in covers them all.
 
 A statement is identified by its card and its closing date. There is no
 document id. Filenames carry the card's name as the site shows it, with
 the last four digits and the "Card by Citi" boilerplate dropped, so a
 month with two cards gets two names instead of a (2).
 
-**What it does not cover.** The site lists roughly the last two years of
-statements online. Older ones sit behind **Request Older Statements**,
-which is a request this app will never submit, so anything older has to
-be asked for on the site by hand. The **Annual Account Summary** is a web
-page, not a PDF, and is left alone. A credit card issues no tax forms.
+## Requested statements
+
+The site lists roughly the last two years of statements online. For
+anything older you ask Citi yourself, with **Request Older Statements**
+on the Account Statements page. That request is an action on your
+account, so this app never submits it. Once Citi has your older
+statements ready it lists them under **Requested Statements**, for a
+limited time only, and the app takes every one that is ready while it is
+listed.
+
+Citi gives a requested statement its month and no day, so its file is
+dated the last day of that month. A month you already have, from the
+regular list or saved by an earlier run, is not taken a second time.
+After Citi stops listing one the app has not saved, it is marked No
+Longer Listed, which is not a failure, and it is taken if Citi lists it
+again. Two cards with the same name on one sign-in cannot be told apart
+by a statement that carries only its month, so their requested
+statements are left for you to download yourself. Citi sometimes answers
+the requested list empty while its own
+page shows statements there. The app then says it did not get that list
+and leaves the run's listing unfinished, so the next Pilot or Run All
+reads it again.
+
+**What it does not cover.** The **Annual Account Summary** is a web page,
+not a PDF, and is left alone. A credit card issues no tax forms.
 
 ## Sign-in
 
@@ -41,8 +62,8 @@ never sees your password. The session is short, so a run that stops with
 
 This is a credit card account. The site can pay, transfer balances, take
 cash advances, redeem points, change the credit line, add users and lock
-or replace the card. This app activates no control at all. It makes the
-three API calls above and nothing else, every URL it reads has to be on
+or replace the card. This app activates no control at all, and it never
+requests a statement. It makes the four API calls above and nothing else, every URL it reads has to be on
 `citi.com`, and an expired session stops the run rather than reporting an
 empty success. The click guard every other app uses is kept and tested
 here too, so the repo-wide guard tests cover this app the same as the

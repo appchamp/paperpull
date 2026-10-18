@@ -9,6 +9,16 @@ All notable changes to PaperPull are recorded here. Versioning follows
 
 ## [Unreleased]
 
+### Added
+- **Citi downloads the older statements you requested.** Statements older
+  than the two years Citi lists online have to be requested on Citi by the
+  account holder, and Citi then lists them as Requested Statements for a
+  limited time. The app now takes every requested statement that is ready
+  while Citi lists it, dated the last day of its month, and never one for
+  a month already saved. One Citi no longer lists is marked No Longer
+  Listed rather than failed. The app still never submits a request itself.
+  Thanks to @appchamp for the request and for recording the page (#103).
+
 ### Fixed
 - **The transactions export no longer stops at half of an emoji.** A
   statement's text can carry half of an emoji, from a font that names its

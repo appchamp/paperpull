@@ -2,8 +2,9 @@
 
 Reads the Account Statements list for every card on the signed-in Citi
 Online session through the same JSON API the page uses, called from inside
-the page, and saves each month's statement PDF. Nothing on the page is
-clicked. The site layer, citi_site.py, holds every fact about citi.com.
+the page, and saves each month's statement PDF, along with any older
+statement the holder requested on Citi while Citi lists it (#103). Nothing
+on the page is clicked. The site layer, citi_site.py, holds every fact about citi.com.
 
 Usage:
     python citi_docs.py --login       verify connection to your browser
@@ -19,7 +20,7 @@ Filters: --year YYYY  --start-date YYYY-MM-DD  --end-date YYYY-MM-DD
          --max-docs N  --type Statement
 
 READ-ONLY: this tool only reads the Account Statements list and saves the
-PDFs Citi already generated. It never pays, transfers, requests a credit
+PDFs Citi already generated. It never requests a statement, never pays, transfers, requests a credit
 line change, adds a user, redeems anything, or changes any account
 setting. Everything stays on this machine; nothing is sent to any
 external service.
@@ -41,7 +42,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import date as _date, datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -60,6 +61,16 @@ from storage import ensure_owner, PROJECT_DIR, set_filename_owner
 log = logging.getLogger("citi_docs")
 
 DONE_STATES = {State.COMPLETED.value, State.NO_RECEIPT_AVAILABLE.value}
+
+# The note on a requested statement Citi no longer offers (#103). Fixed
+# words, nothing of the statement.
+UNLISTED_NOTE = "Citi no longer lists this statement"
+
+
+def _today() -> str:
+    """Today as YYYY-MM-DD, the day a requested statement's expiry is
+    measured against."""
+    return _date.today().isoformat()
 
 
 def ask(prompt: str) -> str:
@@ -100,6 +111,12 @@ class Document:
         self.pdf_pages = kw.get("pdf_pages", "")
         self.notes = kw.get("notes", "")
         self.discovered_at = kw.get("discovered_at", now_iso())
+        # A requested statement (#103). Its month exactly as Citi listed
+        # it, "202010", which the download sends back, and the day Citi
+        # stops listing it, "" when that cannot be told. Both are "" for a
+        # regular statement, and neither is part of the key.
+        self.archived_month = kw.get("archived_month", "")
+        self.archived_expires = kw.get("archived_expires", "")
 
     @property
     def key(self) -> str:
@@ -135,6 +152,12 @@ def migrate_legacy_keys(records: dict) -> int:
 class App:
     _journal = None
     _requests = None
+    # The keys of the requested statements this discovery found listed,
+    # and (card, month) of the statements saved before (#103).
+    _requested_listed = None
+    _regular_listed = None
+    _requested_months = None
+    _saved_months_cache = None
 
     def __init__(self, args):
         self.args = args
@@ -365,6 +388,36 @@ class App:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
             date, _ = site.parse_period_date(title)
             date = date or ""
+        requested = getattr(r, "kind", "") == site.REQUESTED
+        if not requested:
+            # Listed, whatever the scope, for _settle_requested.
+            if getattr(self, "_regular_listed", None) is None:
+                self._regular_listed = set()
+            self._regular_listed.add(Document(title=title, category=category, date=date,
+                                              account=(r.account or "").strip()).key)
+        if requested:
+            month = getattr(r, "archived_month", "") or ""
+            # Never a requested statement whose record would carry another
+            # month than the one the download sends back.
+            if not date or (site.requested_date(month) or "") != date:
+                return 0
+            acct = (r.account or "").strip()
+            probe = Document(title=title, category=category, date=date, account=acct)
+            # Listed, whatever the scope, so a later listing that no longer
+            # has it can be told from one that is out of scope
+            # (_settle_requested).
+            if getattr(self, "_requested_listed", None) is None:
+                self._requested_listed = set()
+            self._requested_listed.add(probe.key)
+            if getattr(self, "_requested_months", None) is None:
+                self._requested_months = set()
+            self._requested_months.add((acct, date[:7]))
+            if (acct, date[:7]) in self._saved_months(exclude=probe.key):
+                # Saved before as a regular statement of this card's month,
+                # one the regular list has since dropped. Never twice.
+                self.stats["requested_saved_before"] = \
+                    self.stats.get("requested_saved_before", 0) + 1
+                return 0
         floor = self.args.start_date or self.config.get("default_start_date")
         if floor and (not date or date < floor):
             self.stats["skipped_out_of_scope"] += 1
@@ -376,14 +429,103 @@ class App:
         doc = Document(title=title, category=category, summary=full_summary,
                        date=date, confidence=confidence, source_url=source_url,
                        account=acct, href=r.href or "")
+        extra = {}
+        if requested:
+            extra = {"archived_month": r.archived_month, "archived_expires": r.expires or "",
+                     "period": r.period or ""}
+            for k, v in extra.items():
+                setattr(doc, k, v)
         if self.discovery.get(doc.key) is None:
             rec = doc.to_dict()
             rec["state"] = State.DISCOVERED.value
             self.discovery.update(doc.key, rec, save=False)
             return 1
-        # refresh the account id the download needs, in case it changed
-        self.discovery.update(doc.key, {"source_url": source_url, "href": r.href or ""}, save=False)
+        # refresh the account id the download needs, in case it changed,
+        # and a requested statement's month and expiry, which a new request
+        # can change
+        self.discovery.update(doc.key, dict({"source_url": source_url, "href": r.href or ""},
+                                            **extra), save=False)
         return 0
+
+    def _saved_months(self, exclude: str = "") -> set:
+        """(card, YYYY-MM) of every statement saved before, under any key
+        but `exclude`. A requested statement of a month already saved is
+        the same statement, so it is never taken a second time (#103).
+        Made once a discovery, from the saved records."""
+        cache = getattr(self, "_saved_months_cache", None)
+        if cache is None:
+            cache = {}
+            for key, rec in self.progress.data.items():
+                if not isinstance(rec, dict):
+                    continue
+                if not (rec.get("downloaded_ok") or rec.get("state") in (
+                        State.COMPLETED.value, State.PDF_VERIFIED.value)):
+                    continue
+                when = str(rec.get("date") or "")
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", when):
+                    cache.setdefault((str(rec.get("account") or "").strip(), when[:7]),
+                                     set()).add(key)
+            self._saved_months_cache = cache
+        return {pair for pair, keys in cache.items() if keys - {exclude}}
+
+    def _kept(self, rec: dict) -> bool:
+        """A record whose document is saved, or put aside for review with
+        its copy still there, as _already_done counts one. Such a record is
+        never marked No Longer Listed."""
+        if not isinstance(rec, dict):
+            return False
+        if rec.get("downloaded_ok") or rec.get("state") in (
+                State.COMPLETED.value, State.PDF_VERIFIED.value):
+            return True
+        if rec.get("state") == State.NEEDS_MANUAL_REVIEW.value:
+            p = rec.get("pdf_path", "")
+            return bool(p and Path(p).exists()
+                        and receipt_pdf.validate_pdf(Path(p), self.config["min_pdf_bytes"]).ok)
+        return False
+
+    def _settle_requested(self, listed) -> int:
+        """Mark No Longer Listed each statement not yet saved that Citi no
+        longer offers, and put back one listed again. Not a failure either
+        way (#103). How many were marked.
+
+        A requested statement is gone once the day it stopped being listed
+        has passed, or once a list of its card read whole no longer has it.
+        A regular statement is gone only when the regular list no longer has
+        it and a requested statement of its card and month is listed now,
+        since that one is the same statement and the two must never both be
+        taken."""
+        read = set(listed.read) - set(listed.unread)
+        requested_listed = getattr(self, "_requested_listed", None) or set()
+        regular_listed = getattr(self, "_regular_listed", None) or set()
+        requested_months = getattr(self, "_requested_months", None) or set()
+        today = _today()
+        marked = 0
+        for key, rec in list(self.discovery.data.items()):
+            if not isinstance(rec, dict):
+                continue
+            prog = self.progress.get(key) or {}
+            if self._kept(prog):
+                continue
+            if rec.get("archived_month"):
+                expires = rec.get("archived_expires") or ""
+                listed_now = key in requested_listed
+                gone = bool(expires and today > expires) or (
+                    rec.get("account") in read and not listed_now)
+            else:
+                listed_now = key in regular_listed
+                month = (str(rec.get("account") or "").strip(), str(rec.get("date") or "")[:7])
+                gone = not listed_now and month in requested_months
+            was = prog.get("state") or rec.get("state")
+            if gone and was != State.NO_LONGER_LISTED.value:
+                doc = Document.from_dict(dict(rec, **prog))
+                self._record(doc, State.NO_LONGER_LISTED, notes=UNLISTED_NOTE)
+                marked += 1
+            elif not gone and listed_now and was == State.NO_LONGER_LISTED.value:
+                if prog:
+                    self.progress.update(key, {"state": State.DISCOVERED.value}, save=False)
+                self.discovery.update(key, {"state": State.DISCOVERED.value}, save=False)
+        self.progress.save()
+        return marked
 
     def cmd_discover(self, quiet: bool = False) -> int:
         # A listing that stops on the way, however it stops, is noted as one
@@ -398,18 +540,45 @@ class App:
             site.goto_documents(page)
         self.check_session(page)
         try:
-            docs = site.collect_download_docs(page)
+            listed = site.collect_listing(page)
         except site.SessionExpired:
             self.check_session(page)
-            docs = site.collect_download_docs(page)
+            listed = site.collect_listing(page)
+        docs = listed.docs
+        self._requested_listed = set()
+        self._regular_listed = set()
+        self._requested_months = set()
+        self._saved_months_cache = None
         for r in docs:
             n_new += self._record_rawdoc(r, site.BILLING_URL)
         self.discovery.save()
         log.info("Account Statements: %d statements, %d new", len(docs), n_new)
+        # Counts and fixed words only, never a month, a day or an id.
+        c = listed.requested
+        log.info("Requested statements: %d listed, %d ready, %d not ready, %d on the "
+                 "regular list, %d without a month, %d saved before, %d lists not read, "
+                 "%d cards sharing a name, %d cards not eligible",
+                 c.get("listed", 0), c.get("ready", 0), c.get("not ready", 0),
+                 c.get("on the regular list", 0), c.get("no month", 0),
+                 self.stats.get("requested_saved_before", 0), len(listed.unread),
+                 c.get("cards sharing a name", 0), c.get("cards not eligible", 0))
+        unlisted = self._settle_requested(listed)
+        if unlisted:
+            log.info("Statements no longer listed: %d", unlisted)
+        self.discovery.save()
 
+        if listed.unread:
+            # Citi has answered with an empty list and no request date while
+            # its page showed requested statements. That is a list not read,
+            # never "none requested", so the listing is not noted whole and
+            # Resume says so.
+            print(f"\n!! Citi did not give the requested statements list for "
+                  f"{len(listed.unread)} card(s). The regular statements are listed. "
+                  "Run Pilot or Run All again later to read the requested ones.")
         # The whole list is in, and only now may a Resume that carries on
         # from it call the run finished (paperpull_core.listing).
-        listing.read_whole(self)
+        if not listed.unread:
+            listing.read_whole(self)
         self.stats["discovered"] = len(self.discovery.data)
 
         if not quiet:
@@ -457,12 +626,36 @@ class App:
         if state in (State.COMPLETED.value, State.PDF_VERIFIED.value,
                      State.NO_RECEIPT_AVAILABLE.value, State.CANCELED.value):
             return True
+        # A requested statement Citi no longer offers has nothing left to
+        # fetch. A discovery that finds it listed again puts it back
+        # (_settle_requested, #103).
+        if state == State.NO_LONGER_LISTED.value:
+            return True
         # a review copy counts only if its PDF is still present and valid;
         # a quarantined / failed one should be retried.
         if state == State.NEEDS_MANUAL_REVIEW.value:
             p = rec.get("pdf_path", "")
             return bool(p and Path(p).exists()
                         and receipt_pdf.validate_pdf(Path(p), self.config["min_pdf_bytes"]).ok)
+        return False
+
+    def _unlisted(self, doc: Document, dry_run: bool = False) -> bool:
+        """A statement Citi no longer offers, skipped (#103). One marked so
+        by a discovery, or a requested one whose expiry has passed since,
+        written down so here unless this is a dry run. A saved one is never
+        marked, and with --redownload a saved requested one past its expiry
+        is skipped as it is, since there is nothing left to fetch."""
+        rec = self.progress.get(doc.key) or {}
+        expired = bool(doc.archived_month and doc.archived_expires
+                       and _today() > doc.archived_expires)
+        if self._kept(rec):
+            return expired and bool(getattr(self.args, "redownload", False))
+        if rec.get("state") == State.NO_LONGER_LISTED.value:
+            return True
+        if expired:
+            if not dry_run:
+                self._record(doc, State.NO_LONGER_LISTED, notes=UNLISTED_NOTE)
+            return True
         return False
 
     # -- processing --------------------------------------------------------
@@ -486,6 +679,12 @@ class App:
         for i, doc in enumerate(docs, 1):
             print(f"\n[{i}/{len(docs)}] {doc.date or '(no date)'}  "
                   f"{doc.category}  {doc.summary}")
+            if self._unlisted(doc, dry_run=dry_run):
+                # Not done, and never said to be. Citi no longer offers it.
+                print("  Citi no longer lists this statement, so it is skipped. "
+                      "A run that finds it listed again tries it again.")
+                self.stats["no_longer_listed"] = self.stats.get("no_longer_listed", 0) + 1
+                continue
             if self._already_done(doc):
                 print("  Already downloaded and verified - skipping.")
                 self.stats["skipped_completed"] += 1
@@ -537,7 +736,8 @@ class App:
             site.goto_documents(page)
         try:
             saved = site.download_bill(page, self._dl_dir, doc.date, out_path,
-                                       account_id=doc.href, account=doc.account)
+                                       account_id=doc.href, account=doc.account,
+                                       archived_month=doc.archived_month)
         except site.SessionExpired:
             # Stop the whole run. Continuing would file every remaining
             # statement as "manual review" and finish looking successful
