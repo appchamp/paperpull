@@ -290,6 +290,37 @@ _PAGE_STATE_JS = r"""
     const n = (el.innerText || '').length;
     if (n > most) { most = n; big = el; }
   }
+  // Every open shadow root, since nothing above looks inside one, and the
+  // controls of the page and of those roots, read for their names here and
+  // only counted.
+  const roots = [];
+  const gather = (root) => {
+    for (const e of root.querySelectorAll('*'))
+      if (e.shadowRoot) { roots.push(e.shadowRoot); gather(e.shadowRoot); }
+  };
+  gather(document);
+  const inRoots = (sel) => roots.reduce((n, r) => n + r.querySelectorAll(sel).length, 0);
+  const both = (sel) => document.querySelectorAll(sel).length + inRoots(sel);
+  const CONTROLS = 'a, button, [role=link], [role=button], [role=menuitem], [role=tab]';
+  const controls = [...document.querySelectorAll(CONTROLS)];
+  for (const r of roots) controls.push(...r.querySelectorAll(CONTROLS));
+  const shown = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.opacity !== '0';
+  };
+  let named = 0, namedShown = 0, statements = 0, documents = 0;
+  for (const el of controls) {
+    const name = (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!name || name.length > 120) continue;
+    if (/^statements?\s*(&|and)\s*documents$/i.test(name)) {
+      named += 1;
+      if (shown(el)) namedShown += 1;
+    }
+    if (/\bstatements\b/i.test(name)) statements += 1;
+    if (/\bdocuments\b/i.test(name)) documents += 1;
+  }
   return {
     ready: document.readyState,
     html_overflow: cs(h).overflow,
@@ -303,7 +334,17 @@ _PAGE_STATE_JS = r"""
       dialogs: document.querySelectorAll('[role=dialog], [aria-modal=true]').length,
       iframes: document.querySelectorAll('iframe').length,
       inputs: document.querySelectorAll('input, select, textarea').length,
-      passwords: document.querySelectorAll("input[type=password]").length
+      passwords: document.querySelectorAll("input[type=password]").length,
+      links_with_no_href: document.querySelectorAll('a:not([href]), [role=link]:not([href])').length,
+      shadow_roots: roots.length,
+      shadow_links: inRoots('a[href], [role=link]'),
+      shadow_buttons: inRoots('button, [role=button]'),
+      menu_items: both('[role=menuitem]'),
+      collapsed_buttons: both('button[aria-expanded=false], [role=button][aria-expanded=false]'),
+      statements_and_documents_controls: named,
+      statements_and_documents_shown: namedShown,
+      statements_controls: statements,
+      documents_controls: documents
     },
     largest_visible: big ? {tag: big.tagName.toLowerCase(),
                             class: (big.className || '').toString().slice(0, 200),
@@ -313,7 +354,19 @@ _PAGE_STATE_JS = r"""
 """
 
 # What _PAGE_STATE_JS counts, by the names it gives them.
-_PAGE_COUNTS = ("buttons", "links", "dialogs", "iframes", "inputs", "passwords")
+#
+# "links" counts a[href] alone, and Wells Fargo draws its links as an <a
+# role=link> with no address, so a full page of them read as no link at
+# all (#27). The rest say what else a page draws as links and buttons, what
+# sits in an open shadow root, which nothing else here looks inside, what a
+# menu holds, and how many controls of the page carry the words statements
+# and documents, all as counts, so the next failure file answers where a
+# documents link went.
+_PAGE_COUNTS = ("buttons", "links", "dialogs", "iframes", "inputs", "passwords",
+                "links_with_no_href", "shadow_roots", "shadow_links", "shadow_buttons",
+                "menu_items", "collapsed_buttons", "statements_and_documents_controls",
+                "statements_and_documents_shown", "statements_controls",
+                "documents_controls")
 
 _COUNT_ERRORS_JS = r"""
 () => {
@@ -750,9 +803,14 @@ def summarize(report: dict) -> list:
             said.append("%s matched nothing. Either the page had not drawn "
                         "yet or the selector is wrong." % e.get("name"))
 
-    if (page.get("counts") or {}).get("passwords"):
+    counts = page.get("counts") or {}
+    if counts.get("passwords"):
         said.append("There is a password field on the page, so the session "
                     "probably ended.")
+    named = counts.get("statements_and_documents_controls") or 0
+    if named and not counts.get("statements_and_documents_shown"):
+        said.append("A control named Statements and Documents is on the page "
+                    "and does not show, as one behind a closed menu would not.")
     if "hidden" in (page.get("body_overflow"), page.get("html_overflow")):
         said.append("Scrolling is locked on the page, which is what an open "
                     "dialog does, and what makes a rendered document come "
@@ -794,7 +852,7 @@ SURVEY_NOTE = (
 
 def write_survey(diagnostics_dir, page=None, selectors=None, provider="",
                  journal=None, requests=None, identity=None, extra=None,
-                 say=print, **ignored) -> Optional[str]:
+                 say=print, stopped=None, **ignored) -> Optional[str]:
     """The same survey as a failure file, asked for on purpose.
 
     Diagnose already wrote a second file next to this one, the detailed
@@ -808,7 +866,18 @@ def write_survey(diagnostics_dir, page=None, selectors=None, provider="",
 
     A screenshot, which half the apps take, is a picture of the page and
     cannot be built from a list, so it is the one thing that stays.
+
+    `stopped` is the pressing.Stop Diagnose stopped at, a page it could
+    not open say, and the survey is then of the page the window showed,
+    with the stop's own step, reason and facts under "stopped", words the
+    app wrote in its source and counts (#27).
     """
+    if stopped is not None:
+        extra = dict(extra or {})
+        extra["stopped"] = {"step": getattr(stopped, "step", ""),
+                            "reason": getattr(stopped, "reason", ""),
+                            "facts": dict(getattr(stopped, "facts", None) or {})}
+
     def told(out):
         return ("  Diagnose wrote a survey that is safe to send:",
                 "    %s" % out,
