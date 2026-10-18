@@ -194,6 +194,28 @@ def arrived(dl_dir, before) -> list:
     return out
 
 
+def growing(dl_dir, before) -> list:
+    """The files the browser is still writing in `dl_dir` that were not there
+    at `before`, or have changed since, so a download can be refused while
+    it arrives. A file another capture left behind is not this download."""
+    if not dl_dir:
+        return []
+    before = before if before is not None else ()
+    stamps = getattr(before, "stamps", None) or {}
+    out = []
+    for path in intake.partials(dl_dir):
+        name = path.name
+        if name not in before:
+            out.append(path)
+            continue
+        try:
+            if name in stamps and _stamp(path) != stamps[name]:
+                out.append(path)
+        except OSError:
+            pass
+    return out
+
+
 def earlier_finished(dl_dir, before) -> int:
     """How many downloads that were still being written at `before` have
     finished, or gone, since.
@@ -344,8 +366,11 @@ def take_download(download, dl_dir, before, out_path, *, zip_ok: bool = False) -
     try:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # One larger than a document may be is never copied, or never put
-        # in place (intake.save_download_as).
-        intake.save_download_as(download, out_path)
+        # in place, and one that does not finish in time, or grows past the
+        # limit in the folder while it arrives, is cancelled
+        # (intake.save_download_as).
+        intake.save_download_as(download, out_path,
+                                partial=lambda: growing(dl_dir, before))
         saved = True
     except intake.TooLarge:
         return ""

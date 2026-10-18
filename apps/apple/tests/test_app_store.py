@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import storage  # noqa: F401  binds this provider's AppSpec
 import apple_site as site
+from paperpull_core import intake
 from paperpull_core.models import Item, Purchase
 
 ORGANIZER, CHILD = "10000001", "10000002"
@@ -234,7 +235,9 @@ class _Page:
     def evaluate(self, js, arg=None):
         if js == site._TOKEN_JS:
             return True
-        assert js == site._API_JS, "only the page's own kind of call is made"
+        # With the readers put in front, since every answer is read only up
+        # to the limit a document has (intake.evaluate).
+        assert js == intake.reading(site._API_JS), "only the page's own kind of call is made"
         path, method, body, dsid, version, key = arg
         self.calls.append({"path": path, "method": method, "body": body, "dsid": dsid,
                            "version": version, "key": key})

@@ -562,7 +562,9 @@ def _fetch_file(page, link: str) -> dict:
         raise SessionExpired("Stripe answered %s, which means the session has ended" % resp.status)
     if "json" in ct:
         try:
-            return {"status": resp.status, "ct": ct, "url": resp.url, "json": whole_json(resp.json())}
+            # Never copied into the run past the limit (intake.json_of).
+            return {"status": resp.status, "ct": ct, "url": resp.url,
+                    "json": intake.json_of(resp)}
         except Exception:
             return {"status": resp.status, "ct": ct, "url": resp.url, "json": None}
     try:

@@ -495,3 +495,128 @@ def test_every_refusal_says_which_limit_and_where_it_is_raised():
                         (pdf_reader._said_size(10 ** 9), "DOCUMENT_BYTES")):
         assert "%s in paperpull_core/intake.py is the limit, and raising it" % limit in said, said
         assert hasattr(intake, limit)
+
+
+# -- pdfplumber, for the transactions export ------------------------------------
+#
+# tools/export_transactions.py read the person's archive with pdfplumber in its
+# own process, with nothing to stop a PDF made to keep it busy or to fill the
+# memory. It reads them through plumbed() in the worker now.
+
+def test_pdfplumber_reads_in_the_worker_and_a_stall_is_refused_in_time(tmp_path, quick, capsys):
+    path = tmp_path / "Statement.pdf"
+    data = stalling_pdf()
+    path.write_bytes(data)
+    started = time.monotonic()
+    with pytest.raises(pdf_reader.Unread) as refused:
+        pdf_reader.plumbed(path)
+    assert time.monotonic() - started < 6
+    assert refused.value.kind == pdf_reader.OVER_LIMIT
+    assert "PDF_SECONDS in paperpull_core/intake.py" in str(refused.value)
+    assert "set aside unread" in capsys.readouterr().out
+    assert path.read_bytes() == data, "the refused PDF was changed or removed"
+    # Remembered for the run, as every read is.
+    again = time.monotonic()
+    with pytest.raises(pdf_reader.Unread):
+        pdf_reader.plumbed(path)
+    assert time.monotonic() - again < 0.5
+
+
+@pytest.mark.skipif(sys.platform == "darwin",
+                    reason="macOS enforces no memory limit, the worker's own watch holds it there")
+def test_pdfplumber_past_its_memory_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(intake, "PDF_MEMORY_BYTES", 200 * intake.MiB)
+    monkeypatch.setattr(intake, "PDF_SECONDS", 300)
+    path = tmp_path / "Statement.pdf"
+    path.write_bytes(bloating_pdf())
+    started = time.monotonic()
+    with pytest.raises(pdf_reader.Unread) as refused:
+        pdf_reader.plumbed(path)
+    # Its memory and never its time, which is five minutes here. pdfplumber
+    # fills it more slowly than pypdf, 67 s on a busy machine (2026-10-18).
+    assert refused.value.kind == pdf_reader.OVER_LIMIT and "memory" in str(refused.value)
+    assert time.monotonic() - started < 240
+    assert pdf_reader.plumbed(good(tmp_path))[0]["lines"]
+
+
+def pages_pdf(pages: int, lines: int = 46) -> bytes:
+    """A statement of `pages` dense pages, `lines` lines of transactions each."""
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", None,
+               b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for p in range(pages):
+        stream = "".join(
+            "BT /F1 9 Tf 36 %d Td (%02d/%02d POS DEBIT GROCER STORE %05d CITY ST  $%d.%02d) Tj ET\n"
+            % (760 - 16 * i, 1 + p % 12, 1 + i % 28, p * 100 + i, i * 3, i % 100)
+            for i in range(lines)).encode("latin-1")
+        objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")
+        objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                       b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>" % len(objects))
+        kids.append(len(objects))
+    objects[1] = b"<< /Type /Pages /Kids [%s] /Count %d >>" % (
+        b" ".join(b"%d 0 R" % k for k in kids), pages)
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for n, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for offset in offsets:
+        out += b"%010d 00000 n \n" % offset
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1, xref)
+    return bytes(out)
+
+
+@pytest.mark.skipif(sys.platform == "darwin",
+                    reason="macOS enforces no memory limit, the worker's own watch holds it there")
+def test_a_long_statement_is_read_by_pdfplumber_page_by_page_within_its_memory(
+        tmp_path, monkeypatch):
+    """pdfplumber keeps every page it has read unless each is closed. Sixty
+    dense pages held 358 MB that way and 30 MB closed (measured 2026-10-18),
+    so a long correct statement was refused for memory (review). Within
+    200 MB, every page is read."""
+    monkeypatch.setattr(intake, "PDF_MEMORY_BYTES", 200 * intake.MiB)
+    path = tmp_path / "Statement.pdf"
+    path.write_bytes(pages_pdf(60))
+    pages = pdf_reader.plumbed(path)
+    assert len(pages) == 60 and all(len(p["lines"]) == 46 for p in pages)
+
+
+def test_pdfplumber_is_never_asked_in_the_app(tmp_path, monkeypatch):
+    """The app's own pdfplumber is one that cannot open anything, and the
+    lines still come, from the worker's."""
+    import types
+
+    class Refuses(types.ModuleType):
+        def open(self, *a, **k):
+            raise AssertionError("pdfplumber was asked in the app's own process")
+    monkeypatch.setitem(sys.modules, "pdfplumber", Refuses("pdfplumber"))
+    pages = pdf_reader.plumbed(good(tmp_path))
+    assert [tl["text"] for tl in pages[0]["lines"]] == ["Order 8421997301", "2026-01-15",
+                                                        "Total 1284.55"]
+
+
+def test_pdfplumber_gives_characters_only_where_a_caller_may_rebuild_them(tmp_path):
+    path = good(tmp_path)
+    plain = pdf_reader.plumbed(path)
+    assert all("chars" not in tl for tl in plain[0]["lines"])
+    assert all(isinstance(tl["top"], float) for tl in plain[0]["lines"])
+    # Two lines of one character. Asked for characters from a page of two
+    # such lines, every line comes with its own, and from three, none does.
+    short = good(tmp_path, "short.pdf", lines=("A", "B", "Total 1284.55"))
+    rebuilt = pdf_reader.plumbed(short, chars_when=2)
+    for tl in rebuilt[0]["lines"]:
+        assert "".join(c["text"] for c in tl["chars"]).replace(" ", "") == \
+            tl["text"].replace(" ", ""), tl
+        assert set(tl["chars"][0]) <= {"x0", "x1", "top", "size", "height", "text"}
+    assert all("chars" not in tl for tl in pdf_reader.plumbed(short, chars_when=3)[0]["lines"])
+
+
+def test_a_pdf_pdfplumber_cannot_open_says_so(tmp_path):
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"%PDF-1.4\nnot a PDF at all\n")
+    with pytest.raises(pdf_reader.Unread) as unread:
+        pdf_reader.plumbed(path)
+    assert unread.value.kind != pdf_reader.OVER_LIMIT

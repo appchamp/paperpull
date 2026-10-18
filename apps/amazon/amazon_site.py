@@ -946,8 +946,13 @@ def find_invoice_pdf_links(page, order_id: str) -> List[Tuple[str, str]]:
         return []
     if not resp.ok or not is_safe_url(resp.url):
         return []
+    try:
+        # Never copied into the run past the limit (intake.text_of).
+        popover = intake.text_of(resp)
+    except intake.TooLarge:
+        return []
     out, seen = [], set()
-    for m in INVOICE_PDF_HREF_RE.finditer(resp.text()):
+    for m in INVOICE_PDF_HREF_RE.finditer(popover):
         url = BASE + _html.unescape(m.group(1))
         if url in seen or not is_safe_url(url):
             continue

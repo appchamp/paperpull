@@ -41,13 +41,39 @@ PAGE = ("<!doctype html><html><head><meta charset='utf-8'></head><body><table>"
 
 # What /doc answers, set by a test. "pdf" the statement, "html" a signed-out
 # page sent as the download, "cut" the statement cut off halfway, "none" no
-# download at all, a plain page.
+# download at all, a plain page, "forever" a download that does not end
+# (cut off after 25 seconds, so a broken guard fails rather than waits).
 ANSWER = {"doc": "pdf"}
+# How many bytes of the download that does not end were sent.
+SENT = {"forever": 0}
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         mode = ANSWER["doc"]
+        if self.path.startswith("/doc") and mode == "forever":
+            import time
+            if self.headers.get("Range"):
+                # Chromium asks again from where a cut-off download stopped.
+                # Refused, so a test whose guard is broken fails at the cut.
+                self.send_response(410)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % NAME)
+            self.send_header("Content-Length", str(100 * len(PDF)))
+            self.end_headers()
+            began = time.monotonic()
+            try:
+                while time.monotonic() - began < 25:
+                    self.wfile.write(PDF[:4000])
+                    SENT["forever"] += 4000
+                    time.sleep(0.2)
+            except OSError:
+                pass
+            return
         if self.path.startswith("/doc") and mode == "slow":
             # The statement, ten seconds after it is asked for.
             import time
@@ -266,6 +292,49 @@ def test_a_statement_that_answers_after_ten_seconds_is_saved(browser_page, tmp_p
     page = browser_page(True)
     got, archive, staging, out = _download(page, tmp_path)
     assert got is True and out.read_bytes() == PDF
+
+
+@pytest.mark.parametrize("folder_takes_effect", [True, False],
+                         ids=["the browser's folder", "Playwright's own copy"])
+def test_a_download_that_never_ends_is_cancelled_and_nothing_is_taken(
+        browser_page, tmp_path, answer, monkeypatch, folder_takes_effect):
+    """Asked why the download failed, Playwright waits until it has finished,
+    and a provider that kept sending held the run there for good. It is
+    cancelled after the time a download is given (intake.failure)."""
+    import time
+    from paperpull_core import intake
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 3)
+    answer["doc"] = "forever"
+    page = browser_page(folder_takes_effect)
+    started = time.monotonic()
+    got, archive, staging, out = _download(page, tmp_path)
+    assert got is False
+    assert time.monotonic() - started < 20
+    assert _listing(archive) == []
+    assert not [n for n, _size in _listing(staging) if n.endswith(".pdf")]
+    time.sleep(1.0)
+    first = SENT["forever"]
+    time.sleep(1.5)
+    assert SENT["forever"] == first, "the download was left running"
+
+
+def test_a_download_growing_past_the_limit_in_the_folder_is_cancelled_as_it_arrives(
+        browser_page, tmp_path, answer, monkeypatch, capsys):
+    """The browser writes the download into the staging folder while it
+    arrives, and it is cancelled as soon as it is larger there than a
+    document may be, not once the provider has sent it all (review)."""
+    import time
+    from paperpull_core import intake
+    monkeypatch.setattr(intake, "DOCUMENT_BYTES", 30_000)
+    monkeypatch.setattr(intake, "DOWNLOAD_SECONDS", 60)
+    answer["doc"] = "forever"
+    page = browser_page(True)
+    started = time.monotonic()
+    got, archive, staging, out = _download(page, tmp_path)
+    assert got is False
+    assert time.monotonic() - started < 20
+    assert "larger than" in capsys.readouterr().out
+    assert _listing(archive) == []
 
 
 def test_a_press_that_starts_no_download_takes_nothing(browser_page, tmp_path, answer, monkeypatch):

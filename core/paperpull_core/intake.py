@@ -18,9 +18,11 @@ which is generous for a statement and still a bound on a NAS.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
+import weakref
 from pathlib import Path
 from typing import Optional
 
@@ -153,6 +155,23 @@ def body(resp, limit: Optional[int] = None) -> bytes:
     return data
 
 
+def text_of(resp, limit: Optional[int] = None) -> str:
+    """An answer's text, read through body(), so one the app asked for
+    itself (context.request) is refused unread when its declared length is
+    over the limit and is never copied into this process past it. Raises
+    TooLarge. Decoded as Playwright's own text() decodes it."""
+    return body(resp, limit).decode()
+
+
+def json_of(resp, limit: Optional[int] = None):
+    """An answer's JSON, read as text_of reads its text, made whole as every
+    app's parse is (characters.whole_json). Raises TooLarge, and ValueError
+    for an answer that is not JSON, as Playwright's own json() does."""
+    import json as _json
+    from .characters import whole_json
+    return whole_json(_json.loads(text_of(resp, limit)))
+
+
 def _let_go(resp) -> None:
     """Have Playwright's driver drop an answer it asked for itself, which it
     otherwise holds whole until its context closes. A page's answer has
@@ -239,8 +258,13 @@ def check_file(path, what: str = "The downloaded file", limit: Optional[int] = N
 # base64, and Response.arrayBuffer() holds the whole answer before a single
 # byte can be counted. These read it a piece at a time instead and stop at
 # the limit. A snippet that reads a body calls ppRead(response) or
-# ppBlob(blob) in place of arrayBuffer(), and is run through evaluate()
-# below, which puts these in front of it with the limit of the moment.
+# ppBlob(blob) in place of arrayBuffer(), and ppText(response) or
+# ppJson(response) in place of text() and json() where the text is the
+# document, a page an app prints or the letters it renders. ppRefused(e)
+# says whether an error a snippet caught is one of these refusing, which it
+# throws on rather than taking for an answer that did not parse. A snippet
+# that reads any of them is run through evaluate() below, which puts these
+# in front of it with the limit of the moment.
 #
 # A page's own scripts can change fetch and every reader under it, so a
 # provider's page that meant to could still hand back more. decode() then
@@ -282,6 +306,9 @@ _READ_JS = r"""
     if (b.size > ppLimit) throw ppOver(b.size);
     return new Uint8Array(await b.arrayBuffer());
   };
+  const ppText = async (r) => new TextDecoder().decode(await ppRead(r));
+  const ppJson = async (r) => JSON.parse(await ppText(r));
+  const ppRefused = (e) => String((e && e.message) || e).startsWith("%(mark)s");
 """
 
 _OPENER = "=> {"
@@ -333,17 +360,240 @@ def page_said_too_large(error) -> bool:
 
 
 # -- a download the browser wrote ---------------------------------------------
+#
+# A download's own file, a copy of it, why it failed and deleting it all
+# wait in Playwright until it has finished, for as long as the provider
+# keeps sending. So whatever asks for any of them goes through finish()
+# first, which has the download followed in a fiber of its own and waits
+# for that only DOWNLOAD_SECONDS, a moment at a time on the page so the
+# browser goes on meanwhile, and cancels a download that did not finish.
 
-def save_download_as(download, out_path) -> None:
-    """download.save_as(out_path), within the limit.
+class TooSlow(TooLarge):
+    """A download cancelled for its time. Caught wherever a refusal for size
+    is, since a document refused for any limit is handled the same way, and
+    asked for again on the next run."""
 
-    The browser's own copy is measured once it has finished, and one larger
-    than a document may be is never copied. Where Playwright cannot say
-    where its copy is, the copy is made beside `out_path` and measured
-    before it takes its place, so a file already at `out_path` is never
-    written over by one that is then refused. Raises TooLarge, and
-    whatever save_as raises."""
+
+class _Following:
+    """Whether a followed download has finished, and the refusal it met when
+    it was cancelled unfinished, raised again each time it is asked for."""
+    __slots__ = ("done", "refused")
+
+    def __init__(self):
+        self.done = False
+        self.refused: Optional[TooLarge] = None
+
+
+# Keyed by the download itself, so a record goes when its download does.
+_followed: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def follow(download) -> None:
+    """Start following a download the page started, without waiting for it.
+
+    A listener that hears the download can call this so the download is
+    already being followed when something saves it. Nothing has to, since
+    finish() starts it on first asking."""
+    _follow(download)
+
+
+def _follow(download) -> Optional[_Following]:
+    """The record of a download being followed, started on first asking.
+
+    Download.path() returns once the download has finished, so it is asked
+    in a fiber of its own, started by Playwright's loop the way Playwright
+    starts a fiber for each listener, and while it waits there the run goes
+    on. None for a stand-in a test made, or where Playwright's loop is not
+    there to start it, and such a download is not waited on."""
+    try:
+        from playwright.sync_api import Download
+        import greenlet
+    except ImportError:
+        return None
+    if not isinstance(download, Download):
+        return None
+    state = _followed.get(download)
+    if state is not None:
+        return state
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    state = _Following()
+
+    def wait() -> None:
+        # Playwright raises a listener's own error at whichever call comes
+        # next, which can be this one, and the download has not finished
+        # then. One cancelled, failed or with its browser gone says so again
+        # at once, so it is asked three times before it counts as finished
+        # (review).
+        for _ in range(3):
+            try:
+                download.path()
+                break
+            except Exception:
+                continue
+        state.done = True
+
+    fiber = greenlet.greenlet(wait)
+
+    def start() -> None:
+        # Run by the loop, so the fiber running it is the one that runs
+        # the loop. The follower hands back to it while it waits and when
+        # it ends, as a listener's fiber does.
+        try:
+            fiber.parent = greenlet.getcurrent()
+            fiber.switch()
+        except Exception as e:
+            log.info("following a download could not start: %s", type(e).__name__)
+            state.done = True
+
+    loop.call_soon(start)
+    _followed[download] = state
+    return state
+
+
+class _Pages:
+    """Pauses on the page a download is waited from, else the page it came
+    on, else any open page of its context, else the context itself. A tab
+    that opened only to start the download and closed again does not end
+    the wait, nor does every page of the browser having closed while the
+    context is still open."""
+
+    def __init__(self, download, page=None):
+        self.download = download
+        self.page = page
+
+    def _candidates(self) -> list:
+        out = [self.page]
+        try:
+            own = self.download.page
+            out.append(own)
+            out.extend(own.context.pages)
+        except Exception:
+            pass
+        return [p for p in out if p is not None]
+
+    def wait_for_timeout(self, ms) -> None:
+        for p in self._candidates():
+            try:
+                if p.is_closed():
+                    continue
+                p.wait_for_timeout(ms)
+                return
+            except Exception:
+                continue
+        # No page is open. The context's own close is waited for instead,
+        # which runs Playwright's loop for the pause and so lets the
+        # follower see a download that had already finished (review).
+        try:
+            context = self.download.page.context
+        except Exception:
+            context = None
+        if context is not None:
+            try:
+                context.wait_for_event("close", timeout=max(1, ms))
+            except Exception as e:
+                if type(e).__name__ == "TimeoutError":
+                    return
+        raise RuntimeError("no open page or context to wait on")
+
+
+def finish(download, page=None, seconds: Optional[float] = None, *, partial=None) -> bool:
+    """Whether a download finished within `seconds` (DOWNLOAD_SECONDS), so
+    its own file, a copy of it or its failure can be asked for at once.
+
+    One that did not, or whose file grew past the limit while it arrived
+    (`partial`, as waits_for takes it), is cancelled, said once, and stays
+    refused for the rest of the run (refusal). A stand-in a test made is
+    taken as finished, as it always was."""
+    state = _follow(download)
+    if state is None:
+        return True
+    if state.refused is not None:
+        return False
+    if state.done:
+        return True
+    said = (_refused, _timed_out)
+    if waits_for(download, _Pages(download, page), seconds,
+                 finished=lambda d: state.done, partial=partial, start_ms=5):
+        return True
+    _cancel(download)
+    if _refused > said[0]:
+        state.refused = TooLarge("The download for this document grew larger than the %s "
+                                 "PaperPull takes in, so it was cancelled. %s"
+                                 % (_mb(DOCUMENT_BYTES),
+                                    raising("DOCUMENT_BYTES", "lets a larger one in")))
+    elif _timed_out > said[1]:
+        state.refused = TooSlow(_slow_words(seconds=seconds))
+    else:
+        # Neither limit was met. No page of its browser was open to wait
+        # on, so the browser went away with the download unfinished.
+        log.info("a download was cancelled unfinished, with no page left to wait on")
+        state.refused = TooSlow("The download for this document was cancelled unfinished, "
+                                "with its browser gone.")
+    return False
+
+
+def refusal(download) -> Optional[TooLarge]:
+    """The refusal a download met in finish(), ready to raise, or None."""
+    try:
+        state = _followed.get(download)
+    except TypeError:
+        # A stand-in a test made, which no record can be kept for.
+        return None
+    return state.refused if state is not None else None
+
+
+def _slow_words(what: str = "The download for this document",
+                seconds: Optional[float] = None) -> str:
+    seconds = DOWNLOAD_SECONDS if seconds is None else seconds
+    return ("%s did not finish in %d seconds, so it was cancelled. %s"
+            % (what, seconds, raising("DOWNLOAD_SECONDS", "gives a download longer")))
+
+
+def failure(download, page=None, *, partial=None) -> str:
+    """download.failure() within DOWNLOAD_SECONDS, and within the limit in
+    the folder the browser writes it to (`partial`, as finish takes it).
+    "" when the download finished whole, the browser's word for why it did
+    not, or the refusal it met in finish()."""
+    if not finish(download, page, partial=partial):
+        return str(refusal(download) or "cancelled unfinished")
+    return download.failure() or ""
+
+
+def discard(download, page=None) -> None:
+    """Cancel a download nobody wants and delete the browser's copy of it.
+
+    Deleting waits until the download has finished, which once it is
+    cancelled is at once. Where cancelling raised, it waits only as long as
+    finish() allows. Nothing here raises."""
+    try:
+        download.cancel()
+        cancelled = True
+    except Exception:
+        cancelled = False
+    try:
+        if cancelled or finish(download, page):
+            download.delete()
+    except Exception:
+        pass
+
+
+def save_download_as(download, out_path, *, partial=None) -> None:
+    """download.save_as(out_path), within the limits.
+
+    It is waited for only as long as finish() allows, and a download that
+    did not finish in time is cancelled and raises TooSlow. The browser's
+    own copy is measured once it has finished, and one larger than a
+    document may be is never copied. Where Playwright cannot say where its
+    copy is, the copy is made beside `out_path` and measured before it
+    takes its place, so a file already at `out_path` is never written over
+    by one that is then refused. Raises TooLarge, and whatever save_as
+    raises."""
     out_path = Path(out_path)
+    if not finish(download, partial=partial):
+        raise refusal(download) or TooSlow(_slow_words())
     try:
         own = download.path()
     except Exception:
@@ -365,18 +615,22 @@ def save_download_as(download, out_path) -> None:
 
 
 def waits_for(download, page, seconds: Optional[float] = None, *, finished=None,
-              partial=None, poll_ms: int = 250) -> bool:
+              partial=None, poll_ms: int = 250, start_ms: Optional[int] = None) -> bool:
     """Whether a download finished within `seconds`, cancelled when it did
     not or when the file it is writing grew past the limit.
 
     `finished(download)` answers whether it has finished, and is the record
-    a listener keeps by calling download.path() in its own fiber, where a
-    wait for it holds nothing else (Meijer's way since #42). `partial` is the
-    file the browser writes it to while it arrives, when the app knows it.
-    The wait is page.wait_for_timeout, so the listener runs meanwhile."""
+    kept by whatever asks download.path() in a fiber of its own, where a
+    wait for it holds nothing else (finish, and Meijer's way since #42).
+    `partial` is the file the browser writes it to while it arrives, when
+    the app knows it. The wait is page.wait_for_timeout, so that fiber runs
+    meanwhile. With `start_ms` the first pause is that long and each one
+    after twice the last, up to `poll_ms`, so a download that has already
+    finished costs a moment and not a quarter second."""
     global _timed_out
     seconds = DOWNLOAD_SECONDS if seconds is None else seconds
     waited = 0
+    pause = poll_ms if start_ms is None else max(1, min(start_ms, poll_ms))
     while True:
         try:
             if finished is not None and finished(download):
@@ -392,15 +646,15 @@ def waits_for(download, page, seconds: Optional[float] = None, *, finished=None,
         if waited >= seconds * 1000:
             _timed_out += 1
             log.warning("a download did not finish in %d seconds and was cancelled", seconds)
-            print("  The download did not finish in %d seconds, so it was cancelled. %s"
-                  % (seconds, raising("DOWNLOAD_SECONDS", "gives a download longer")))
+            print("  " + _slow_words("The download", seconds))
             _cancel(download)
             return False
         try:
-            page.wait_for_timeout(poll_ms)
+            page.wait_for_timeout(pause)
         except Exception:
             return False
-        waited += poll_ms
+        waited += pause
+        pause = min(poll_ms, pause * 2)
 
 
 def _cancel(download) -> None:

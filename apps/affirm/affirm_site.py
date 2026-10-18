@@ -58,6 +58,7 @@ from paperpull_core.redact import redact, set_private_words  # noqa: F401
 from paperpull_core.urls import is_safe_url as _host_allows
 from paperpull_core.api_census import shape_of as _shape
 from paperpull_core.dates import checked as _checked_date
+from paperpull_core import intake
 from paperpull_core.characters import whole_json
 
 log = logging.getLogger("affirm_docs.site")
@@ -244,7 +245,7 @@ _TEXT_JS = """async (url) => {
     throw new Error('Refusing an off-host request');
   }
   const r = await fetch(u.href, {credentials: 'include', redirect: 'follow'});
-  return {status: r.status, ct: r.headers.get('content-type') || '', text: r.status === 200 ? await r.text() : '', url: r.url};
+  return {status: r.status, ct: r.headers.get('content-type') || '', text: r.status === 200 ? await ppText(r) : '', url: r.url};
 }"""
 
 
@@ -359,7 +360,12 @@ def download_document(page, title: str, date: str, out_path: Path, occurrence: i
     if not url or not is_safe_url(url):
         log.warning("no loan terms URL for %s %s", title, date)
         return False
-    res = page.evaluate(_TEXT_JS, url)
+    try:
+        # The agreement is the document, read in the page only up to the
+        # limit a document has (intake.evaluate).
+        res = intake.evaluate(page, _TEXT_JS, url)
+    except intake.TooLarge:
+        return False
     if res.get("status") in (401, 403):
         raise SessionExpired("Affirm answered %s" % res["status"])
     html = res.get("text") or ""

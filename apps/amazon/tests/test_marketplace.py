@@ -205,6 +205,10 @@ class _Resp:
     def text(self):
         return self._text
 
+    def body(self):
+        # What intake.text_of reads, held to the limit.
+        return self._text.encode()
+
 
 class _PopoverPage:
     def __init__(self, text):

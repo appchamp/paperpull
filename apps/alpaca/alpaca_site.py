@@ -101,7 +101,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
 
-from paperpull_core import pressing
+from paperpull_core import intake, pressing
 from paperpull_core.controls import SETTINGS_CONTROL_RE, AUTH_CONTROL_RE
 from paperpull_core.redact import private_words, redact, set_private_words  # noqa: F401  (re-exported)
 from paperpull_core.urls import is_safe_url as _host_allows
@@ -686,10 +686,9 @@ class Run:
         gone = 0
         if self.dl_dir is not None and self.before is not None:
             gone = _discard(dl, self.dl_dir, self.before)
-        try:
-            dl.delete()
-        except Exception:
-            pass
+        # Deleting waits until the download has finished, so it waits only
+        # for the cancel to land (intake.discard).
+        intake.discard(dl)
         if gone:
             log.info("discarded %d file(s) of a download that was not taken", gone)
         return gone

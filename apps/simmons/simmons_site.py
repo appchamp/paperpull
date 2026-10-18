@@ -1289,14 +1289,7 @@ def _cancel_all(downloads: list) -> None:
     """End every download handed over and remove any file the browser had
     already written for it. Nothing of it is read or kept."""
     for dl in downloads:
-        try:
-            dl.cancel()
-        except Exception:
-            pass
-        try:
-            dl.delete()
-        except Exception:
-            pass
+        intake.discard(dl)
 
 
 def _close_all(pages: list) -> None:

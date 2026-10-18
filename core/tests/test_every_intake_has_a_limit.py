@@ -15,13 +15,21 @@ its limit and nowhere else.
     base64 handed back        base64.b64decode()            intake.decode
     a download's file         download.save_as(), .path()   intake.save_download_as,
                                                             intake.read_file
+    a download waited for     .failure(), .delete(), and    intake.failure,
+                              expect_download with no       intake.discard, and a
+                              timeout                       timeout given
     a body read in the page   arrayBuffer(), blob(), ...    intake.reading, ppRead, ppBlob
     a printed page            "Page.printToPDF"             receipt_pdf.printed_pdf
     a PDF read                PdfReader, extract_text       pdf_reader
     an archive opened         zipfile.ZipFile               receipt_pdf.open_zip
     packed bytes unpacked     zlib.decompress, ...          intake.inflate
 
-and a snippet that reads a body in the page (ppRead, ppBlob) is run
+A download's own file, a copy of it, why it failed and deleting it each
+wait in Playwright until it has finished, for as long as the provider
+sends, so intake asks for them only once intake.finish has waited its
+limit (test_intake_waits_for_a_download_only_through_finish).
+
+A snippet that reads a body in the page (ppRead, ppBlob) is run
 through intake.evaluate, which puts the reader in front of it with the
 limit of the moment and says a refusal in words. Each such snippet is
 compiled in a real browser with the reader in front, since a test of the
@@ -29,10 +37,13 @@ Python around it proves nothing of the JavaScript.
 
 A use that is not a document is named below with the reason.
 
-Not counted here, and so not held by these limits, is what a page hands
-back that is not a document's bytes, a listing's JSON, a page's text or
-HTML, which V8 holds to about 512 million characters and Chromium keeps
-of a page's own answer only up to about ten megabytes.
+An answer read whole as text or JSON is a listing far more often than a
+document, and is not held to DOCUMENT_BYTES unless it carries one. Each
+place one is read is named in ANSWERS below, with what bounds it, so a new
+one is looked at before it ships. One the app asked for itself through the
+session is read through intake.text_of or intake.json_of, and a document
+carried in text or JSON read in the page, a page an app prints or letters
+it renders, through ppText or ppJson.
 """
 import ast
 import functools
@@ -57,7 +68,8 @@ HOME = {
     "body": {INTAKE},
     "decode": {INTAKE},
     "save_as": {INTAKE},
-    "download_path": {INTAKE, DELIVERY},
+    "download_path": {INTAKE},
+    "download_wait": {INTAKE},
     "page_read": {INTAKE},
     "print": {RECEIPT_PDF},
     "pdf": {READER},
@@ -74,8 +86,8 @@ NOT_A_DOCUMENT = {
     ("apps/lowes/lowes_site.py", "pair_cards", "decode"):
         "an order's id in a link, at most 80 characters, checked to be base64",
     ("apps/meijer/meijer_site.py", "on_download", "download_path"):
-        "waited for in the listener's own fiber, the file then read through "
-        "intake.read_file",
+        "waited for in the listener's own fiber, cancelled after twenty seconds, "
+        "the file then read through intake.read_file",
     ("apps/spectrum/spectrum_site.py", "decode_statement_id", "decode"):
         "a statement's id, which holds its account and date, not a document",
     ("apps/spectrum/spectrum_site.py", "pair", "decode"):
@@ -100,9 +112,6 @@ NOT_A_DOCUMENT = {
         "the server's self test printing a blank page of its own, never a provider's",
     ("server/selftest.py", "browser_checks", "print"):
         "the server's self test printing a blank page of its own, never a provider's",
-    ("tools/export_transactions.py", "pdf_lines", "pdf"):
-        "the person's own archive, read by a tool the panel runs in a process "
-        "of its own, which a stuck read leaves the panel usable beside",
     ("tools/migrate.py", "read", "zip"):
         "a history export, read under the module's own MAX_ limits",
     ("tools/migrate.py", "build", "zip"):
@@ -116,10 +125,35 @@ DECODERS = {"b64decode", "urlsafe_b64decode", "standard_b64decode", "decodebytes
             "a2b_base64"}
 PDF_NAMES = {"PdfReader", "PdfWriter", "PdfFileReader", "PdfMerger", "PdfDocument"}
 UNPACKERS = {"zlib", "_zlib", "gzip", "bz2", "lzma", "brotli", "zstd"}
-READERS = re.compile(r"\bpp(?:Read|Blob)\(")
+READERS = re.compile(r"\bpp(?:Read|Blob|Text|Json)\(")
 # A snippet that fetches and hands bytes back to Python as base64, which
 # has to have read them with ppRead or ppBlob.
 HANDS_BACK = re.compile(r"\bbtoa\(|\bb64\s*[:=]")
+# Playwright calls that wait for a download to begin, with the event's name
+# where they take one.
+DOWNLOAD_STARTS = {"expect_download": None, "expect_event": "download",
+                   "wait_for_event": "download"}
+# Download's calls that wait until it has finished, besides path() and
+# save_as(), which are counted above.
+WAITS_FOR_FINISH = {"failure", "delete"}
+
+
+def _starts_a_download_wait(node: ast.Call, name: str, constants=None) -> bool:
+    """Whether a call waits for a download to begin, with no time given. A
+    timeout named by a module constant is read as that constant."""
+    if name not in DOWNLOAD_STARTS:
+        return False
+    event = DOWNLOAD_STARTS[name]
+    if event is not None:
+        first = node.args[0] if node.args else next(
+            (k.value for k in node.keywords if k.arg == "event"), None)
+        if not (isinstance(first, ast.Constant) and first.value == event):
+            return False
+    given = next((k.value for k in node.keywords if k.arg == "timeout"), None)
+    if isinstance(given, ast.Name) and given.id in (constants or {}):
+        given = ast.Constant(constants[given.id])
+    # No timeout, or one of 0, which Playwright takes as none.
+    return given is None or (isinstance(given, ast.Constant) and not given.value)
 
 
 def is_test(path: Path) -> bool:
@@ -167,6 +201,10 @@ def ways_in(path: Path, root: Path = REPO):
     rel = path.relative_to(root).as_posix()
     tree, owner = _parsed(path)
     found = []
+    # Module constants a download wait's timeout may name.
+    constants = {n.targets[0].id: n.value.value for n in tree.body
+                 if isinstance(n, ast.Assign) and len(n.targets) == 1
+                 and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Constant)}
     for node in ast.walk(tree):
         fn = owner.get(node, "")
         if isinstance(node, ast.Call):
@@ -181,6 +219,12 @@ def ways_in(path: Path, root: Path = REPO):
                 found.append(("save_as", node.lineno, fn, "a download copied"))
             elif name == "path" and isinstance(f, ast.Attribute) and bare:
                 found.append(("download_path", node.lineno, fn, "a download's own file"))
+            elif name in WAITS_FOR_FINISH and isinstance(f, ast.Attribute) and bare:
+                found.append(("download_wait", node.lineno, fn,
+                              "a download waited for until it finishes"))
+            elif isinstance(f, ast.Attribute) and _starts_a_download_wait(node, name, constants):
+                found.append(("download_wait", node.lineno, fn,
+                              "a download's start waited for with no time given"))
             elif name in ("extract_text", "open") and isinstance(f, ast.Attribute) \
                     and (name == "extract_text" or getattr(f.value, "id", "") == "pdfplumber"):
                 found.append(("pdf", node.lineno, fn, "a PDF's text read"))
@@ -283,12 +327,18 @@ def test_every_snippet_that_reads_a_body_runs_through_intake_evaluate():
 
 SAMPLE = (
     "import base64, zipfile\n"
+    "NEVER = 0\n"
     "from pypdf import PdfReader\n"
     "JS = 'async (u) => { const r = await fetch(u); return await r.arrayBuffer(); }'\n"
     "B64 = 'async (u) => { const r = await fetch(u); return {b64: btoa(await r.text())}; }'\n"
     "READ = 'async (u) => { const r = await fetch(u); return await ppRead(r); }'\n"
     "def take(page, resp, dl, path):\n"
     "    resp.body()\n"
+    "    dl.failure()\n"
+    "    with page.expect_download() as info:\n"
+    "        pass\n"
+    "    page.wait_for_event('download', timeout=0)\n"
+    "    page.expect_download(timeout=NEVER)\n"
     "    base64.b64decode('')\n"
     "    dl.save_as(path)\n"
     "    open(dl.path(), 'rb').read()\n"
@@ -311,15 +361,45 @@ def test_the_census_finds_what_it_looks_for(tmp_path):
     kinds = {k for k, *_ in found}
     assert kinds == set(HOME), kinds
     assert len([w for w in found if w[0] == "page_read"]) == 2, found
+    assert len([w for w in found if w[0] == "download_wait"]) == 4, found
     assert any("sample_site.py" in line
                for line in snippets_run_without_the_reader([sample], tmp_path))
     good = sample.with_name("good_site.py")
     good.write_text("from paperpull_core import intake\n"
                     "READ = 'async (u) => { const r = await fetch(u); return await ppRead(r); }'\n"
-                    "def take(page):\n"
+                    "def take(page, out):\n"
+                    "    with page.expect_download(timeout=20000) as info:\n"
+                    "        page.expect_event('popup')\n"
+                    "    intake.save_download_as(info.value, out)\n"
+                    "    intake.failure(info.value, page)\n"
                     "    return intake.evaluate(page, READ, 'x')\n", encoding="utf-8")
     assert snippets_run_without_the_reader([good], tmp_path) == []
     assert unlimited([good], tmp_path) == []
+
+
+def test_intake_waits_for_a_download_only_through_finish():
+    """intake is the one place a download is waited for, and every wait there
+    is held to DOWNLOAD_SECONDS by finish() first, but for the fiber finish
+    starts, which waits with nothing held up behind it."""
+    tree, owner = _parsed(REPO / INTAKE)
+    waits: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in ("path", "save_as", "failure", "delete"):
+            waits.setdefault(owner.get(node, ""), []).append(node.lineno)
+    functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert "wait" in {n.name for n in ast.walk(functions["_follow"])
+                      if isinstance(n, ast.FunctionDef)}, "the fiber moved"
+    unheld = []
+    for fn, lines in sorted(waits.items()):
+        if fn == "wait":
+            continue
+        called = {c.func.id for c in ast.walk(functions[fn])
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        if "finish" not in called:
+            unheld.append("%s at line %s" % (fn, lines))
+    assert not unheld, "a download waited for without finish():\n" + "\n".join(unheld)
+    assert set(waits) == {"wait", "save_download_as", "failure", "discard"}, waits
 
 
 def test_every_reason_still_names_a_use_that_is_there():
@@ -331,6 +411,192 @@ def test_every_reason_still_names_a_use_that_is_there():
         seen.update((rel, fn, kind) for kind, _, fn, _ in found)
     gone = sorted("%s %s %s" % k for k in NOT_A_DOCUMENT if k not in seen)
     assert not gone, "named with a reason and not there any more:\n" + "\n".join(gone)
+
+
+# -- an answer read whole as text or JSON ---------------------------------------
+#
+# What bounds each kind, measured where it says so.
+
+PAGE_ANSWER = ("a listing in a page's own answer heard on the network, whose body Chromium "
+               "keeps only up to about 10 MB, so a larger one raises rather than comes "
+               "(test_a_page_answer_larger_than_chromium_keeps_never_comes)")
+PAGE_ANSWER_PDF = ("a page's own answer heard on the network, held by Chromium as a listing's "
+                   "is, which can carry a PDF in base64, decoded through intake.decode")
+IN_PAGE = ("a listing read whole inside the page, held there by the tab's own memory and by "
+           "V8's longest string, about 512 million characters, never a document")
+IN_PAGE_BESIDE = ("an answer beside the document in a snippet that reads the document through "
+                  "ppRead, a listing, a token or an error's words, never the document")
+PANEL = "the panel's own page asking the panel, never a provider's answer"
+
+ANSWERS = {
+    ("apps/adp/adp_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/affirm/affirm_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/ally/ally_site.py", "on_resp"): PAGE_ANSWER,
+    ("apps/alpaca/alpaca_site.py", "read_list"): PAGE_ANSWER,
+    ("apps/alpaca/alpaca_site.py", "_link_of"): PAGE_ANSWER,
+    ("apps/amfam/amfam_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/applecard/applecard_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/att/att_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/chase/chase_site.py", "on_resp"): PAGE_ANSWER,
+    ("apps/chasebusiness/chasebusiness_site.py", "read_answer"): PAGE_ANSWER,
+    ("apps/coinbase/coinbase_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/discovercard/discovercard_site.py", "on_resp"): PAGE_ANSWER,
+    ("apps/etrade/etrade_site.py", "on_response"): PAGE_ANSWER_PDF,
+    ("apps/fairfaxwater/fairfaxwater_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/fedex/fedex_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/fidelity/fidelity_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/golden1/golden1_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/invest529/invest529_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/meijer/meijer_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/nelnet/nelnet_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/netbenefits/netbenefits_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/newrez/newrez_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/paypal/paypal_site.py", "_answered"): PAGE_ANSWER,
+    ("apps/pge/pge_site.py", "_pdf_in_aura"): PAGE_ANSWER_PDF,
+    ("apps/robinhood/robinhood_site.py", "on_resp"): PAGE_ANSWER,
+    ("apps/robinhood/robinhood_site.py", "_click_and_capture"): PAGE_ANSWER,
+    ("apps/sba/sba_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/smud/smud_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/spectrum/spectrum_site.py", "check_session"): PAGE_ANSWER,
+    ("apps/spectrum/spectrum_site.py", "answer_of"): PAGE_ANSWER_PDF,
+    ("apps/spectrum/spectrum_site.py", "_fault"): PAGE_ANSWER,
+    ("apps/statefarm/statefarm_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/stripe/stripe_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/tsp/tsp_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/ups/ups_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/usaa/usaa_site.py", "on_resp"): PAGE_ANSWER,
+    ("apps/usbank/usbank_site.py", "on_resp"): PAGE_ANSWER,
+    ("apps/vanguard/vanguard_site.py", "on_resp"): PAGE_ANSWER,
+    ("apps/venmo/venmo_site.py", "_read_pending"): PAGE_ANSWER,
+    ("apps/verizonmobile/verizonmobile_site.py", "on_response"): PAGE_ANSWER,
+    ("apps/wellsfargo/wellsfargo_site.py", "on_response"): PAGE_ANSWER,
+    ("core/paperpull_core/api_census.py", "_record"): PAGE_ANSWER,
+    ("core/paperpull_core/recorder.py", "_on_response"): PAGE_ANSWER,
+    ("gui/app.py", "*"): PANEL,
+    # Read inside the page, by the snippet's name or the function holding it.
+    ("apps/adp/adp_site.py", "_FETCH_JSON_JS"): IN_PAGE,
+    ("apps/affirm/affirm_site.py", "_GET_JS"): IN_PAGE,
+    ("apps/anthem/anthem_site.py", "_SUMMARY_JS"): IN_PAGE,
+    ("apps/anthem/anthem_site.py", "_MEMBER_DOCS_LIST_JS"): IN_PAGE,
+    ("apps/anthem/anthem_site.py", "_IDCARD_LIST_JS"): IN_PAGE,
+    ("apps/anthem/anthem_site.py", "_MEMBER_DOC_DOWNLOAD_JS"): IN_PAGE_BESIDE,
+    ("apps/anthem/anthem_site.py", "_IDCARD_VIEW_JS"): IN_PAGE_BESIDE,
+    ("apps/bestbuy/bestbuy_site.py", "_FETCH_JS"): IN_PAGE,
+    ("apps/capitalone/capitalone_site.py", "_JSON_FETCH_JS"): IN_PAGE,
+    ("apps/capitalone/capitalone_site.py", "_BYTES_FETCH_JS"): IN_PAGE_BESIDE,
+    ("apps/citi/citi_site.py", "_FETCH_JS"): IN_PAGE_BESIDE,
+    ("apps/ezpassva/ezpassva_site.py", "_FETCH_JS"): IN_PAGE_BESIDE,
+    ("apps/homedepot/homedepot_site.py", "_FETCH_HISTORY_JS"): IN_PAGE,
+    ("apps/kroger/kroger_site.py", "_FETCH_HISTORY_JS"): IN_PAGE,
+    ("apps/myecp/myecp_site.py", "_FETCH_JS"): IN_PAGE_BESIDE,
+    ("apps/mypay/mypay_site.py", "_HISTORY_JS"): IN_PAGE,
+    ("apps/netbenefits/netbenefits_site.py", "_PROBE_JS"): IN_PAGE,
+    ("apps/netbenefits/netbenefits_site.py", "_SIGNED_IN_JS"): IN_PAGE,
+    ("apps/paypal/paypal_site.py", "_FETCH_JS"): IN_PAGE_BESIDE,
+    ("apps/schwab/schwab_site.py", "_get_token"): IN_PAGE,
+    ("apps/schwab/schwab_site.py", "_gateway_json"): IN_PAGE,
+    ("apps/statefarm/statefarm_site.py", "_FETCH_JSON"): IN_PAGE,
+    ("apps/stripe/stripe_site.py", "_FETCH_JS"): IN_PAGE_BESIDE,
+    ("apps/uber/uber_site.py", "_POST_JS"): (
+        "a listing read whole inside the page. A receipt's answer carries its HTML too, of "
+        "which only the receipt's id and time are read, and the receipt saved is the PDF "
+        "Uber makes, read through ppRead"),
+    ("apps/ups/ups_site.py", "_FETCH_JS"): IN_PAGE_BESIDE,
+}
+
+# A read of a fetched answer's text or JSON inside a snippet.
+SNIPPET_READS = re.compile(r"\.(?:json|text)\(\)|\bresponseText\b")
+# What makes a string a snippet run in the page.
+IS_SNIPPET = re.compile(r"=>|\bfunction\s*\(|\bawait\s")
+
+
+def answers_read_whole(paths=None, root: Path = REPO):
+    """(file, name, line) of every answer read whole as text or JSON, in
+    Python a bare .json() or .text() named by the function holding it, and
+    in a snippet named by the module's name for it or the function holding
+    it."""
+    out = []
+    for path in paths if paths is not None else sources():
+        rel = path.relative_to(root).as_posix()
+        tree, owner = _parsed(path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr in ("json", "text") and not node.args \
+                    and not node.keywords:
+                out.append((rel, owner.get(node, ""), node.lineno))
+        # A module's snippet is looked at whole, its pieces joined the way
+        # the module joins them, so a piece holding the read and nothing
+        # that looks like code is not missed.
+        named, whole = {}, _module_strings(tree, rel)
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                    and isinstance(node.targets[0], ast.Name):
+                for piece in ast.walk(node.value):
+                    named[id(piece)] = node.targets[0].id
+                text = whole.get(node.targets[0].id)
+                if text and SNIPPET_READS.search(text) and IS_SNIPPET.search(text):
+                    out.append((rel, node.targets[0].id, node.lineno))
+        for node, text in _strings(tree):
+            if id(node) not in named and SNIPPET_READS.search(text) and IS_SNIPPET.search(text):
+                out.append((rel, owner.get(node, ""), node.lineno))
+    return out
+
+
+def _module_strings(tree, rel: str) -> dict:
+    """Every module-level name bound to a string, its pieces joined."""
+    strings: dict = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1 \
+                or not isinstance(node.targets[0], ast.Name):
+            continue
+        try:
+            value = eval(compile(ast.Expression(node.value), rel, "eval"),
+                         {"__builtins__": {}}, dict(strings))
+        except Exception:
+            continue
+        if isinstance(value, str):
+            strings[node.targets[0].id] = value
+    return strings
+
+
+def unnamed_answers(paths=None, root: Path = REPO):
+    return sorted("%s:%d %s" % (rel, line, name or "the module")
+                  for rel, name, line in answers_read_whole(paths, root)
+                  if (rel, name) not in ANSWERS and (rel, "*") not in ANSWERS)
+
+
+def test_every_answer_read_whole_is_named_with_what_bounds_it():
+    left = unnamed_answers()
+    assert not left, ("an answer read whole as text or JSON, not named in ANSWERS. A listing "
+                      "is named there with what bounds it. One asked through the session is "
+                      "read through intake.json_of or intake.text_of, and a document read "
+                      "in the page through ppText or ppJson:\n" + "\n".join(left))
+
+
+def test_every_answer_named_is_still_read_there():
+    seen = {(rel, name) for rel, name, _ in answers_read_whole()}
+    seen |= {(rel, "*") for rel, _, _ in answers_read_whole()}
+    gone = sorted("%s %s" % k for k in ANSWERS if k not in seen)
+    assert not gone, "named in ANSWERS and not read there any more:\n" + "\n".join(gone)
+
+
+def test_the_answers_census_finds_what_it_looks_for(tmp_path):
+    sample = tmp_path / "apps" / "sample" / "sample_site.py"
+    sample.parent.mkdir(parents=True)
+    sample.write_text(
+        "LIST = 'async (u) => { const r = await fetch(u); return await r.json(); }'\n"
+        "DOC = 'async (u) => { const r = await fetch(u); return await ppText(r); }'\n"
+        "def read(resp, page):\n"
+        "    resp.text()\n"
+        "    page.evaluate('async () => (await fetch(\"/x\")).json()')\n"
+        "JOINED = ('async (u) => { const r = await fetch(u); '\n"
+        "          'return r.json(); }')\n"
+        "OLD = 'function (u) { var x = new XMLHttpRequest(); return x.responseText; }'\n",
+        encoding="utf-8")
+    assert unnamed_answers([sample], tmp_path) == [
+        "apps/sample/sample_site.py:1 LIST", "apps/sample/sample_site.py:4 read",
+        "apps/sample/sample_site.py:5 read", "apps/sample/sample_site.py:6 JOINED",
+        "apps/sample/sample_site.py:8 OLD"]
 
 
 # -- every bounded snippet compiles in a real browser ---------------------------

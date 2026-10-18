@@ -1479,14 +1479,7 @@ def choose_in_page(page, entry: Entry, entries: List[Entry], dl_dir, trace) -> b
     # deleted. Nothing of it is read or saved.
     def on_download(download):
         downloads.append(1)
-        try:
-            download.cancel()
-        except Exception:
-            pass
-        try:
-            download.delete()
-        except Exception:
-            pass
+        intake.discard(download)
     pressed = False
     try:
         detail.start()
@@ -1704,14 +1697,7 @@ def _press_for_statement(page, el, entry: Entry, entries: List[Entry], out_path:
     # deleted. Nothing of it is read or saved.
     def on_download(download):
         downloads.append(1)
-        try:
-            download.cancel()
-        except Exception:
-            pass
-        try:
-            download.delete()
-        except Exception:
-            pass
+        intake.discard(download)
     result: dict = {}
     pressed = False
     try:
@@ -2142,14 +2128,7 @@ class _Strays:
 
         def on_download(download):
             downloads.append(1)
-            try:
-                download.cancel()
-            except Exception:
-                pass
-            try:
-                download.delete()
-            except Exception:
-                pass
+            intake.discard(download)
         self._pairs = (("popup", on_popup), ("download", on_download))
         self.before = tabs_now(self.page)
         self.folder_before = _entries(self.dl_dir)
