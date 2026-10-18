@@ -7,14 +7,23 @@ the last 3.12 with Windows binaries there, so no later 3.12 security fix
 could reach it. Both packages installed lower bounds (playwright>=1.44 and
 so on), whatever PyPI held on the day, and the Windows build ran get-pip.py
 as downloaded, with nothing checking a byte of either.
+
+python.org's files came signed by the Python Software Foundation and
+python-build-standalone's come unsigned, so the Windows workflow signs the
+interpreter's programs and libraries along with PaperPull.exe.
 """
+import base64
+import fnmatch
 import hashlib
 import importlib.util
 import io
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -207,6 +216,251 @@ def test_the_build_refuses_a_python_that_is_not_the_one_it_names(bw, bm, monkeyp
         assert len(asked) == 1, "%s stopped at the first question" % system
     monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _Ran(bw.PY_VERSION + "\n"))
     assert bw.check_python_version(tmp_path / "python", bw.PY_VERSION) == bw.PY_VERSION
+
+
+# -- what the Windows workflow signs -------------------------------------------
+
+WINDOWS_WORKFLOW = REPO / ".github" / "workflows" / "build-windows.yml"
+SET_ASIDE = "Set PaperPull.exe and the interpreter aside for signing"
+SIGN = "Sign PaperPull.exe and the interpreter"
+PUT_BACK = "Put the signed files back"
+
+# PaperPull.exe and every program and library of the interpreter that
+# python-build-standalone ships unsigned, as Get-AuthenticodeSignature read
+# them in a package staged from SIGNED_FOR. The two Visual C++ runtime DLLs
+# beside them carry Microsoft's signature and stay as they are, and so do
+# the packages' own files under Lib\site-packages and Scripts.
+SIGNED = (
+    "PaperPull.exe",
+    "python\\python.exe", "python\\pythonw.exe", "python\\python3.dll", "python\\python312.dll",
+    "python\\DLLs\\libcrypto-3-x64.dll", "python\\DLLs\\libffi-8.dll",
+    "python\\DLLs\\libssl-3-x64.dll", "python\\DLLs\\sqlite3.dll",
+) + tuple("python\\DLLs\\%s.pyd" % m for m in (
+    "_asyncio", "_bz2", "_ctypes", "_decimal", "_elementtree", "_hashlib", "_lzma", "_msi",
+    "_multiprocessing", "_overlapped", "_queue", "_socket", "_sqlite3", "_ssl", "_uuid",
+    "_wmi", "_zoneinfo", "pyexpat", "select", "unicodedata", "winsound"))
+SIGNED_FOR = ("20260901", "3.12.14", "x64")     # PBS_TAG, PY_VERSION, ARCH
+
+
+def _windows_steps() -> dict:
+    """{step name: its lines} of build-windows.yml, read as text like the
+    other workflow tests. A step ends at the first line that is not
+    indented under it."""
+    steps, name = {}, None
+    for line in WINDOWS_WORKFLOW.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"      - (?:name: (.+)|uses: .+)$", line)
+        if m:
+            name = m.group(1)
+            if name:
+                assert name not in steps, "two steps named %r" % name
+                steps[name] = []
+        elif name and (line.startswith("        ") or not line.strip()):
+            steps[name].append(line)
+        else:
+            name = None
+    return {k: "\n".join(v) for k, v in steps.items()}
+
+
+def _script(step: str) -> str:
+    return textwrap.dedent(step.split("run: |\n", 1)[1])
+
+
+def _set_aside_list(steps: dict) -> list:
+    block = _script(steps[SET_ASIDE]).split("$sign = @(\n", 1)[1].split("\n)\n", 1)[0]
+    lines = [line for line in block.splitlines() if line.strip()]
+    listed = [re.fullmatch(r"\s*'([^']+)'", line) for line in lines]
+    assert all(listed), "one quoted path a line: %r" % lines
+    return [m.group(1) for m in listed]
+
+
+def test_the_windows_workflow_signs_what_python_build_standalone_leaves_unsigned(bw):
+    """The list was taken from one archive, and another can add or drop a
+    file. A new PBS_TAG takes it again from its staged python\\ and
+    python\\DLLs with Get-AuthenticodeSignature, in the workflow and here,
+    and only then moves SIGNED_FOR. The workflow also stops on any program
+    or library left unsigned there, so a missed file cannot ship."""
+    assert (bw.PBS_TAG, bw.PY_VERSION, bw.ARCH) == SIGNED_FOR
+    listed = _set_aside_list(_windows_steps())
+    assert listed == list(SIGNED)
+    assert len(set(listed)) == len(listed)
+    for rel in listed[1:]:
+        assert rel.startswith("python\\"), rel
+        assert "\\Lib\\" not in rel and "\\Scripts\\" not in rel, "a package's file, not the interpreter's"
+        assert not rel.rsplit("\\", 1)[-1].lower().startswith("vcruntime"), "Microsoft's signature stays"
+        under = rel.split("\\", 1)[1].replace("\\", "/")
+        assert not any(fnmatch.fnmatch(under, p) for p in bw.PRUNE), "%s is pruned, never shipped" % rel
+
+
+def test_only_what_was_set_aside_is_signed_and_every_copy_is_checked():
+    steps = _windows_steps()
+    order = ["Stage the package", SET_ASIDE, SIGN, PUT_BACK,
+             "Build the zip, installer and MSIX from the stage", "Sign the installer",
+             "Check every shipped program is signed"]
+    assert [n for n in steps if n in order] == order
+    assert "--arch" not in steps["Stage the package"], "the list names the x64 build's files"
+    for name in (SET_ASIDE, SIGN, PUT_BACK, "Sign the installer", "Check every shipped program is signed"):
+        assert "if: env.SIGNING == 'true'" in steps[name], name
+    sign = steps[SIGN]
+    assert re.search(r"^\s+files-folder: \$\{\{ github\.workspace \}\}\\to-sign\\stage$", sign, re.M)
+    assert re.search(r"^\s+files-folder-filter: exe,dll,pyd$", sign, re.M)
+    assert re.search(r"^\s+files-folder-recurse: true$", sign, re.M)
+    assert "files:" not in sign and "files-catalog:" not in sign, "the folder holds exactly the list"
+    assert "to-sign\\stage" not in steps["Sign the installer"]
+    for name in (PUT_BACK, "Check every shipped program is signed"):
+        assert "Get-Content to-sign\\signed.txt" in _script(steps[name]), name
+    # The quota the comment states is the list's.
+    n = len(SIGNED)
+    assert "That is %d signatures a build, %d" % (n, n + 1) in WINDOWS_WORKFLOW.read_text(encoding="utf-8")
+
+
+# The steps themselves, run by PowerShell over a stage of stand-in files.
+# The workflow runs them in pwsh, a machine without it in Windows
+# PowerShell, and they are written for both.
+
+needs_windows = pytest.mark.skipif(os.name != "nt", reason="the steps run on a Windows runner")
+
+
+def _run_steps(cwd: Path, *names: str) -> tuple:
+    """(exit code, what it printed) of the named steps run in turn, as the
+    runner would in the workspace cwd. A step that stops prints its reason
+    on one line, where PowerShell's own error display would wrap it."""
+    steps = _windows_steps()
+    body = "\n".join(_script(steps[n]) for n in names)
+    script = ("$ProgressPreference = 'SilentlyContinue'\ntry {\n%s\n} catch {\n"
+              "  [Console]::Out.WriteLine('STOPPED ' + $_.Exception.Message)\n  exit 1\n}\n" % body)
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    ran = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+         base64.b64encode(script.encode("utf-16-le")).decode("ascii")],
+        cwd=cwd, capture_output=True, text=True, timeout=300,
+        env=dict(os.environ, RUNNER_TEMP=str(cwd / "runner-temp")))
+    return ran.returncode, ran.stdout + ran.stderr
+
+
+def _at(root: Path, rel: str) -> Path:
+    return root.joinpath(*rel.split("\\"))
+
+
+NOT_LISTED = ("python\\vcruntime140.dll", "python\\Lib\\site-packages\\greenlet\\_greenlet.pyd",
+              "python\\Scripts\\uvicorn.exe")
+
+
+def _stage(root: Path) -> Path:
+    stage = root / "dist" / "PaperPull"
+    for rel in SIGNED + NOT_LISTED:
+        _at(stage, rel).parent.mkdir(parents=True, exist_ok=True)
+        _at(stage, rel).write_bytes(b"MZ")
+    return stage
+
+
+def _signed_files() -> list:
+    """Files that carry a valid embedded signature, from the Python running
+    this suite when it is python.org's, which signs them. A copy over a
+    set-aside file stands in for the signing action."""
+    base = Path(sys.base_prefix)
+    return [p for p in (base / "vcruntime140.dll", base / "python.exe") if p.is_file()]
+
+
+def _signed_stage(root: Path, signed: bytes, extra: str = "") -> Path:
+    """A stage the workflow's own step set aside, each set-aside file then
+    replaced by a signed one as the signing action would leave it."""
+    stage = _stage(root)
+    _at(stage, "python\\vcruntime140.dll").write_bytes(signed)
+    if extra:
+        _at(stage, extra).write_bytes(b"MZ")
+    code, out = _run_steps(root, SET_ASIDE)
+    assert code == 0, out
+    for rel in SIGNED:
+        _at(root / "to-sign" / "stage", rel).write_bytes(signed)
+    return stage
+
+
+def _signed_or_skip() -> list:
+    signed = _signed_files()
+    if not signed:
+        pytest.skip("no file with an embedded signature beside the Python running this suite")
+    return signed
+
+
+@needs_windows
+def test_setting_aside_moves_exactly_the_listed_files_and_stops_on_a_missing_one(tmp_path):
+    stage = _stage(tmp_path)
+    code, out = _run_steps(tmp_path, SET_ASIDE)
+    assert code == 0, out
+    assert "%d files set aside for signing" % len(SIGNED) in out
+    aside = tmp_path / "to-sign" / "stage"
+    for rel in SIGNED:
+        assert _at(aside, rel).is_file() and not _at(stage, rel).exists(), rel
+    assert len([p for p in aside.rglob("*") if p.is_file()]) == len(SIGNED)
+    for rel in NOT_LISTED:
+        assert _at(stage, rel).is_file(), rel
+    assert (tmp_path / "to-sign" / "signed.txt").read_text(encoding="ascii").split() == list(SIGNED)
+
+    other = tmp_path / "another"
+    _at(_stage(other), "python\\DLLs\\_ssl.pyd").unlink()
+    code, out = _run_steps(other, SET_ASIDE)
+    assert code == 1 and "STOPPED" in out and "_ssl.pyd" in out, out
+
+
+@needs_windows
+def test_putting_back_stops_on_a_file_that_came_back_unsigned(tmp_path):
+    _stage(tmp_path)
+    code, out = _run_steps(tmp_path, SET_ASIDE, PUT_BACK)
+    assert code == 1 and "STOPPED PaperPull.exe is not validly signed" in out, out
+
+
+@needs_windows
+def test_putting_back_checks_each_signer_and_every_interpreter_file(tmp_path):
+    signed = _signed_or_skip()
+    one = signed[0].read_bytes()
+
+    stage = _signed_stage(tmp_path / "signed", one)
+    code, out = _run_steps(tmp_path / "signed", PUT_BACK)
+    assert code == 0, out
+    assert "%d files signed by " % len(SIGNED) in out
+    for rel in SIGNED:
+        assert _at(stage, rel).read_bytes() == one, rel
+    assert not [p for p in (tmp_path / "signed" / "to-sign" / "stage").rglob("*") if p.is_file()]
+    for rel in NOT_LISTED[1:]:
+        assert _at(stage, rel).read_bytes() == b"MZ", "a package's own file is left as it came"
+
+    # A file a new archive brings that nobody listed.
+    _signed_stage(tmp_path / "new", one, extra="python\\DLLs\\_interpreters.pyd")
+    code, out = _run_steps(tmp_path / "new", PUT_BACK)
+    assert code == 1 and "STOPPED not signed and not on the list to sign: _interpreters.pyd" in out, out
+
+    if len(signed) > 1:
+        _signed_stage(tmp_path / "odd", one)
+        _at(tmp_path / "odd" / "to-sign" / "stage", "python\\DLLs\\_ssl.pyd").write_bytes(
+            signed[1].read_bytes())
+        code, out = _run_steps(tmp_path / "odd", PUT_BACK)
+        assert code == 1 and "STOPPED python\\DLLs\\_ssl.pyd is signed by" in out, out
+
+
+@needs_windows
+def test_the_last_check_reads_each_signed_file_in_the_zip(bw, monkeypatch, tmp_path):
+    one = _signed_or_skip()[0].read_bytes()
+    for case, unsigned in (("whole", None), ("missed", "python\\DLLs\\_ssl.pyd")):
+        root = tmp_path / case
+        stage = _signed_stage(root, one)
+        code, out = _run_steps(root, PUT_BACK)
+        assert code == 0, out
+        if unsigned:
+            _at(stage, unsigned).write_bytes(b"MZ")
+        monkeypatch.setattr(bw, "DIST", root / "dist")
+        monkeypatch.setattr(bw, "STAGE", stage)
+        bw.zip_it()
+        (root / "to-sign" / "installer").mkdir(parents=True)
+        (root / "to-sign" / "installer" / "PaperPull-0.0.0-setup.exe").write_bytes(one)
+        code, out = _run_steps(root, "Check every shipped program is signed")
+        if unsigned:
+            assert code == 1 and "_ssl.pyd is not validly signed" in out, out
+        else:
+            assert code == 0, out
+            lines = [line for line in out.splitlines() if " signed by " in line]
+            assert len(lines) == len(SIGNED) + 1, out
+            assert lines[0].startswith("dist\\PaperPull-0.0.0-setup.exe signed by ")
+            assert "zip\\python\\DLLs\\winsound.pyd signed by " in out
 
 
 # -- every package from the hashed lock ----------------------------------------

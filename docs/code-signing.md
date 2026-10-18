@@ -11,7 +11,9 @@ and one for Intel.
 built after it was set up, the installer and the `PaperPull.exe` inside the
 installer, the portable zip and the MSIX are signed with the maintainer's
 Artifact Signing certificate and timestamped, so Windows names the publisher
-instead of calling it unknown. SmartScreen builds its trust in a publisher
+instead of calling it unknown. The bundled Python's own programs and
+libraries are signed the same way, from the first release built on
+python-build-standalone. SmartScreen builds its trust in a publisher
 from downloads over time, so a new certificate can still meet its prompt for
 a while, and that fades as the signed releases are used. The certificates
 Artifact Signing issues last a few days each and are replaced for every
@@ -37,13 +39,15 @@ Nothing that ships is built on a developer's machine.
    config, download history, browser profile or PDF is found in the stage,
    runs a smoke test under the packaged interpreter that also asks it which
    Python it is, and compiles the installer with Inno Setup.
-3. Between staging and packaging, the workflow signs `PaperPull.exe` with
-   Azure Artifact Signing, then builds the zip, the MSIX and the installer
-   from the signed stage, and signs the installer. It signs in to Azure
-   through OpenID Connect from the repository's `release` environment, so no
-   password or key is stored anywhere, and only a workflow run of this
-   repository in that environment can ask for a signature. If signing is set
-   up and any shipped program comes out unsigned, the job fails.
+3. Between staging and packaging, the workflow signs `PaperPull.exe` and
+   the bundled Python's own programs and libraries with Azure Artifact
+   Signing, then builds the zip, the MSIX and the installer from the signed
+   stage, and signs the installer. It signs in to Azure through OpenID
+   Connect from the repository's `release` environment, so no password or
+   key is stored anywhere, and only a workflow run of this repository in
+   that environment can ask for a signature. If signing is set up and any
+   file it signs comes out unsigned, or any program or library of the
+   bundled Python is left without a valid signature, the job fails.
 4. The workflow uploads the signed installer, the portable zip, the MSIX and
    a `SHA256SUMS.txt` taken after signing, as run artifacts.
 5. The [macOS package](../.github/workflows/build-macos.yml) workflow runs
@@ -77,12 +81,18 @@ The packages are pinned in `packaging/requirements.in`, and
 every file. There is no proprietary code and nothing that is not also in
 this repository, on PyPI or in python-build-standalone's releases.
 
-Only this project's own programs, the installer and `PaperPull.exe`, are
-signed with its certificate. The upstream components inside keep whatever
-signature their publishers gave them. python-build-standalone does not
-sign its CPython files, so the package's `python.exe` and the interpreter's
-own libraries carry no signature, and the archive they come in is checked
-against its pinned SHA-256 instead.
+This project's certificate signs its own programs, the installer and
+`PaperPull.exe`, and the bundled Python's own programs and libraries,
+`python.exe`, `pythonw.exe`, `python312.dll`, `python3.dll` and the files
+in `python\DLLs`. python-build-standalone does not sign those, where the
+builds from python.org came signed by the Python Software Foundation, and
+Windows features such as Smart App Control trust a signed file more
+readily. They are signed only after the archive they come in has been
+checked against its pinned SHA-256, so the signature goes on exactly the
+files python-build-standalone published. Everything else keeps whatever
+signature its publisher gave it. The Visual C++ runtime DLLs keep
+Microsoft's, and the packages installed from PyPI, with their small
+launchers in `python\Scripts`, carry their own or none.
 
 ## Privacy
 
@@ -139,6 +149,7 @@ unsigned otherwise, so a fork builds without any of this.
 
 ## Reporting a problem
 
-If a signed binary does not match what this repository builds, or if you
+If a signed binary does not match what this repository builds or the
+CPython archive it pins (the signature aside), or if you
 believe a release was signed that should not have been, open an issue or
 follow [SECURITY.md](../SECURITY.md).

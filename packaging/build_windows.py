@@ -91,7 +91,10 @@ ARCH = "x64"
 # PBS_TAG lists it, which is also the digest GitHub shows for the asset. The
 # download must match before anything is built from it. A new PBS_TAG or
 # PY_VERSION takes both lines again from that release's SHA256SUMS, and the
-# Mac's in packaging/build_macos.py with them.
+# Mac's in packaging/build_macos.py with them. The Windows workflow signs the
+# interpreter's programs and libraries by name, so the new archive's python\
+# and python\DLLs are compared with that list too, which core/tests holds to
+# PBS_TAG.
 PBS_SHA256 = {
     "x64": "7c45c9622400d578709a9b2cddbe8124cc21d382409d9f13406d706d28e31b14",
     "arm64": "72f4713d056a17961bdba7b43be82a878035040fa1eee30cfd5e43b91a2852d9",
