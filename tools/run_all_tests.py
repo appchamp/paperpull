@@ -228,8 +228,10 @@ times, each suite's median over five Tests runs, read from the line each
 part prints for each suite. A --write-times run keeps this machine's
 times instead, so compare them with a recent CI run before committing.
 When core became core and core-censuses later that day, its median of
-1786 s was divided between the two as their files' times divided in a run
-here, 935 and 851 s.
+1786 s was raised 4% for the second pytest start, which collected the
+same imports again in a run here, and divided evenly between the two,
+930 and 926 s. Two runs here divided it 52 to 48 one way and 48 to 52 the
+other.
 
 WHAT IT PRINTS
 

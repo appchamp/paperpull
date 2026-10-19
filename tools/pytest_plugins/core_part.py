@@ -17,12 +17,13 @@ A file goes to core-browsers when its own code calls Playwright or one of
 the core testkit's real-browser helpers, read with ast so a word in a
 docstring or a comment does not count. Of the rest, a census goes to
 core-censuses, a file named for what every app or every receipt does or
-what no app does (CENSUS_NAMES). They held 1,164 of core's 2,442 s in a run
-here on 2026-10-18, 48% of it. Every other file, a new one included, stays
-in core, and so does the privacy canary, so the suite the runner holds to
-the canary is still core. The three come from one rule read in order, so
-every file runs in exactly one of them, and a file this rule misplaces
-costs only balance, never a test.
+what no app does (CENSUS_NAMES). In a run here on 2026-10-18 they held
+1,164 of core's 2,442 s, and as a suite of their own in the next they took
+1,269 s beside core's 1,161, so the two are about even. Every other file,
+a new one included, stays in core, and so does the privacy canary, so the
+suite the runner holds to the canary is still core. The three come from
+one rule read in order, so every file runs in exactly one of them, and a
+file this rule misplaces costs only balance, never a test.
 
 The runner names the part in PAPERPULL_CORE_PART and loads this plugin with
 -p core_part. Without that variable it ignores nothing, so pytest run by

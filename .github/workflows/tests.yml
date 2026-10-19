@@ -30,8 +30,10 @@
 # censuses left core for a suite of their own, core-censuses, beside
 # core-browsers (tools/pytest_plugins/core_part.py). No suite is planned at
 # more than about 16 minutes now. Replayed on those five runs' own times,
-# split as a run here split them, each part's median is 31.8 to 32.8
-# minutes with setup and its longest 32.4 to 36.3.
+# core's divided as runs here divided it, each part's median is 32.0 to
+# 32.8 minutes with setup, about as short as six parts can be, and its
+# longest 32.5 to 36.5, against 40 for the part that held core whole on
+# the slowest of those runners.
 #
 # The runner's own tests also run on Linux and macOS, and "tests" answers
 # for them too. The parts run on Windows, where the runner's POSIX branches
