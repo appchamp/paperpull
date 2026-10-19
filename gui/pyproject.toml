@@ -1,0 +1,32 @@
+# Optional. It lets uv build gui/.venv, the environment the panel and every
+# app share, as setup-all does with pip. Run `uv sync` here, then
+# `uv run uvicorn app:app --port 8765`. It lists what requirements.txt and
+# apps/*/requirements.txt ask for, at the highest floor any of them sets.
+# tests/test_uv_matches_requirements.py fails when the two disagree, and when
+# packaging/requirements.in or server/requirements.in pins none of these or a
+# version this does not accept.
+[project]
+name = "paperpull-gui"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    # gui/requirements.txt
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "openpyxl>=3.1",
+    "pdfplumber>=0.11",
+    # apps/*/requirements.txt
+    "playwright>=1.51",
+    "pypdf>=4.2",
+    "paperpull-core",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+# A dependency list for gui/.venv. gui/ itself is not installed.
+package = false
+
+[tool.uv.sources]
+paperpull-core = { path = "../core", editable = true }

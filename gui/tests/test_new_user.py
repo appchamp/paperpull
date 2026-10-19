@@ -346,6 +346,24 @@ def test_an_upgrade_refreshes_the_code_in_an_existing_install(templates, setting
     assert app_module.refresh_installs() == {}, "a second look changes nothing"
 
 
+def test_an_upgrade_names_the_files_it_replaced_in_name_order(templates, settings, tmp_path,
+                                                              monkeypatch):
+    """NTFS lists a folder in name order, so on Windows the test above passes
+    whatever order the refresh keeps. APFS does not, and on a Mac that test
+    got the right files in another order (#111). Here every folder lists
+    backwards, which no filesystem promises not to do."""
+    home = tmp_path / "home"
+    _create({"root": str(home), "providers": ["bank"]})
+    d = home / "Bank Statements"
+    for name in ("bank_docs.py", "bank_site.py", "storage.py"):
+        (templates / "bank" / name).write_text("# repaired\n", encoding="utf-8")
+    listed = Path.rglob
+    monkeypatch.setattr(Path, "rglob",
+                        lambda self, pattern, **kw: reversed(list(listed(self, pattern, **kw))))
+    assert app_module.refresh_install_code(d, templates / "bank") == [
+        "bank_docs.py", "bank_site.py", "storage.py"]
+
+
 def test_a_renamed_install_folder_still_gets_its_providers_code(templates, settings, tmp_path):
     home = tmp_path / "home"
     _create({"root": str(home), "providers": ["bank"]})

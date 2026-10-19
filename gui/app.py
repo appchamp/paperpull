@@ -1812,8 +1812,10 @@ def _copy_file(src: Path, dst: Path) -> None:
 
 def _template_files(src: Path):
     """The files a template ships to an install, the same filter the first
-    copy uses."""
-    for item in src.rglob("*"):
+    copy uses. Sorted, since rglob yields in whatever order the filesystem
+    lists, which APFS does not keep by name, and the refresh reports these
+    files in this order (#111)."""
+    for item in sorted(src.rglob("*")):
         if item.is_dir():
             continue
         rel = item.relative_to(src)
