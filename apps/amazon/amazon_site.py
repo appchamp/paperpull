@@ -379,6 +379,154 @@ def parse_status(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Canceled orders (#114)
+# ---------------------------------------------------------------------------
+
+# A canceled order's printable summary names the order and prints no total.
+# On amazon.de it is in German whatever ?language= asks for, "Storniert" over
+# "Deine Bestellung wurde storniert", or "... wurde vom Verkäufer storniert"
+# when the seller canceled (#114, 2026-10). A summary that never filled in
+# prints no total either, so no total alone says nothing, and a wrong
+# Canceled is final, the receipt never asked for again. So an order is taken
+# as canceled only when its own summary says so, in the language of one of
+# the stores in MARKETPLACES, and only where nothing on it says otherwise.
+
+# The status alone on its line, the way a shipment's heading prints it.
+_CANCELED_STATUS = (
+    r"(?:order\s+)?cancell?ed"                                  # English
+    r"|(?:bestellung\s+)?storniert"                             # German
+    r"|(?:commande\s+)?annulée?"                                # French
+    r"|(?:pedido\s+)?cancelad[oa]"                              # Spanish
+    r"|(?:ordine\s+)?annullat[oa]"                              # Italian
+    r"|(?:bestelling\s+)?geannuleerd"                           # Dutch
+    r"|(?:beställning(?:en)?\s+)?(?:avbruten|annullerad)"       # Swedish
+    r"|(?:zamówienie\s+)?anulowane")                            # Polish
+CANCELED_STATUS_RE = re.compile(_CANCELED_STATUS, re.I)
+
+# The sentence under that heading, at the start of its line or after the
+# heading and a dash when the two run together on one line. At the start,
+# because "One item in your order was cancelled" and "Ein Artikel deiner
+# Bestellung wurde storniert" hold the words of the whole order's sentence
+# and say only part of it was canceled.
+CANCELED_SENTENCE_RE = re.compile(
+    r"^(?:(?:%s)\s*[-\u2013\u2014:]\s*)?(?:" % _CANCELED_STATUS +
+    r"(?:your\s+|this\s+)?order\s+(?:was\s+|has\s+been\s+)?cancell?ed\b"
+    r"|(?:deine\s+|ihre\s+|diese\s+)?bestellung\s+(?:wurde|ist)\s+(?:leider\s+)?"
+    r"(?:vo[mn]\s+[\w.]+\s+)?storniert\b"
+    r"|(?:votre\s+|cette\s+)?commande\s+(?:a\s+été|est)\s+annulée?\b"
+    r"|(?:tu\s+|su\s+|este\s+)?pedido\s+(?:ha\s+sido|se\s+ha|fue)\s+cancelad[oa]\b"
+    r"|(?:il\s+tuo\s+|questo\s+)?ordine\s+(?:è|e)\s+stato\s+annullat[oa]\b"
+    r"|(?:je\s+|uw\s+|deze\s+)?bestelling\s+(?:is|werd)\s+geannuleerd\b"
+    r"|(?:din\s+)?beställning(?:en)?\s+(?:har\s+)?"
+    r"(?:avbrutits|annullerats|avbruten|annullerad)\b"
+    r"|(?:twoje\s+)?zamówienie\s+(?:zostało\s+)?anulowane\b)",
+    re.I)
+
+# The line under an item's title names its seller, and the classic layout
+# starts the title with "1 of:". A line like that is an item, never the
+# order's status, so a product called "Cancelled" is not read as one.
+SELLER_LINE_RE = re.compile(
+    r"^(?:sold\s+by|supplied\s+by|verkauf\s+durch|vendu\s+par|vendido\s+por|"
+    r"venduto\s+da|verkocht\s+door|säljs\s+av|sprzedawane\s+przez|sprzedawca)\b",
+    re.I)
+ITEM_LINE_RE = re.compile(r"^\d+\s+of:", re.I)
+
+# A shipment delivered, on its way or still to be sent, at the start of its
+# status line. An order with one is not canceled whatever else it says, so
+# an order canceled in part is saved like any other, a free one too, whose
+# total is zero. Broad on purpose, like the total words below.
+SHIPPED_STATUS_RE = re.compile(
+    r"^(?:delivered|shipped|dispatched|arriv\w*|out\s+for\s+delivery|on\s+the\s+way|"
+    r"not\s+yet\s+(?:shipped|dispatched)|preparing\s+for\s+(?:shipment|dispatch)|"
+    # German
+    r"zugestellt|geliefert|versandt|verschickt|unterwegs|noch\s+nicht\s+versandt|"
+    r"versandbereit|in\s+zustellung|ankunft|voraussichtliche\s+lieferung|"
+    r"lieferung\s+(?:heute|morgen|am|bis|voraussichtlich)|"
+    r"wird\s+(?:heute\s+|morgen\s+)?(?:geliefert|zugestellt|versandt|vorbereitet)|"
+    # French
+    r"livrée?|expédiée?|pas\s+encore\s+expédiée?|en\s+cours\s+de\s+(?:livraison|préparation)|"
+    r"livraison\s+(?:prévue|estimée|aujourd|demain|le)|"
+    # Spanish
+    r"entregad[oa]|enviad[oa]|(?:aún|todavía)\s+no\s+(?:se\s+ha\s+)?enviad[oa]|llega\w*|"
+    r"en\s+reparto|en\s+preparación|entrega\s+(?:prevista|estimada)|"
+    # Italian
+    r"consegnat[oa]|spedit[oa]|non\s+ancora\s+spedit[oa]|in\s+consegna|"
+    r"in\s+preparazione|consegna\s+(?:prevista|stimata)|"
+    # Dutch
+    r"bezorgd|geleverd|verzonden|onderweg|nog\s+niet\s+verzonden|"
+    r"verwachte\s+bezorging|wordt\s+(?:vandaag\s+|morgen\s+)?bezorgd|"
+    # Swedish
+    r"levererad|levererat|levererades|skickad|ännu\s+inte\s+skickad|"
+    r"inte\s+skickad\s+än|beräknad\s+leverans|anländer|på\s+väg|"
+    # Polish
+    r"dostarczon[oea]|wysłan[oea]|jeszcze\s+nie\s+wysłan[oea]|w\s+drodze|"
+    r"w\s+przygotowaniu|przewidywana\s+dostawa|dostawa\s+(?:dzisiaj|jutro))\b",
+    re.I)
+
+# Words that say an order was canceled only in part, anywhere on the page,
+# "Tu pedido ha sido cancelado parcialmente" among them. A page with one is
+# never read as the whole order canceled.
+IN_PART_RE = re.compile(
+    r"\b(?:partially|partly|in\s+part|teilweise|partiellement|en\s+partie|"
+    r"parcialmente|parzialmente|gedeeltelijk|delvis|częściowo)\b",
+    re.I)
+
+# What a summary prints its totals under, in the stores' languages (Total,
+# Sous-total, Totale, Totaal, Totalt, Zwischensumme, Gesamtsumme, Summa,
+# Suma, Razem, Łącznie). Broad on purpose. A page this finds a total above
+# zero on is never taken as canceled, so a word it should not have caught
+# only leaves the order to be asked for again, as before.
+TOTAL_WORDS_RE = re.compile(
+    r"tota+l|summe|summa\b|\bsuma\b|\brazem\b|\błącznie\b|\bgesamt", re.I)
+
+
+def total_above_zero(text: str) -> bool:
+    """Whether an amount above zero follows a total label, in any of the
+    stores' languages. An order canceled in part still owes for the rest."""
+    text = text or ""
+    for m in TOTAL_WORDS_RE.finditer(text):
+        if any(v > 0 for v in find_amounts(text[m.end(): m.end() + 40])):
+            return True
+    return False
+
+
+def reads_canceled(text: str, status: str = "") -> bool:
+    """Whether an order's printable summary says the order was canceled.
+
+    It has to say so. A line that is the status alone, "Storniert" or
+    "Cancelled", or the sentence under it, "Deine Bestellung wurde
+    storniert", in a store's language, or `status`, what the order list or
+    the summary was read as before (parse_status, the only way an English
+    order was recognized up to now). A line that is an item's title is not
+    read. Nothing on the page may say otherwise, no total above zero, no
+    shipment delivered, on its way or still to be sent, and no word saying
+    the order was canceled in part, since those are an order canceled in
+    part, or a product named for the word, and their receipt is saved."""
+    lines = [line.strip() for line in (text or "").splitlines()]
+    lines = [line for line in lines if line]
+    if total_above_zero(text) or IN_PART_RE.search(text or "") \
+            or any(SHIPPED_STATUS_RE.match(line) for line in lines):
+        return False
+    if re.search(r"cancell?ed", status or "", re.I):
+        return True
+    for i, line in enumerate(lines):
+        after = lines[i + 1] if i + 1 < len(lines) else ""
+        if ITEM_LINE_RE.match(line) or SELLER_LINE_RE.match(after):
+            continue
+        if CANCELED_STATUS_RE.fullmatch(line.rstrip(".!").strip()) \
+                or CANCELED_SENTENCE_RE.match(line):
+            return True
+    return False
+
+
+def order_canceled(page, status: str = "") -> bool:
+    """reads_canceled() of the summary on the page, read as the screen lays
+    it out, since printing leaves the tab in print media for the rest of
+    the run. False when the page cannot be read, which says nothing."""
+    return reads_canceled(_page_check.page_text(page, "screen"), status)
+
+
+# ---------------------------------------------------------------------------
 # Session / safety
 # ---------------------------------------------------------------------------
 

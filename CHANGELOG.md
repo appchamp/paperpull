@@ -7,6 +7,30 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **Amazon records a canceled order as canceled, in the store's own
+  language.** On amazon.de a German account gets its order pages in German,
+  and a canceled order's printable summary says Storniert and prints no
+  total. The app knew only the English words for a canceled order, so it
+  took that summary for one that had not rendered, recorded the order as
+  Failed and asked for it again on every run. It now reads the order's
+  status in the languages of the stores it supports (English, German,
+  French, Spanish, Italian, Dutch, Swedish and Polish) before it asks
+  whether the summary rendered, and only from a line that is the order's
+  status or the sentence under it, never from an item's title. A summary
+  that shows a total above zero, a shipment delivered, on its way or still
+  to be sent, or a word saying the order was canceled in part is never
+  taken as canceled, so an order canceled only in part, or one with a
+  product named Cancelled, has its receipt saved, which an English order
+  did not always have before. An invoice Amazon issued before the
+  cancellation is still saved, and a summary with no total that says
+  nothing of a cancellation is still asked for again. An order an earlier
+  version left Failed this way is recorded as canceled on the next run,
+  and an order it already recorded as canceled keeps that record. Thanks
+  to @Weyoun for the report and the diagnosis (#114).
+
 ## [0.56.0] - 2026-10-18
 
 Citi downloads the older statements you requested, and Chase Business

@@ -618,7 +618,12 @@ class App:
               f"[{cls.confidence}] ({cls.notes})")
 
         # ---- canceled orders: record, no receipt expected ----
-        if re.search(r"cancell?ed", purchase.status or "", re.I):
+        # Decided here, before the summary is asked whether it rendered,
+        # since a canceled order's summary prints no total and would be
+        # tried again on every run (#114).
+        if self._canceled(page, purchase):
+            if not re.search(r"cancell?ed", purchase.status or "", re.I):
+                purchase.status = "Canceled"
             self._record_state(purchase, State.CANCELED,
                                notes="Order canceled; no receipt downloaded")
             self._write_csv_rows(purchase, receipt_status="Canceled",
@@ -654,6 +659,26 @@ class App:
         self.journal.checkpoint('a document is saved')
         self.stats["receipts_downloaded"] += 1
         print(f"  Saved: {purchase.pdf_filename}")
+
+    def _canceled(self, page, purchase: Purchase) -> bool:
+        """Whether this order's own summary says it was canceled.
+
+        Read only off a page at this order's address that names no other
+        order, since another order's summary or the order list would hand
+        this order that one's status, and a Canceled is final. A summary
+        that prints no order number at all may still say it, as a canceled
+        one can. What the page has to say is site.reads_canceled's.
+
+        An order whose invoice menu offers a PDF has a document to save
+        whatever its summary says, an invoice issued before the order was
+        canceled, and _save_receipt saves it as it always did. A menu that
+        could not be read offers nothing here, as it offers nothing there."""
+        why = site.not_this_purchase(page, purchase.order_number)
+        if why and why != NAMES_NONE:
+            return False
+        if not site.order_canceled(page, purchase.status):
+            return False
+        return not site.find_invoice_pdf_links(page, purchase.order_number)
 
     # -- receipt saving -----------------------------------------------------
 
