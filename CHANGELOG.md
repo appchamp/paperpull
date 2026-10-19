@@ -10,6 +10,17 @@ All notable changes to PaperPull are recorded here. Versioning follows
 ## [Unreleased]
 
 ### Fixed
+- **Spectrum no longer stops a run on a statement it has just saved.** It
+  compares its download folder before and after each press, and a file the
+  browser removed or renamed while the folder was being read made the whole
+  folder count as unreadable, so a press that brought exactly its statement
+  stopped the run as though it had started something else. A file that goes
+  as it is read is now passed over before the press and still counts as a
+  change after it, so a download the press began is never missed.
+- **The Mac packages try Apple's ticket server again.** Stapling the
+  notarization ticket lost its connection to Apple on several release
+  builds and failed the whole build, so each staple and check now tries up
+  to four times before it fails.
 - **Amazon records a canceled order as canceled, in the store's own
   language.** On amazon.de a German account gets its order pages in German,
   and a canceled order's printable summary says Storniert and prints no
