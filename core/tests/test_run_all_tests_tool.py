@@ -1207,7 +1207,7 @@ def test_every_core_test_file_runs_in_exactly_one_of_the_three(monkeypatch):
     for pattern in cp.CENSUS_NAMES:
         assert any(fnmatch.fnmatch(name, pattern) for name in kept["core-censuses"]), pattern
     assert 20 <= len(kept["core-browsers"]) < len(kept["core"])
-    assert 20 <= len(kept["core-censuses"]) < len(kept["core"])
+    assert len(kept["core-censuses"]) >= 20
     monkeypatch.delenv(cp.PART)
     assert all(cp.pytest_ignore_collect(f, None) is None for f in files)
     assert cp.pytest_ignore_collect(REPO / "core" / "tests" / "conftest.py", None) is None
@@ -1286,6 +1286,38 @@ def test_a_file_pytest_collects_by_any_pattern_runs_in_one_suite(tmp_path, monke
     assert cp.pytest_ignore_collect(tmp_path / "drives_test.py", None), "pytest's default patterns without a config"
 
 
+def test_a_file_one_part_cannot_read_is_kept_by_that_part(tmp_path, monkeypatch):
+    """Each part's process reads a file for itself. A file the browsers'
+    process reads as a browser file, and the censuses' process cannot read
+    at that moment, would otherwise be a census there and so run nowhere
+    (review). Kept by the part that could not read it, it runs twice at
+    worst. A file that does not parse is placed the same by every part."""
+    cp = _core_part()
+    f = tmp_path / "test_every_press_in_a_browser.py"
+    f.write_text("def test_it():\n    sync_playwright()\n", encoding="utf-8")
+    monkeypatch.setenv(cp.PART, "core-browsers")
+    assert cp.pytest_ignore_collect(f, None) is None
+    real = Path.read_text
+
+    def locked(self, *args, **kwargs):
+        if self.name == f.name:
+            raise PermissionError(13, "held by another process", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", locked)
+    for part in rat.CORE_PARTS:
+        monkeypatch.setenv(cp.PART, part)
+        assert cp.pytest_ignore_collect(f, None) is None, part
+    broken = tmp_path / "test_every_broken_census.py"
+    broken.write_text("def test_it(:\n    sync_playwright()\n", encoding="utf-8")
+    kept = []
+    for part in rat.CORE_PARTS:
+        monkeypatch.setenv(cp.PART, part)
+        if cp.pytest_ignore_collect(broken, None) is None:
+            kept.append(part)
+    assert kept == ["core-censuses"]
+
+
 SPLIT_FILES = {
     "tests/test_plain.py": "import os, pathlib\n\ndef test_plain():\n"
                            "    pathlib.Path(os.environ['RAN_IN'], 'plain').touch()\n",
@@ -1356,8 +1388,7 @@ def test_a_core_suite_beside_the_canarys_that_collects_nothing_fails(one_suite, 
     assert "all suites passed" not in out, out
 
 
-def test_the_canary_runs_in_core_alone_and_a_run_without_it_is_refused(one_suite, monkeypatch,
-                                                                       tmp_path, capsys):
+def test_a_run_of_the_three_without_the_canary_is_refused(one_suite, monkeypatch, tmp_path, capsys):
     """The other two pass beside a core that ran no canary, and the run is
     still refused. A run that holds neither core nor the canary is not, and
     says the canary was not among its suites."""

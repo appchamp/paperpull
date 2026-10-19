@@ -75,11 +75,14 @@ def is_test_file(path, patterns=PYTHON_FILES) -> bool:
 
 
 def drives_a_browser(path) -> bool:
-    """Whether the file's code calls one of DRIVES. A file that cannot be
-    read or parsed does not, so it stays in core, where its error shows."""
+    """Whether the file's code calls one of DRIVES. A file that does not
+    parse does not, so it stays out of core-browsers, where its error shows
+    in the part every process puts it in. A file that cannot be read raises
+    OSError, since another part's process may read it a moment later and
+    place it elsewhere (pytest_ignore_collect)."""
     try:
         tree = ast.parse(Path(path).read_text(encoding="utf-8"))
-    except (OSError, SyntaxError, ValueError):
+    except (SyntaxError, ValueError):
         return False
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -110,4 +113,11 @@ def pytest_ignore_collect(collection_path, config):
     patterns = config.getini("python_files") if config is not None else PYTHON_FILES
     if want not in PARTS or not is_test_file(collection_path, patterns or PYTHON_FILES):
         return None
-    return True if part_of(collection_path) != want else None
+    try:
+        part = part_of(collection_path)
+    except OSError:
+        # Each part's process reads the file for itself, so one that could
+        # not read it, while the others could, would leave it out of every
+        # part. So it is kept here too, and at worst it runs twice.
+        return None
+    return True if part != want else None
