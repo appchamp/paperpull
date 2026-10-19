@@ -166,6 +166,21 @@ In Git Bash that is `./setup-all.bat`. On macOS it is `./setup-all.command`,
 and use `python3` wherever this page says `python`. It installs what every app needs, the same few packages for
 all of them, and the shared core. It takes a few minutes the first time.
 
+If you use [uv](https://docs.astral.sh/uv/), it can build the same
+`gui/.venv` instead, from `gui/pyproject.toml`. This is optional, and
+setup-all stays the way everyone else does it.
+
+```bash
+cd gui
+uv sync                               # the environment setup-all builds
+uv run uvicorn app:app --port 8765    # the control panel, as run_gui does
+uv run pytest ../core/tests           # the core's tests
+```
+
+`uv sync` removes whatever `gui/pyproject.toml` does not list, so a package
+added to any `requirements.txt` goes in `gui/pyproject.toml` as well.
+`gui/tests/test_uv_matches_requirements.py` fails until it does.
+
 Every app reads its settings from a `config.json` beside it, which is yours
 and never goes to GitHub. Make it from the example that does ship:
 
