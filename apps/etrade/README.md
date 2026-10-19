@@ -73,6 +73,20 @@ paperpull etrade pilot            REM once the site layer is confirmed
 - **Real Edge or Chrome.** Etrade.com runs bot protection that is happiest in a real browser, so `login.bat` launches the browser already on the machine with a separate profile.
 - **You sign in** in that window. The tool reuses the signed-in tab.
 - **Documents.** Discovery tries the documents and statements routes on us.etrade.com in turn and takes the first that is not a sign-in page and looks like a documents list. Every control whose name says it fetches a statement, a confirmation or a tax form ("View", "Download", "Statement PDF", "1099") is read, and the date comes from the control's name or the row it sits in.
+- **Every page of the list.** The page asks E*TRADE for one page of a
+  period's list at a time, and the answer says how many documents the
+  whole list holds. Discovery asks for each later page the same way, from
+  inside the page and only at the list's own address, until it has them
+  all. When a page cannot be read, the run keeps the list it found, writes
+  a failure file saying why in fixed words, and stops before it downloads
+  anything or moves a saved statement to another record, since both rest
+  on the whole list. A statement the list gives no account is told apart by
+  its place among those of its date and title, never by E*TRADE's ids for
+  it, which change every time the list loads, and a record told apart that
+  way is taken only while the lists still show its date and title shared
+  (#96). The download finds a statement's row on the page it shows, so one
+  listed only on a later page may be marked for manual review until the
+  app can turn the page.
 - **Downloads.** The documents page lists one period at a time, so the
   period that lists the document, its year or Year To Date, is chosen
   first. Two documents can share a date, so the row taken is the one

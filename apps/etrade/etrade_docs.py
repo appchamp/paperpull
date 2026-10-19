@@ -270,6 +270,119 @@ def adopt_account_keys(records: dict, listed) -> int:
     return changed
 
 
+# A key 0.56.0 gave a document the list gave no account whose date and
+# title another such document shared, the key of no account and a digest,
+# "<category>:<date>:<title>:Unnamed#<12 hex>". The digest is of its entry,
+# its place among them, "#1", "#2", or in 0.56.0, the list's own ids for it,
+# which change every time the list loads.
+_UNNAMED_DIGEST_RE = re.compile(r"^(?P<legacy>.*:Unnamed)#(?P<digest>[0-9a-f]{12})$")
+_PLACES = frozenset(hashlib.sha256(("#%d" % n).encode("utf-8")).hexdigest()[:12]
+                    for n in range(1, 1000))
+
+
+def keyed_by_ids(key: str, record) -> str:
+    """The key of no account (legacy_key) a record 0.56.0 kept under the
+    list's own ids sits beside, or "" for any other record. Such a record
+    holds no account, and its key's digest is of no place, and of its own
+    entry when the record still holds one. Read off the key, so a history
+    moved with --minimal, which keeps no entry in a record, is read the
+    same."""
+    m = _UNNAMED_DIGEST_RE.match(key or "")
+    if not m or not isinstance(record, dict) or m.group("digest") in _PLACES:
+        return ""
+    if str(record.get("account") or "").strip():
+        return ""
+    entry = str(record.get("entry") or "")
+    if entry and hashlib.sha256(entry.encode("utf-8")).hexdigest()[:12] != m.group("digest"):
+        return ""
+    return m.group("legacy")
+
+
+def placed(key: str, record) -> str:
+    """The key of no account a record kept by its place, "#1" or "#2",
+    sits beside, or "" for any other record."""
+    m = _UNNAMED_DIGEST_RE.match(key or "")
+    if not m or not isinstance(record, dict) or m.group("digest") not in _PLACES:
+        return ""
+    return "" if str(record.get("account") or "").strip() else m.group("legacy")
+
+
+def _first_to_keep(records: dict, keys) -> str:
+    """Of these records of one document, the one that stays. One that is done
+    (keys.is_done), then one naming a file that is there (_held_under), then
+    the first discovered, and of those one Discover listed together, the one
+    whose file has the shortest name, "Statement.pdf" before "Statement
+    (2).pdf"."""
+    def rank(key):
+        rec = records[key]
+        return (not _is_done(rec), not _held_under(records, key),
+                str(rec.get("discovered_at") or ""), len(str(rec.get("pdf_filename") or "")), key)
+    return min(keys, key=rank)
+
+
+def fold_keys_by_ids(records: dict, listed) -> int:
+    """Fold the records 0.56.0 kept under the list's own ids (keyed_by_ids)
+    into the key of no account of their category, date and title, after
+    discovery has read the lists (#96).
+
+    0.56.0 told apart documents the list gave no account by the list's ids
+    for each, and those change every time the list loads. The same
+    statement came out of every list holding it and every Discover under a
+    new key, and on one tester's sign-in a date of two statements held ten
+    records, whose copies Run All saved as new files or set aside. A
+    document the list gives no account is now told apart by its place, and
+    is under the key of no account when no other such document shares its
+    date and title, as it was before 0.56.0.
+
+    When the lists give that category, date and title one document, every
+    such record is that document. The record under the key of no account
+    stays when it is done, or when none of the others is. Otherwise the
+    first of them to keep (_first_to_keep) takes that key, holding nothing
+    of the ids any more, and the rest go. So a statement saved before is
+    never fetched again, and a statement with an account moves from that key
+    the way every record kept before #96 does (adopt_account_keys,
+    relabel_by_statement). When the lists give it more than one document,
+    which of them each record holds cannot be told, so only the records that
+    are not done and name no file that is there go, and the rest stay as
+    they are. One the lists do not give now stays as it is. No file is
+    touched.
+
+    A record kept by its place, "#1" or "#2", of a date and title the lists
+    gave more than one document with no account, goes too when the lists
+    now give that date and title one document and it is not done and names
+    no file that is there. The one document is under the key of no account
+    now, and the place records were refused, never taken (review).
+
+    Run only on lists read whole. Returns how many records moved or went."""
+    by_old = _by_old_key(listed)
+    groups: dict = {}
+    changed = 0
+    for key, rec in list(records.items()):
+        legacy = keyed_by_ids(key, rec)
+        if legacy and legacy in by_old:
+            groups.setdefault(legacy, []).append(key)
+            continue
+        place = placed(key, rec)
+        if place in by_old and len({d.key for d in by_old[place]}) == 1 \
+                and not _held_under(records, key):
+            del records[key]
+            changed += 1
+    for legacy, keys in groups.items():
+        if len({d.key for d in by_old[legacy]}) != 1:
+            for key in keys:
+                if not _held_under(records, key):
+                    del records[key]
+                    changed += 1
+            continue
+        held = records.get(legacy)
+        if not isinstance(held, dict) or (not _is_done(held) and any(_is_done(records[k]) for k in keys)):
+            records[legacy] = dict(records[_first_to_keep(records, keys)], entry="")
+        for key in keys:
+            del records[key]
+            changed += 1
+    return changed
+
+
 def forget_superseded(records: dict, listed) -> int:
     """For a sign-in of several accounts, drop discovery's records kept
     before #96 that are not done, when the lists now give their category,
@@ -772,6 +885,21 @@ class App:
                      "%d left as they were%s", moved, sum(left.values()),
                      "".join(", %d for %s" % (n, why) for why, n in sorted(left.items())))
 
+    def _fold_keys_by_ids(self, listed: List[Document]) -> None:
+        """The records 0.56.0 kept under the list's own ids, folded into the
+        key of no account (fold_keys_by_ids), progress and discovery alike,
+        each store backed up first when anything in it changes. The log says
+        how many, never a title or a file's name."""
+        folded = fold_keys_by_ids(self.progress.data, listed)
+        if folded:
+            self.progress.save(backup=True)
+        listed_folded = fold_keys_by_ids(self.discovery.data, listed)
+        if listed_folded:
+            self.discovery.save(backup=True)
+        if folded or listed_folded:
+            log.info("%d saved and %d listed record(s) kept under the list's ids by 0.56.0 folded "
+                     "into one record for each document", folded, listed_folded)
+
     def _record_listed(self, doc: Document) -> int:
         """Record one listed document. Returns 1 if new.
 
@@ -804,6 +932,13 @@ class App:
         return 0
 
     def cmd_discover(self, quiet: bool = False) -> int:
+        """Read every list and record each document. When a list was not
+        read to its end, what the pages read gave is recorded, no record
+        kept before moves to another key, the listing stays noted as one
+        that stopped, and the run stops here, Pilot, Run All and Resume
+        included, before anything is taken. The download chooses a row by
+        what the lists said, and lists missing a page can say a date holds
+        one document when it holds two."""
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
@@ -816,6 +951,9 @@ class App:
             site.goto_documents(page)
         self.check_session(page)
         docs = site.collect_download_docs(page)
+        # Why a period's list was not read to its end, in fixed words, none
+        # when every list was (site.Listing).
+        unread = sorted(set(getattr(docs, "unread", ()) or ()))
         # Period words, counts and dates only, so a report that says
         # "found just 1" can be attached as it is (#36).
         try:
@@ -828,15 +966,28 @@ class App:
         twins = site.twins_on_one_day(docs)
         listed = [d for d in (self._document_of(r, site.BILLING_URL, accounts > 1, twins) for r in docs)
                   if d is not None]
-        self._adopt_account_keys(listed, accounts)
+        if not unread:
+            # Only lists read whole may move a record kept before. Lists
+            # missing a page could give a date and title one document when
+            # they hold two, or name one account of several and credit it
+            # with another's statement (review of #96).
+            self._fold_keys_by_ids(listed)
+            self._adopt_account_keys(listed, accounts)
         for doc in listed:
             n_new += self._record_listed(doc)
         self.discovery.save()
         log.info("documents page: %d documents, %d new, %d account(s)", len(docs), n_new, accounts)
 
-        # The whole list is in, and only now may a Resume that carries on
-        # from it call the run finished (paperpull_core.listing).
-        listing.read_whole(self)
+        if unread:
+            log.info("not every list was read to its end: %s", "; ".join(unread))
+            print("\n!! Not every page of E*TRADE's documents list could be read (%s)," % unread[0])
+            print("   so some documents may be missing. What the pages read gave is kept.")
+            self.write_failure("read the documents list", unread[0],
+                               extra={"not_read_to_the_end": list(unread)})
+        else:
+            # The whole list is in, and only now may a Resume that carries on
+            # from it call the run finished (paperpull_core.listing).
+            listing.read_whole(self)
         self.stats["discovered"] = len(self.discovery.data)
 
         if not quiet:
@@ -857,6 +1008,12 @@ class App:
                 print(f"  Date range: {dates[0]} .. {dates[-1]}")
             if self.stats["skipped_out_of_scope"]:
                 print(f"  Skipped as out of scope: {self.stats['skipped_out_of_scope']}")
+        if unread:
+            # SystemExit, which the panel reports as a run that stopped
+            # (run_reporting.stopped_early).
+            print("\nNot every page of E*TRADE's documents list could be read, so this run")
+            print("stops here and downloads nothing. Run it again later to read the rest.")
+            raise SystemExit(0)
         return n_new
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
@@ -918,6 +1075,10 @@ class App:
                 print("  Already downloaded and verified - skipping.")
                 self.stats["skipped_completed"] += 1
                 continue
+            if self._no_longer_shared(doc):
+                print("  Listed before beside another document of its date and title with no")
+                print("  account, which the lists do not show now, so it is left as it is.")
+                continue
             filename = build_pdf_filename(doc.date, doc.summary, "", record=doc)
             if dry_run:
                 print(f"  DRY RUN - would save: {filename}")
@@ -944,6 +1105,19 @@ class App:
                 self._record(doc, State.FAILED, notes=str(e))
                 self.stats["failed"] += 1
             self._delay()
+
+    @staticmethod
+    def _no_longer_shared(doc: Document) -> bool:
+        """Whether a document the list gave no account, told apart from
+        others of its date and title by its entry, is one the lists the run
+        read no longer give that date and title more than once. Only such a
+        day gives a document an entry, and there the download refuses it,
+        so with the day no longer shared it is a record of another listing,
+        and the one document the lists give now is under its own key. Taken,
+        the one row the page shows was saved once for every such record, and
+        twice for a pair the lists showed as one (review). Never taken."""
+        return bool(doc.entry) and not (doc.account or "").strip() \
+            and not site._shared_with_no_account(doc.date, doc.title)
 
     def download_one(self, page, doc: Document, filename: str):
         """Save one document. The site layer fetches the row's PDF link from

@@ -7,6 +7,28 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **E*TRADE no longer lists and saves the same statements again on every
+  run.** 0.56.0 told apart statements the list gives no account by the
+  list's own ids for each, and E*TRADE changes those every time the list
+  loads. So each list holding a statement, and each Discover, added it
+  again, and Run All saved the copies as new files, "Statement (3)" and
+  on, or set them aside in Manual Review. Such a statement is now told
+  apart by its place among those of its date and title, which every load
+  gives it again. The next Discover folds the extra records into one for
+  each statement and downloads nothing again. The extra files are left
+  where they are, for you to delete. Thanks to @appchamp for tracking it
+  down (#96).
+- **E*TRADE reads every page of its documents list.** Discovery read only
+  the first page of each period, so on a long list the documents past the
+  first page were never listed, and the run still finished clean. It now
+  asks for each later page the way the page asks for the first. When a
+  page cannot be read, the run says so in a failure file, keeps the list it
+  found, and stops before it downloads anything, since which row is which
+  document rests on the whole list (#96).
+
 ## [0.56.0] - 2026-10-18
 
 Citi downloads the older statements you requested, and Chase Business
