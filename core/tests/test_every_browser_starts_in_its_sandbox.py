@@ -111,8 +111,8 @@ def unsandboxed(source: str, rel: str = "x.py") -> list:
 
 # A launch named in a string where nothing is started, each read by hand.
 NAMED = {
-    # The names of calls that drive a browser, which sort the core's test
-    # files into the core and core-browsers suites.
+    # The names of calls that drive a browser, which send the core's test
+    # files that make them to the core-browsers suite.
     ("tools/pytest_plugins/core_part.py", "Playwright launch by name"),
     ("tools/pytest_plugins/core_part.py", "Playwright launch_persistent_context by name"),
 }

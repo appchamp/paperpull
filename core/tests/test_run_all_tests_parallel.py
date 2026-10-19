@@ -205,11 +205,12 @@ def test_the_parts_cover_every_suite_once_and_finish_close_together():
 def test_no_part_of_ci_plans_far_longer_than_the_others():
     """Whole, core was planned alone in part 1 and took 36 to 45 minutes of
     the job's 45 on CI while the other parts took 25 to 28, and two runs of
-    12 were stopped at the limit. As two suites, the file's own plan keeps
-    every part within a tenth of the average, each core suite by a time of
-    its own. A suite that grows past an average part is the next to split.
-    A new app with no time yet is planned as a middling suite, as in the
-    test above, so it needs no entry for its first push."""
+    12 were stopped at the limit. As two suites, and since 2026-10-18 as
+    three, the file's own plan keeps every part within a tenth of the
+    average, each core suite by a time of its own. A suite that grows past
+    an average part is the next to split. A new app with no time yet is
+    planned as a middling suite, as in the test above, so it needs no entry
+    for its first push."""
     times = rat.load_times(REPO / "tools" / "suite_times.json")
     names = [n for n, _d, _kind in rat.suites(False)] + ["a_new_app"]
     assert set(rat.CORE_PARTS) <= set(times), "each core suite is planned by a time of its own"

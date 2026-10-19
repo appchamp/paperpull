@@ -26,7 +26,12 @@
 # the limit with nothing failed, planned from times that had fallen behind
 # CI's own, which tools/suite_times.json holds since. Core alone took 27 to
 # 38 minutes of its part in five runs, and more parts cannot shorten the
-# part that holds it, since core is one suite. Splitting core again can.
+# part that holds it, since core is one suite. So the same day the
+# censuses left core for a suite of their own, core-censuses, beside
+# core-browsers (tools/pytest_plugins/core_part.py). No suite is planned at
+# more than about 16 minutes now. Replayed on those five runs' own times,
+# split as a run here split them, each part's median is 31.8 to 32.8
+# minutes with setup and its longest 32.4 to 36.3.
 #
 # The runner's own tests also run on Linux and macOS, and "tests" answers
 # for them too. The parts run on Windows, where the runner's POSIX branches

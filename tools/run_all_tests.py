@@ -1,7 +1,7 @@
 """Run every test in the repository, and say plainly what did not run.
 
     python tools/run_all_tests.py
-    python tools/run_all_tests.py --quick     the core's two suites, gui and server only
+    python tools/run_all_tests.py --quick     the core's three suites, gui and server only
     python tools/run_all_tests.py --jobs 4    four suites at a time
     python tools/run_all_tests.py --shard 2/6 the second of six parts, for CI
     python tools/run_all_tests.py --stop      stop this checkout's run
@@ -193,14 +193,25 @@ several runners together finish in about the time of the longest part.
 Each part refuses to pass on what it ran, and the privacy canary runs in
 the part that holds the core.
 
-The core's tests run as two suites from the one folder, core and
-core-browsers, which takes the files whose own code drives a real browser
-(tools/pytest_plugins/core_part.py says which). Whole, core ran alone in
-CI's part 1 and took 36 to 45 minutes of the job's 45 while the other
+The core's tests run as three suites from the one folder, core,
+core-censuses and core-browsers (tools/pytest_plugins/core_part.py says
+which file goes where). core-browsers takes the files whose own code
+drives a real browser, core-censuses the censuses, the files named
+test_every_* or test_no_*, and core keeps the rest. Whole, core ran alone
+in CI's part 1 and took 36 to 45 minutes of the job's 45 while the other
 parts took 25 to 28, and here a whole run took about as long as core
-alone. Every file runs in exactly one of the two, a new one in core unless
-it drives a browser, and the canary always in core. A core-browsers that
-collects nothing fails, since then the split itself has gone wrong.
+alone, so on 2026-10-13 core-browsers left it. By 2026-10-18 core took 27
+to 38 minutes of its part again, so the censuses left it too. Every file
+runs in exactly one of the three, a new one in core unless it drives a
+browser or is named as a census, and the canary always in core. A
+core-censuses or a core-browsers that collects nothing fails, since then
+the split itself has gone wrong.
+
+--suites names suites, and core is one of the three. So --suites core runs
+only the files left in core, the canary among them, and the run says the
+other two were not asked for. The whole folder is --suites
+core,core-censuses,core-browsers, which worktree.py land asks for when a
+change touches core/ or tools/.
 
 A part plans from that file alone, never from a record of the machine it
 runs on, since each part works out the split for itself and all of them
@@ -216,6 +227,9 @@ tag ran out of its 45 minutes. So the file was set that day from CI's own
 times, each suite's median over five Tests runs, read from the line each
 part prints for each suite. A --write-times run keeps this machine's
 times instead, so compare them with a recent CI run before committing.
+When core became core and core-censuses later that day, its median of
+1786 s was divided between the two as their files' times divided in a run
+here, 935 and 851 s.
 
 WHAT IT PRINTS
 
@@ -260,15 +274,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 # The plugins a suite runs with, the one that writes down where each failure
-# happened and the one that says which of the core's two suites a file is in.
+# happened and the one that says which of the core's three suites a file is in.
 # Their folder holds nothing else, and no module of any suite shares their
 # names, so putting it on a suite's path cannot shadow a module.
 PLUGINS = REPO / "tools" / "pytest_plugins"
 WHERE = "where_it_failed"
 CORE_PART = "core_part"
 CORE_PART_ENV = "PAPERPULL_CORE_PART"
-# The core's two suites, both run from core/, each told which it is.
-CORE_PARTS = ("core", "core-browsers")
+# The core's three suites, all run from core/, each told which it is. The
+# first holds the canary (CANARY_SUITE).
+CORE_PARTS = ("core", "core-censuses", "core-browsers")
 WHERE_FILE = "PAPERPULL_WHERE_IT_FAILED"
 # The test file whose every test the plugin writes down, passed or not.
 OUTCOMES_OF = "PAPERPULL_OUTCOMES_OF"
@@ -667,8 +682,8 @@ def run_suite(d: Path, py: Path, timeout: int = SUITE_LIMIT_S, stacks_after: int
     time is ended with everything it started and comes back as a failure
     that says so. A test still running after stacks_after seconds, and not
     yet failed, has every thread's stack written into the output first.
-    part names which of the core's two suites this is, so its folder's
-    files of the other one are left out (CORE_PARTS)."""
+    part names which of the core's three suites this is, so its folder's
+    files of the other two are left out (CORE_PARTS)."""
     fd, record = tempfile.mkstemp(prefix="paperpull-where-", suffix=".jsonl")
     os.close(fd)
     env = with_this_core(PLUGINS)
@@ -1243,14 +1258,16 @@ def stop_earlier(lock: RunLock) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--quick", action="store_true", help="the core's two suites, gui and server only")
+    ap.add_argument("--quick", action="store_true", help="the core's three suites, gui and server only")
     ap.add_argument("--jobs", type=int, default=None,
                     help="suites run at once, %d here by default" % default_jobs())
     ap.add_argument("--shard", default=None, metavar="K/N",
                     help="only part K of N, balanced by tools/suite_times.json")
     ap.add_argument("--suites", default=None, metavar="NAMES",
                     help="only these suites, by name, separated by commas, which is not "
-                         "a full run (worktree.py land runs the ones a change touches)")
+                         "a full run (worktree.py land runs the ones a change touches). "
+                         "core is one of the core's three suites, so its whole folder is "
+                         "core,core-censuses,core-browsers")
     ap.add_argument("--stop", action="store_true",
                     help="stop a run of this checkout that is still going")
     ap.add_argument("--replace", action="store_true",
@@ -1301,6 +1318,13 @@ def run(args, lock=None) -> int:
         plan = [s for s in plan if s[0] in named]
         print("%d of the %d suites, %s, which is not a full run"
               % (len(plan), every, ", ".join(name for name, _, _ in plan)), flush=True)
+        # core names one of the core's suites, never its whole folder, so a
+        # run that holds only some of them says so.
+        cores = [name for name, _, _ in plan if name in CORE_PARTS]
+        if cores and len(cores) < len(CORE_PARTS):
+            print("the core's tests run as %d suites, %s and %s, and this run holds only %s"
+                  % (len(CORE_PARTS), ", ".join(CORE_PARTS[:-1]), CORE_PARTS[-1], " and ".join(cores)),
+                  flush=True)
     if args.shard:
         k, n = parse_shard(args.shard)
         mine = set(shard_of([name for name, _, _ in plan], times, k, n))
@@ -1371,7 +1395,7 @@ def run(args, lock=None) -> int:
     def one(item):
         name, d, py = item
         started = time.time()
-        # Only the core's two suites are told a part, and each is told its own.
+        # Only the core's three suites are told a part, and each is told its own.
         part = {"part": name} if name in CORE_PARTS else {}
         out, returncode, records = run_suite(d, py, timeout=limit_of(name, times), **part)
         return name, out, returncode, records, time.time() - started
@@ -1393,13 +1417,14 @@ def run(args, lock=None) -> int:
                 failed += int(n)
         skip_lines.extend(ln for ln in out.splitlines() if ln.startswith("SKIPPED"))
         ok = returncode in (0, 5)
-        # pytest's 5 is "collected nothing". For core-browsers that means the
-        # rule placing the core's files found no browser file, or left them
-        # all out, so the split has gone wrong and says nothing true about
-        # where they ran. core itself is held to its canary instead.
-        if name == CORE_PARTS[1] and returncode == 5:
+        # pytest's 5 is "collected nothing". For core-censuses or
+        # core-browsers that means the rule placing the core's files found
+        # no census or no browser file, or left them all out, so the split
+        # has gone wrong and says nothing true about where they ran. core
+        # itself is held to its canary instead.
+        if name in CORE_PARTS and name != CANARY_SUITE and returncode == 5:
             ok = False
-            summary = "collected no test, so the core's split into two suites has gone wrong"
+            summary = "collected no test, so the core's split into three suites has gone wrong"
         if not ok:
             broken.append((name, summary))
         print("%-4s %-16s %s" % ("ok" if ok else "FAIL", name, summary[:92]), flush=True)

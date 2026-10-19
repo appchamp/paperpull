@@ -342,18 +342,18 @@ def test_the_suites_a_change_touches(tmp_path):
     changed = ["apps/alpha/alpha.py", "apps/alpha/tests/test_a.py", "apps/beta/beta.py",
                "core/paperpull_core/x.py", "tools/migrate.py", "gui/app.py", "server/compose.yaml",
                "CHANGELOG.md", "README.md", "apps\\alpha\\README.md", "gui"]
-    assert wt.suites_for(tmp_path, changed) == ["alpha", "core", "core-browsers", "gui", "server"]
+    assert wt.suites_for(tmp_path, changed) == ["alpha", "core", "core-censuses", "core-browsers", "gui", "server"]
     assert wt.suites_for(tmp_path, ["CHANGELOG.md", "VERSION", ".github/workflows/tests.yml"]) == []
 
 
-def test_a_change_to_the_core_runs_both_of_its_suites():
-    """The core's tests run as two suites from one folder, and a change to
-    core/ or tools/ can meet either. Each name has to be one the runner
+def test_a_change_to_the_core_runs_all_three_of_its_suites():
+    """The core's tests run as three suites from one folder, and a change to
+    core/ or tools/ can meet any of them. Each name has to be one the runner
     knows, or the land's run would refuse it."""
     runner = {name for name, _d, _kind in rat.suites(True)}
     for changed in (["core/paperpull_core/pressing.py"], ["tools/pytest_plugins/core_part.py"]):
         got = wt.suites_for(REPO, changed)
-        assert got == list(rat.CORE_PARTS) == ["core", "core-browsers"], changed
+        assert got == list(rat.CORE_PARTS) == ["core", "core-censuses", "core-browsers"], changed
         assert set(got) <= runner
 
 

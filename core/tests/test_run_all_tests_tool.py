@@ -19,13 +19,15 @@ machine holds, as CI and the packaged app do, and that a run where one
 could not is refused, and that a suite's counts come from pytest's own
 last line, whatever a test's thread printed after it.
 
-And that the core's tests, run as two suites from one folder, run each
-file in exactly one of them, the canary in core, and that a core-browsers
-that collects nothing fails.
+And that the core's tests, run as three suites from one folder, run each
+file in exactly one of them, the canary in core, and that a core-censuses
+or a core-browsers that collects nothing fails.
 """
+import fnmatch
 import functools
 import importlib.util
 import io
+import itertools
 import json
 import os
 import re
@@ -1149,12 +1151,14 @@ def test_named_suites_take_no_shard_and_keep_no_times(one_suite, capsys, tmp_pat
         "a part run's times are not the times of a full run"
 
 
-# -- the core's two suites -------------------------------------------------------
+# -- the core's three suites -----------------------------------------------------
 #
 # Whole, core ran alone in CI's part 1 and took 36 to 45 minutes of the job's
 # 45, and two runs of 12 were stopped at the limit with nothing failed. So
-# its tests run as two suites from the one folder, core and core-browsers,
-# which takes the files whose own code drives a real browser.
+# its tests ran as two suites from the one folder, core and core-browsers,
+# which takes the files whose own code drives a real browser. By 2026-10-18
+# core took 27 to 38 minutes of its part again and part 1 of the 0.56.0 tag
+# was canceled at the limit, so the censuses left it for core-censuses.
 
 def _core_part():
     spec = importlib.util.spec_from_file_location("core_part_under_test", rat.PLUGINS / "core_part.py")
@@ -1163,37 +1167,76 @@ def _core_part():
     return module
 
 
-def test_the_core_runs_as_two_suites_from_its_one_folder():
-    """The plugin and the runner name the two the same, the canary's suite
-    is the first, and a quick run holds both."""
+def test_the_core_runs_as_three_suites_from_its_one_folder():
+    """The plugin and the runner name the three the same, the canary's
+    suite is the first, and a quick run holds all three."""
     cp = _core_part()
-    assert rat.CORE_PARTS == (cp.CORE, cp.BROWSERS) == ("core", "core-browsers")
-    assert rat.CANARY_SUITE == cp.CORE
+    assert rat.CORE_PARTS == cp.PARTS == (cp.CORE, cp.CENSUSES, cp.BROWSERS) == (
+        "core", "core-censuses", "core-browsers")
+    assert rat.CANARY_SUITE == cp.CORE == rat.CORE_PARTS[0]
     for quick in (False, True):
         core = [(name, d, kind) for name, d, kind in rat.suites(quick) if d == REPO / "core"]
         assert core == [(name, REPO / "core", "core") for name in rat.CORE_PARTS], quick
 
 
-def test_every_core_test_file_runs_in_exactly_one_of_the_two(monkeypatch):
+def test_every_core_test_file_runs_in_exactly_one_of_the_three(monkeypatch):
     """By the plugin's own hook, as pytest asks it, over every file the core
-    has. The canary stays in core though it starts a browser, and pytest run
-    by hand in core/, with no part named, still runs every file."""
+    has. The canary stays in core though it starts a browser, a census that
+    drives a browser runs with the browsers, each census name still names a
+    file of core-censuses, and pytest run by hand in core/, with no part
+    named, still runs every file."""
     cp = _core_part()
-    files = sorted({f for pattern in cp.PYTHON_FILES for f in (REPO / "core" / "tests").glob(pattern)})
+    tests = REPO / "core" / "tests"
+    files = sorted({f for pattern in cp.PYTHON_FILES for f in tests.glob(pattern)})
     assert len(files) > 100
     kept = {}
     for part in rat.CORE_PARTS:
         monkeypatch.setenv(cp.PART, part)
         kept[part] = {f.name for f in files if cp.pytest_ignore_collect(f, None) is None}
-    assert kept["core"] | kept["core-browsers"] == {f.name for f in files}
-    assert not kept["core"] & kept["core-browsers"]
-    assert cp.drives_a_browser(REPO / "core" / "tests" / rat.CANARY_FILE.split("/")[-1])
+    assert set().union(*kept.values()) == {f.name for f in files}
+    for one, other in itertools.combinations(rat.CORE_PARTS, 2):
+        assert not kept[one] & kept[other], (one, other)
+    assert sum(len(names) for names in kept.values()) == len(files)
+    assert cp.drives_a_browser(tests / rat.CANARY_FILE.split("/")[-1])
     assert "test_failure_canary.py" in kept["core"]
     assert {"test_pressing_in_a_browser.py", "test_delivery_live.py"} <= kept["core-browsers"]
+    assert {"test_every_app_guard.py", "test_no_app_forces_a_press.py"} <= kept["core-censuses"]
+    assert "test_every_fallback_press_in_a_browser.py" in kept["core-browsers"]
+    assert all(cp.is_census(tests / name) for name in kept["core-censuses"])
+    assert not any(cp.is_census(tests / name) for name in kept["core"] - cp.KEPT_IN_CORE)
+    for pattern in cp.CENSUS_NAMES:
+        assert any(fnmatch.fnmatch(name, pattern) for name in kept["core-censuses"]), pattern
     assert 20 <= len(kept["core-browsers"]) < len(kept["core"])
+    assert 20 <= len(kept["core-censuses"]) < len(kept["core"])
     monkeypatch.delenv(cp.PART)
     assert all(cp.pytest_ignore_collect(f, None) is None for f in files)
     assert cp.pytest_ignore_collect(REPO / "core" / "tests" / "conftest.py", None) is None
+
+
+def test_a_census_is_known_by_its_name_and_the_canary_by_its_own(tmp_path):
+    """Named for what every app does or what no app does, a file goes to
+    core-censuses, unless its own code drives a browser, and a name that
+    only mentions every or no does not count. The canary stays in core
+    whatever it is named."""
+    cp = _core_part()
+    plain = "def test_it():\n    assert True\n"
+    drives = "def test_it():\n    with sync_playwright() as p:\n        pass\n"
+    for name, text, part in [
+            ("test_every_app_does_it.py", plain, "core-censuses"),
+            ("test_every_receipt_app_does_it.py", plain, "core-censuses"),
+            ("test_no_app_does_it.py", plain, "core-censuses"),
+            ("test_no_dead_things.py", plain, "core-censuses"),
+            ("test_every_press_in_a_browser.py", drives, "core-browsers"),
+            ("test_not_every_app.py", plain, "core"),
+            ("test_a_file_for_every_app.py", plain, "core"),
+            ("test_nothing_left.py", plain, "core"),
+            ("every_app_test.py", plain, "core")]:
+        (tmp_path / name).write_text(text, encoding="utf-8")
+        assert cp.part_of(tmp_path / name) == part, name
+    cp.KEPT_IN_CORE = frozenset({"test_every_canary.py"})
+    for text in (plain, drives):
+        (tmp_path / "test_every_canary.py").write_text(text, encoding="utf-8")
+        assert cp.part_of(tmp_path / "test_every_canary.py") == "core"
 
 
 def test_a_browser_named_only_in_words_does_not_move_a_file(tmp_path):
@@ -1217,7 +1260,8 @@ def test_a_browser_named_only_in_words_does_not_move_a_file(tmp_path):
 def test_a_file_pytest_collects_by_any_pattern_runs_in_one_suite(tmp_path, monkeypatch):
     """pytest also collects *_test.py, and pytest.ini may name other
     patterns. The hook reads the run's own python_files, so such a file is
-    left out of one suite, never out of neither and run in both (review)."""
+    left out of all but one suite, never out of none and run in every one
+    (review)."""
     cp = _core_part()
 
     class Config:
@@ -1248,6 +1292,8 @@ SPLIT_FILES = {
     "tests/test_drives.py": "import os, pathlib\n\ndef test_drives():\n"
                             "    pathlib.Path(os.environ['RAN_IN'], 'drives').touch()\n"
                             "    if False:\n        sync_playwright()\n",
+    "tests/test_every_app_is_counted.py": "import os, pathlib\n\ndef test_census():\n"
+                                          "    pathlib.Path(os.environ['RAN_IN'], 'census').touch()\n",
     "tests/test_failure_canary.py": "import os, pathlib\n\ndef test_it():\n"
                                     "    pathlib.Path(os.environ['RAN_IN'], 'canary').touch()\n"
                                     "    if False:\n        launch()\n",
@@ -1270,36 +1316,81 @@ def test_each_of_the_cores_suites_runs_only_its_own_files(tmp_path, monkeypatch)
                                                **({"part": part} if part else {}))
         assert code == 0, output
         ran[part] = sorted(p.name for p in marks.iterdir())
-    assert ran == {"": ["canary", "drives", "plain"], "core": ["canary", "plain"], "core-browsers": ["drives"]}
+    assert ran == {"": ["canary", "census", "drives", "plain"], "core": ["canary", "plain"],
+                   "core-censuses": ["census"], "core-browsers": ["drives"]}
 
 
-def _both_core_suites(one_suite, monkeypatch, files):
+def _the_core_suites(one_suite, monkeypatch, files):
     suite = one_suite(files)
     monkeypatch.setattr(rat, "suites", lambda quick: [(name, suite, "core") for name in rat.CORE_PARTS])
     return suite
 
 
-def test_a_run_of_both_core_suites_counts_each_test_once(one_suite, monkeypatch, tmp_path, capsys):
-    _both_core_suites(one_suite, monkeypatch, SPLIT_FILES)
+def test_a_run_of_the_three_core_suites_counts_each_test_once(one_suite, monkeypatch, tmp_path, capsys):
+    _the_core_suites(one_suite, monkeypatch, SPLIT_FILES)
     monkeypatch.setenv("RAN_IN", str(tmp_path))
     assert rat.main(["--jobs", "1"]) == 0
     out = capsys.readouterr().out
     lines = {ln.split()[1]: ln for ln in out.splitlines() if ln.split()[:1] == ["ok"]}
-    assert "2 passed" in lines["core"] and "1 passed" in lines["core-browsers"], out
-    assert "\n3 passed, 0 failed, 0 skipped" in out, out
+    assert "2 passed" in lines["core"] and "1 passed" in lines["core-censuses"], out
+    assert "1 passed" in lines["core-browsers"], out
+    assert "\n4 passed, 0 failed, 0 skipped" in out, out
     assert out.rstrip().endswith("all suites passed, privacy canary included"), out
 
 
-def test_a_core_browsers_that_collects_nothing_fails(one_suite, monkeypatch, tmp_path, capsys):
-    """Then the rule placing the core's files found no browser file, so the
-    split has gone wrong, and a run is not to pass on it."""
-    files = {k: v for k, v in SPLIT_FILES.items() if k != "tests/test_drives.py"}
-    _both_core_suites(one_suite, monkeypatch, files)
+@pytest.mark.parametrize("suite, gone", [("core-censuses", "tests/test_every_app_is_counted.py"),
+                                         ("core-browsers", "tests/test_drives.py")])
+def test_a_core_suite_beside_the_canarys_that_collects_nothing_fails(one_suite, monkeypatch, tmp_path,
+                                                                   capsys, suite, gone):
+    """Then the rule placing the core's files found no census or no browser
+    file, so the split has gone wrong, and a run is not to pass on it."""
+    files = {k: v for k, v in SPLIT_FILES.items() if k != gone}
+    _the_core_suites(one_suite, monkeypatch, files)
     monkeypatch.setenv("RAN_IN", str(tmp_path))
     assert rat.main(["--jobs", "1"]) == 1
     out = capsys.readouterr().out
-    assert ("FAIL core-browsers    collected no test, so the core's split into two suites "
-            "has gone wrong") in out, out
-    assert "FAILING SUITE  core-browsers" in out, out
+    assert ("FAIL %-16s collected no test, so the core's split into three suites "
+            "has gone wrong" % suite) in out, out
+    assert "FAILING SUITE  %s" % suite in out, out
     assert any(ln.split()[:2] == ["ok", "core"] for ln in out.splitlines()), out
     assert "all suites passed" not in out, out
+
+
+def test_the_canary_runs_in_core_alone_and_a_run_without_it_is_refused(one_suite, monkeypatch,
+                                                                       tmp_path, capsys):
+    """The other two pass beside a core that ran no canary, and the run is
+    still refused. A run that holds neither core nor the canary is not, and
+    says the canary was not among its suites."""
+    files = {k: v for k, v in SPLIT_FILES.items() if k != "tests/test_failure_canary.py"}
+    _the_core_suites(one_suite, monkeypatch, files)
+    monkeypatch.setenv("RAN_IN", str(tmp_path))
+    assert rat.main(["--jobs", "1"]) == 1
+    out = capsys.readouterr().out
+    assert "\nTHE PRIVACY CANARY DID NOT RUN.\ncore/tests/test_failure_canary.py is missing" in out, out
+    for name in ("core-censuses", "core-browsers"):
+        assert any(ln.split()[:2] == ["ok", name] for ln in out.splitlines()), out
+    assert "all suites passed" not in out, out
+    assert rat.main(["--suites", "core-censuses,core-browsers", "--jobs", "1"]) == 0
+    out = capsys.readouterr().out
+    assert out.rstrip().endswith("\nthe 2 suites named passed, and the privacy canary was not "
+                                 "among them"), out
+
+
+def test_naming_core_alone_runs_only_its_part_and_says_so(one_suite, monkeypatch, tmp_path, capsys):
+    """core names the suite that holds the canary, never the core's whole
+    folder, so a run of fewer than all three says which it holds."""
+    _the_core_suites(one_suite, monkeypatch, SPLIT_FILES)
+    monkeypatch.setenv("RAN_IN", str(tmp_path))
+    assert rat.main(["--suites", "core", "--jobs", "1"]) == 0
+    out = capsys.readouterr().out
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name in ("canary", "census", "drives", "plain")) == [
+        "canary", "plain"]
+    assert ("\nthe core's tests run as 3 suites, core, core-censuses and core-browsers, and this run "
+            "holds only core\n") in out, out
+    assert out.rstrip().endswith("privacy canary included, which is not a full run"), out
+    assert rat.main(["--suites", "core,core-browsers", "--jobs", "1"]) == 0
+    assert "this run holds only core and core-browsers\n" in capsys.readouterr().out
+    assert rat.main(["--suites", ",".join(rat.CORE_PARTS), "--jobs", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "this run holds only" not in out, out
+    assert "\n4 passed, 0 failed, 0 skipped" in out, out

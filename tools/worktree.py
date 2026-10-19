@@ -339,9 +339,9 @@ def suites_for(tree: Path, changed) -> list:
         if parts[0] == "apps" and len(parts) > 2:
             found = [parts[1]] if (tree / "apps" / parts[1] / "tests").is_dir() else []
         elif parts[0] in ("core", "tools"):
-            # The core's tests run as two suites from one folder, and either
-            # can meet the change (tools/pytest_plugins/core_part.py).
-            found = ["core", "core-browsers"]
+            # The core's tests run as three suites from one folder, and any
+            # of them can meet the change (tools/pytest_plugins/core_part.py).
+            found = ["core", "core-censuses", "core-browsers"]
         elif parts[0] in ("gui", "server") and len(parts) > 1:
             found = [parts[0]]
         else:
