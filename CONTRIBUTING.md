@@ -179,7 +179,10 @@ uv run pytest ../core/tests           # the core's tests
 
 `uv sync` removes whatever `gui/pyproject.toml` does not list, so a package
 added to any `requirements.txt` goes in `gui/pyproject.toml` as well.
-`gui/tests/test_uv_matches_requirements.py` fails until it does.
+`gui/tests/test_uv_matches_requirements.py` fails until it does. The Windows
+and Mac packages and the server image install from pinned lists of their
+own, `packaging/requirements.in` and `server/requirements.in`, and the same
+test fails until both pin the new package too.
 
 Every app reads its settings from a `config.json` beside it, which is yours
 and never goes to GitHub. Make it from the example that does ship:

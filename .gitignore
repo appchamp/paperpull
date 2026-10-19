@@ -80,7 +80,7 @@ env/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-# uv users lock locally; gui/pyproject.toml is the shared list (#108)
+# uv users lock locally, and gui/pyproject.toml is the shared list (#108)
 gui/uv.lock
 .mypy_cache/
 *.egg-info/
