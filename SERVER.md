@@ -431,7 +431,8 @@ documents that run saved are copied into it.
   provider's name inside the consume folder. Paperless turns those folders
   into tags when `PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS` is on in Paperless.
 - **A documents folder stays inside /data.** The panel's Documents folder
-  setting works on the server for a folder inside the data folder, and a
+  setting works on the server for a folder inside the data folder, each
+  provider's folder inside it, and a
   run's checked documents move there once the plug-ins have copied them. A
   run refuses one anywhere else, or one reached through a link out of
   /data, before it saves anything, so Paperless gets new documents through

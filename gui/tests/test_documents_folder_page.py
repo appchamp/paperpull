@@ -8,6 +8,11 @@ and on PaperPull Server so is one outside the data folder. The page says
 how many documents saved before are still in the account's own folder, and
 Move runs the app's own Rename with the core's move mark set.
 
+Above it, one folder for every provider, kept in the panel's settings. Each
+account that has no folder of its own gets one inside it, "<install>" or
+"<install> - <account>", written into its config, and one given a folder of
+its own, its own folder included, keeps it when the root changes.
+
 The endpoints are called directly, the way the rest of this suite does.
 Every folder is a throwaway one under tmp_path, and every name is invented.
 """
@@ -58,6 +63,8 @@ def apps(tmp_path, monkeypatch):
              for name, d in found.items()}
     monkeypatch.setattr(app_module, "discover_apps", lambda: metas)
     monkeypatch.setattr(app_module, "_SAMPLE", None)
+    monkeypatch.setattr(app_module, "_settings_path",
+                        lambda: tmp_path / "panel" / "settings.json")
     return found
 
 
@@ -211,6 +218,8 @@ def started(tmp_path, monkeypatch):
     monkeypatch.delenv("PAPERPULL_SERVER", raising=False)
     monkeypatch.delenv(renaming.MOVE_DOCUMENTS_ENV, raising=False)
     monkeypatch.setattr(app_module, "_SAMPLE", None)
+    monkeypatch.setattr(app_module, "_settings_path",
+                        lambda: tmp_path / "panel" / "settings.json")
     venv = tmp_path / ".venv" / "Scripts" / "python.exe"
     venv.parent.mkdir(parents=True)
     venv.write_text("", encoding="utf-8")
@@ -345,6 +354,8 @@ def slow(tmp_path, monkeypatch):
     import io
     monkeypatch.delenv("PAPERPULL_SERVER", raising=False)
     monkeypatch.setattr(app_module, "_SAMPLE", None)
+    monkeypatch.setattr(app_module, "_settings_path",
+                        lambda: tmp_path / "panel" / "settings.json")
     venv = tmp_path / ".venv" / "Scripts" / "python.exe"
     venv.parent.mkdir(parents=True)
     venv.write_text("", encoding="utf-8")
@@ -412,3 +423,103 @@ def test_the_move_is_the_apps_own_rename_with_the_cores_mark():
         assert app_module.ACTIONS[action]["env"] == {renaming.MOVE_DOCUMENTS_ENV: "1"}
     assert all("env" not in spec for name, spec in app_module.ACTIONS.items()
                if not name.startswith("move_documents"))
+
+
+# -- one documents folder for every provider ----------------------------------
+
+def save_root(folder, all: bool = False):
+    return asyncio.run(app_module.api_documents_root_save(_Req({"folder": folder, "all": all})))
+
+
+def test_one_folder_gives_every_account_a_folder_of_its_own_inside_it(apps, tmp_path):
+    docs = tmp_path / "Drive" / "PaperPull"
+    d = save_root(str(docs))
+    assert d["written"] and d["documents_root"] == str(docs) and d["configs"] == 3
+    chase, target = apps["Chase Statements"], apps["Target Receipts"]
+    assert config(chase)["documents_dir"] == str(docs / "Chase Statements")
+    assert config(chase, "config.spouse.json")["documents_dir"] == \
+        str(docs / "Chase Statements - spouse")
+    assert config(target)["documents_dir"] == str(docs / "Target Receipts")
+    got = app_module.api_documents("Chase Statements", "spouse")
+    assert got["follows"] and got["documents_root"] == str(docs)
+    assert got["in_root"] == got["documents_dir"]
+    kept = list((chase / "Backups").glob("documents-*/config.spouse.json"))
+    assert len(kept) == 1 and "documents_dir" not in json.loads(kept[0].read_text("utf-8"))
+    assert save_root(str(docs))["written"] is False, "nothing to change"
+    moved = tmp_path / "Other Drive"
+    assert save_root(str(moved))["configs"] == 3
+    assert config(target)["documents_dir"] == str(moved / "Target Receipts")
+    assert save_root("")["configs"] == 3
+    for folder, name in ((chase, "config.json"), (chase, "config.spouse.json"),
+                         (target, "config.json")):
+        assert "documents_dir" not in config(folder, name)
+
+
+def test_a_folder_set_for_one_account_stays_when_the_root_changes(apps, tmp_path):
+    chase, target = apps["Chase Statements"], apps["Target Receipts"]
+    own = tmp_path / "Spouse Watched"
+    save({"app": "Chase Statements", "account": "spouse", "folder": str(own)})
+    docs = tmp_path / "Drive"
+    assert save_root(str(docs))["configs"] == 2
+    assert config(chase, "config.spouse.json")["documents_dir"] == str(own)
+    assert not app_module.api_documents("Chase Statements", "spouse")["follows"]
+    # Its own folder, chosen while the root is set, is kept as that.
+    save({"app": "Target Receipts", "folder": ""})
+    assert config(target)["documents_dir"] == ""
+    assert not app_module.api_documents("Target Receipts")["follows"]
+    save_root(str(tmp_path / "Elsewhere"))
+    assert config(target)["documents_dir"] == ""
+    assert config(chase, "config.spouse.json")["documents_dir"] == str(own)
+    assert config(chase)["documents_dir"] == str(tmp_path / "Elsewhere" / "Chase Statements")
+    # And it can follow the root again.
+    d = save({"app": "Target Receipts", "follow": True})
+    assert d["written"] and d["follows"]
+    assert config(target)["documents_dir"] == str(tmp_path / "Elsewhere" / "Target Receipts")
+
+
+def test_saving_with_all_gives_every_account_the_folder_even_with_own_folder(apps, tmp_path):
+    chase, target = apps["Chase Statements"], apps["Target Receipts"]
+    own = tmp_path / "Spouse Watched"
+    save({"app": "Chase Statements", "account": "spouse", "folder": str(own)})
+    docs = tmp_path / "Drive"
+    d = save_root(str(docs))
+    assert d["configs"] == 2 and d["following"] == 2 and d["unfollowed"] == 1
+    d_all = save_root(str(docs), all=True)
+    assert d_all["configs"] == 1 and d_all["following"] == 3 and d_all["unfollowed"] == 0
+    assert config(chase, "config.spouse.json")["documents_dir"] == \
+        str(docs / "Chase Statements - spouse")
+
+
+def test_an_account_added_later_gets_its_folder_before_it_runs(apps, tmp_path):
+    docs = tmp_path / "Drive"
+    save_root(str(docs))
+    target = apps["Target Receipts"]
+    (target / "config.kid.json").write_text(json.dumps({
+        "output_dir": "../Target Receipts - kid", "profile_dir": "kid-profile"}),
+        encoding="utf-8")
+    metas = app_module.discover_apps()
+    metas["Target Receipts"]["accounts"] = app_module._accounts(target)
+    assert app_module._sync_documents(metas, str(docs), only=("Target Receipts", "kid")) == 1
+    assert config(target, "config.kid.json")["documents_dir"] == \
+        str(docs / "Target Receipts - kid")
+
+
+@pytest.mark.parametrize("where,says", [
+    ("relative", "full path"),
+    ("profile", "browser profile"),
+    ("the PaperPull folder", "browser profile"),
+    ("inside a provider", "keeps its records in"),
+    ("inside Manual Review", "keeps its records in"),
+])
+def test_a_root_that_cannot_hold_documents_is_refused(apps, where, says):
+    chase = apps["Chase Statements"]
+    folder = {"relative": "Watched",
+              "profile": str(chase / "primary-profile"),
+              "the PaperPull folder": str(chase.parent),
+              "inside a provider": str(apps["Target Receipts"] / "Docs"),
+              "inside Manual Review": str(chase / "Manual Review" / "Docs")}[where]
+    with pytest.raises(HTTPException) as e:
+        save_root(folder)
+    assert e.value.status_code == 400 and says in e.value.detail, e.value.detail
+    assert "documents_dir" not in config(chase)
+    assert app_module.api_documents("Chase Statements")["documents_root"] == ""
