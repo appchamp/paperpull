@@ -7,6 +7,35 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Fixed
+- **U.S. Bank walks every account in its account picker, and a run presses
+  only what its own list read.** The account picker on U.S. Bank's
+  statements page can be a plain list to choose from, and the app took its
+  whole text, the "Choose an account" prompt and every account in it, for
+  one account. So it read only the account on show and never chose another
+  for a download. @appchamp found the cause and fixed it, and each account
+  is now read and chosen in turn (#115). On top of that, an account counts
+  as chosen only once its own list has come, so a list still showing the
+  account before is never read or pressed as the new one's, and the app
+  waits for the list and the year picker to draw, which a Pilot had read
+  before they came (#116). When the account and year pickers read nothing
+  while the page shows statements to download, the run stops with a
+  failure file rather than read the page's text. That reading had taken
+  whole sections for statements, each dated with its first row's date
+  (#117), and it now takes only a row showing one date. A Pilot or Run All
+  presses only statements its own list read. A record the page's text
+  made is marked No Longer Listed by the next run whose pickers read
+  statements, and a list read whole through every account and year marks
+  any other statement it no longer shows, so no run, Resume included,
+  tries such a record again until a list shows it once more. Nothing saved
+  is ever marked. A download that saves nothing now names the step that
+  stopped it, finding the statement, choosing its account or its year, or
+  the press itself, and its failure file counts what the search for the
+  statement's row saw. Thanks to @appchamp for the fix, the runs and the
+  careful answers (#106).
+
 ## [0.56.0] - 2026-10-18
 
 Citi downloads the older statements you requested, and Chase Business
