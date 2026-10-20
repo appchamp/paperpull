@@ -36,6 +36,9 @@ log = logging.getLogger("usbank_docs")
 
 DONE_STATES = {State.COMPLETED.value, State.NO_RECEIPT_AVAILABLE.value}
 
+# What a record says once a list read whole no longer shows it (#106).
+UNLISTED_NOTE = "U.S. Bank no longer lists this statement"
+
 
 def ask(prompt: str) -> str:
     try:
@@ -51,9 +54,12 @@ class Document:
     def __init__(self, title="", category="", summary="", date="", period="",
                  href="", row_index=-1, confidence="", account="",
                  date_text="", document_id="", occurrence=0, ambiguous=False,
-                 **kw):
+                 listed_under="", **kw):
         self.title = title
         self.account = account
+        # The account picker's label the statement was read under, the one
+        # its download chooses again. "" for one listed before this was kept.
+        self.listed_under = listed_under
         self.category = category
         self.summary = summary
         self.date = date
@@ -115,6 +121,9 @@ def migrate_legacy_keys(records: dict) -> int:
 class App:
     _journal = None
     _requests = None
+    # The keys of every statement this run's list read, or None for a run
+    # that read no list (Resume). A run that read one presses only these.
+    _listed_keys = None
 
     def __init__(self, args):
         self.args = args
@@ -348,22 +357,98 @@ class App:
             full_summary = f"{summary} - {doc_id[-4:]}" if doc_id else summary
         else:
             full_summary = summary
+        listed_under = re.sub(r"\s+", " ", (d.get("listed_under") or "")).strip()
         doc = Document(title=title, category=category, summary=full_summary,
                        date=date, confidence=confidence, account=account,
                        date_text=date, document_id=doc_id,
                        occurrence=int(d.get("occurrence", 0) or 0),
-                       ambiguous=bool(d.get("ambiguous")))
-        if self.discovery.get(doc.key) is None:
+                       ambiguous=bool(d.get("ambiguous")), listed_under=listed_under)
+        if self._listed_keys is not None:
+            self._listed_keys.add(doc.key)
+        rec = self.discovery.get(doc.key)
+        if rec is None:
             rec = doc.to_dict()
             rec["state"] = State.DISCOVERED.value
             self.discovery.update(doc.key, rec, save=False)
             return 1
+        self._listed_again(doc.key, rec, listed_under)
         return 0
+
+    def _listed_again(self, key: str, rec: dict, listed_under: str) -> None:
+        """A statement known before and read by this list. It keeps the label
+        it was read under now, which its download chooses, and one marked No
+        Longer Listed by an earlier list is put back to be taken (#106)."""
+        if listed_under and rec.get("listed_under") != listed_under:
+            self.discovery.update(key, {"listed_under": listed_under}, save=False)
+        prog = self.progress.get(key) or {}
+        if State.NO_LONGER_LISTED.value in (prog.get("state"), rec.get("state")):
+            if prog:
+                self.progress.update(key, {"state": State.DISCOVERED.value}, save=False)
+            self.discovery.update(key, {"state": State.DISCOVERED.value}, save=False)
+
+    def _kept(self, rec: dict) -> bool:
+        """A record whose statement is saved, or whose file is on disk. Such
+        a record is never marked No Longer Listed."""
+        if not isinstance(rec, dict):
+            return False
+        if rec.get("downloaded_ok") or rec.get("state") in (
+                State.COMPLETED.value, State.PDF_VERIFIED.value,
+                State.NO_RECEIPT_AVAILABLE.value, State.CANCELED.value):
+            return True
+        p = rec.get("pdf_path") or ""
+        try:
+            return bool(p) and Path(p).exists()
+        except (OSError, ValueError):
+            return True
+
+    def _retire_unlisted(self, walked) -> int:
+        """Mark No Longer Listed each statement not yet saved that a list read
+        whole no longer shows, and say how many. A tester's Run All pressed
+        three records an earlier list made out of chunks of the page on
+        every run, and wrote the same three rows into the Document Index
+        each time (#106, #117).
+
+        A record the pickers make is always titled Statement. One titled
+        anything else was made by a reading of the page's text or names,
+        which the pickers never list, so any walk that read statements from
+        them marks it, whole or not. Otherwise only a list read whole
+        through every account and year the pickers offered judges a record
+        (site.Read), and only one of a year whose list drew under every
+        account. Either way only a record in this run's scope whose key is
+        its own. A record saved, or with a file on disk, is never marked,
+        and one listed again is put back (_listed_again). The record is
+        kept either way, nothing is deleted."""
+        # A walk that read nothing judges nothing, since the page's text may
+        # have been read in its place, and its records are not the walk's.
+        if not walked:
+            return 0
+        whole = bool(getattr(walked, "whole", False))
+        years = set(getattr(walked, "years", ()) or ()) if whole else set()
+        listed = self._listed_keys or set()
+        marked = 0
+        for key, rec in list(self.discovery.data.items()):
+            if key in listed or not isinstance(rec, dict):
+                continue
+            prog = self.progress.get(key) or {}
+            if self._kept(prog) or self._kept(rec):
+                continue
+            doc = Document.from_dict(dict(rec, **prog))
+            if doc.key != key or not self._in_scope(doc):
+                continue
+            made_by_the_pickers = " ".join((doc.title or "").split()) == "Statement"
+            if made_by_the_pickers and (doc.date or "")[:4] not in years:
+                continue
+            if doc.state == State.NO_LONGER_LISTED.value:
+                continue
+            self._record(doc, State.NO_LONGER_LISTED, notes=UNLISTED_NOTE)
+            marked += 1
+        return marked
 
     def cmd_discover(self, quiet: bool = False) -> int:
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
+        self._listed_keys = set()
         page = self.page()
         if not site.ensure_statements(page):
             self.check_session(page)
@@ -399,9 +484,31 @@ class App:
             print("  Run this again in a little while to read the list whole.")
             self.write_failure("read the statement list", "some of the list would not answer")
             raise SystemExit(0)
+        walked = raw
+        unchosen = getattr(raw, "unchosen", 0)
+        if unchosen:
+            print(f"  {unchosen} account(s) in U.S. Bank's account picker could not be chosen")
+            print("  this run, so their statements were not listed. Run this again in a")
+            print("  little while.")
         if raw:
             log.info("U.S. Bank: %d document(s) read from the page's own pickers", len(raw))
         else:
+            shown = getattr(raw, "shown", 0) or site.download_controls_shown(page)
+            if shown:
+                # Statements the pickers could not read. The page's text
+                # holds them too, but a row read from it is not one the
+                # download can find again, and a tester's Pilot that read it
+                # made records of chunks of the page (#106).
+                log.info("U.S. Bank: the pickers read nothing while %d Download control(s) show",
+                         shown)
+                print("\n  U.S. Bank's page shows statements to download, but they could not")
+                print("  be read from its account and year pickers, so nothing is listed")
+                print("  this run rather than guess at them from the page's text.")
+                print("  Run this again in a little while.")
+                self.write_failure("read the statement list",
+                                   "the pickers read no statement the page shows",
+                                   extra={"listing": {"download_controls": shown}})
+                raise SystemExit(0)
             log.info("U.S. Bank: structured pass found nothing - falling back to scraping")
             print("  Could not read U.S. Bank's document pickers; reading the page instead.")
             raw = site.usbank_collect(page)
@@ -409,6 +516,9 @@ class App:
         n_new = 0
         for d in raw:
             n_new += self._record_usbank_doc(d)
+        retired = self._retire_unlisted(walked)
+        if retired:
+            log.info("U.S. Bank: %d statement(s) no longer listed", retired)
 
         self.discovery.save()
         # The whole list is in, and only now may a Resume that carries on
@@ -439,11 +549,18 @@ class App:
                     print(f"    {n:4}  {name}")
             if self.stats["skipped_out_of_scope"]:
                 print(f"  Skipped as out of scope: {self.stats['skipped_out_of_scope']}")
+            if retired:
+                print(f"  No longer listed by U.S. Bank, so not tried again: {retired}")
         return n_new
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
         docs = [Document.from_dict(v) for v in self.discovery.data.values()]
-        docs = [d for d in docs if self._in_scope(d)]
+        # A run that read the list takes only what its list read. A record an
+        # earlier list made and this one did not read is never pressed, and
+        # one a list read whole no longer shows is pressed by no run (#106).
+        if self._listed_keys is not None:
+            docs = [d for d in docs if d.key in self._listed_keys]
+        docs = [d for d in docs if d.state != State.NO_LONGER_LISTED.value and self._in_scope(d)]
         docs.sort(key=lambda d: d.date or "0000", reverse=True)
         limit = limit if limit is not None else self.args.max_docs
         return docs[:limit] if limit else docs
@@ -539,18 +656,26 @@ class App:
             self.check_session(page)
             site.ensure_statements(page)
         saved = site.usbank_download(page, page.context, doc.account, doc.date,
-                                   out_path, doc.occurrence, doc.document_id,
-                                   title=doc.title)
+                                     out_path, doc.occurrence, doc.document_id,
+                                     title=doc.title, listed_under=doc.listed_under)
         if not saved:
             if out_path.exists() and (out_path.stat().st_size == 0
                                       or out_path.read_bytes()[:5] != b"%PDF-"):
                 out_path.unlink()
+            # The step that stopped it and why, in words of our own
+            # (site.Attempt). A download that never found its row was
+            # written down as a document that would not render, and read
+            # that way for three rounds (#106).
+            step = getattr(saved, "step", "") or "capture the document"
+            reason = getattr(saved, "reason", "") or "the document would not render"
+            searched = getattr(saved, "row_search", None) or {}
             self._record(doc, State.NEEDS_MANUAL_REVIEW,
-                         notes="Could not capture the document PDF (see the log)")
-            self._write_row(doc, "Capture failed", "Needs Manual Review")
-            self.write_failure('capture the document', 'the document would not render')
+                         notes=f"Could not {step}, {reason} (see the log)")
+            self._write_row(doc, "Capture failed" if step == "capture the document"
+                            else f"Could not {step}", "Needs Manual Review")
+            self.write_failure(step, reason, extra={"row_search": searched} if searched else None)
             self.stats["manual_review"] += 1
-            print("  Could not capture this document - marked for manual review.")
+            print(f"  Could not {step}, {reason}. Marked for manual review.")
             return
 
 
@@ -768,7 +893,7 @@ class App:
         return self._journal
 
     def write_failure(self, step: str, reason: str, text: str = "",
-                      postmortem: dict = None) -> None:
+                      postmortem: dict = None, extra: dict = None) -> None:
         """What the page looked like when this went wrong, to a file.
 
         Written without anybody having to know to ask for it, because a
@@ -777,10 +902,16 @@ class App:
 
         One per run. A run where thirty documents fail for one reason
         does not need thirty files, and the first is taken while the page
-        is still sitting on the thing that broke."""
+        is still sitting on the thing that broke.
+
+        `extra` holds only our own words and counts, such as what the
+        search for a statement's row saw (site.Search)."""
         if self.stats.get("failure_files"):
             return
-        extra = {"postmortem": postmortem} if postmortem else None
+        extra = dict(extra or {})
+        if postmortem:
+            extra["postmortem"] = postmortem
+        extra = extra or None
         # A checkpoint at the moment it gave up. It is also what makes the
         # journal when nothing had written to it yet, and every tester file
         # sent in on 2026-09-25 came back without one for that reason.
