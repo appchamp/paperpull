@@ -150,13 +150,60 @@ def test_an_option_list_drawn_again_before_the_choice_still_chooses_the_one_aske
 def test_a_choice_that_took_lets_the_account_on_show_be_taken_again(page):
     """After one that did not take, a choice of another account that did
     clears the note, so its next statement does not choose it again."""
-    show(page, statements=SHARED, chosen=CHECKING, unnamed=True, redraw="keep", held=(CARD,))
+    _serve(page, _stuck_on_the_card())
     assert not site.select_account(page, CARD)
     assert site.select_account(page, BUSINESS)
     page.evaluate("() => { window.changes = 0; document.getElementById('account-select')"
                   ".addEventListener('change', () => { window.changes += 1; }); }")
     assert site.select_account(page, BUSINESS)
     assert page.evaluate("() => window.changes") == 0
+
+
+def test_a_page_that_will_not_open_again_takes_no_choice(page, tmp_path, pressed):
+    """The card's choice did not take on a page that cannot be loaded again.
+    The business card chosen after it cleared the note, and the card's list
+    came then and was pressed as the business card's (review)."""
+    show(page, statements=SHARED, chosen=CHECKING, unnamed=True, redraw="keep", held=(CARD,))
+    assert not site.select_account(page, CARD)
+    assert not site.select_account(page, BUSINESS)
+    page.evaluate("() => window.deliverHeld()")
+    got = _download(page, tmp_path, BUSINESS, "2031-10-13")
+    assert got.step == "choose the account"
+    assert pressed == []
+
+
+def test_a_walk_that_does_not_look_at_the_list_leaves_the_page_to_be_opened_again(page):
+    """The walk that reads the page's text when the pickers give nothing
+    sets each account with no look at whether the list followed. The next
+    choice, of the account it ended on included, opens the page again."""
+    loads = _serve(page, page_html(statements=SHARED, chosen=CHECKING))
+    site.usbank_collect(page)
+    assert site._choice_unsure(page) is True
+    assert site.account_name(page) == BUSINESS
+    assert site.select_account(page, BUSINESS)
+    assert len(loads) == 2
+    assert site._choice_unsure(page) is False
+
+
+def test_labels_the_page_reads_as_one_are_chosen_by_place(page):
+    """Two options whose own labels differ only in their spaces. Playwright
+    takes them for one when it chooses by label, and chose the first."""
+    show(page, chosen=CHECKING)
+    page.evaluate("() => { const o = document.getElementById('account-select').options;"
+                  " o[1].label = 'Invented card'; o[2].label = 'Invented  card'; }")
+    assert site.select_account(page, CARD)
+    assert site.account_name(page) == CARD
+
+
+def test_the_account_on_show_is_chosen_again_on_a_page_that_will_not_say(page, monkeypatch):
+    """A page that will not say whether it holds the note is not taken at
+    its picker's word."""
+    show(page, chosen=CHECKING)
+    page.evaluate("() => { window.changes = 0; document.getElementById('account-select')"
+                  ".addEventListener('change', () => { window.changes += 1; }); }")
+    monkeypatch.setattr(site, "_choice_unsure", lambda pg: None)
+    site.select_account(page, CHECKING)
+    assert page.evaluate("() => window.changes") == 1
 
 
 def test_a_page_that_will_not_hold_the_note_is_not_chosen_on(page, monkeypatch):

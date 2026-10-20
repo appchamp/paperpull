@@ -20,9 +20,10 @@ All notable changes to PaperPull are recorded here. Versioning follows
   of the same date and save it as this account's. A list that came late
   could also be read as the next account's. Now a choice that does not take
   opens the statements page again before anything else is read or pressed,
-  the account the picker shows is taken as chosen only after a choice that
-  took, and the picker's option is chosen by its own label, so options
-  drawn again a moment before cannot put another account in its place. The
+  no account is chosen on a page that will not open again, the account the
+  picker shows is taken as chosen only after a choice that took, and the
+  picker's option is chosen by its own label, so options drawn again a
+  moment before cannot put another account in its place. The
   tester's page names the account in every heading, which kept this from
   happening there.
 - **E*TRADE keeps a statement set aside for review when it folds its

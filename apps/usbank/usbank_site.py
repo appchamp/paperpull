@@ -709,6 +709,10 @@ def usbank_collect(page) -> List[dict]:
 
     acct_sel, accounts = account_select(page)
     if acct_sel is not None and accounts:
+        # Chosen here with no look at whether the list followed, so the page
+        # holds the note of a choice not known to have taken (_note_choice),
+        # and select_account opens it again before it chooses on it.
+        _note_choice(page, True)
         for a in accounts:
             if not _select_option(page, acct_sel, a):
                 continue
@@ -923,24 +927,42 @@ def _choice_unsure(page) -> Optional[bool]:
         return None
 
 
-def _not_taken(page, label: str, why: str) -> bool:
-    """A choice of account that did not take, after the picker was touched.
-    Its picker can show one account while its list holds another's rows, or
-    the list asked for can still come late and be read as the next choice's,
-    so the statements page is loaded again, picker and list drawn afresh.
-    Only a page on U.S. Bank's own site. A page that will not load again
-    keeps its note (_note_choice), so the account it shows is never taken as
-    chosen. False always, and nothing here raises."""
-    log.info("%s for %r, so it is not taken and the statements page is opened again",
-             why, label[:60])
+def _reopen(page) -> bool:
+    """Load the statements page again, picker and list drawn afresh, which
+    drops the note of a choice that did not take (_note_choice) and any
+    list still on its way. Only a page on U.S. Bank's own site, and nothing
+    here raises. Whether the page holds no such note after."""
     try:
         if is_safe_url(page.url):
+            log.info("the statements page is opened again")
             page.reload(wait_until="domcontentloaded", timeout=60000)
             dismiss_timeout(page)
             _wait_for_list(page)
     except Exception as e:
         log.info("could not open the statements page again: %s", str(e).split("\n")[0])
+    return _choice_unsure(page) is False
+
+
+def _not_taken(page, label: str, why: str) -> bool:
+    """A choice of account that did not take, after the picker was touched.
+    Its picker can show one account while its list holds another's rows, or
+    the list asked for can still come late and be read as the next choice's,
+    so the statements page is loaded again (_reopen). A page that will not
+    load again keeps its note, and select_account takes no choice on it.
+    False always, and nothing here raises."""
+    log.info("%s for %r, so it is not taken", why, label[:60])
+    _reopen(page)
     return False
+
+
+def _as_playwright_reads(label: str) -> str:
+    """An option's own label as Playwright compares it when it chooses by
+    label, which also takes an option whose label matches once white space
+    is made plain (normalizeWhiteSpace). Zero-width spaces and soft hyphens
+    dropped, the ends trimmed and every run of white space one space. White
+    space here is a little wider than Playwright's, so labels it would take
+    for one are never counted as two."""
+    return re.sub(r"[\s\ufeff]+", " ", re.sub(r"[\u200b\u00ad]", "", label or "")).strip()
 
 
 class PickerRefused(Exception):
@@ -977,7 +999,8 @@ def _plain_account_options(sel) -> List[Tuple[str, str]]:
     """Each option of a plain picker as (its label as the app reads it, the
     page's own label for it), read at once."""
     try:
-        return [(" ".join(str(t).split()), str(own)) for t, own in sel.evaluate(_OPTIONS_JS)]
+        return [(" ".join(str(t).split()), str(own))
+                for t, own in sel.evaluate(_OPTIONS_JS, timeout=5000)]
     except Exception:
         return []
 
@@ -1078,11 +1101,16 @@ def select_account(page, label: str) -> bool:
     showing this account while the list still holds the rows of the one
     before, and on a list whose headings name no account a row of the same
     date there would be pressed and saved as this account's statement
-    (review of 0.56.1). Such a page is opened again (_not_taken), and on one
-    that would not open again this account is chosen again, which a plain
-    picker takes only once its list draws again."""
+    (review of 0.56.1). Such a page is opened again (_reopen), here or when
+    the choice failed, and no account is chosen on one that would not open
+    again, since a list asked for there can still come late and be read as
+    the one chosen next."""
     if not label:
         return True
+    if _choice_unsure(page) is True and not _reopen(page):
+        log.info("the statements page holds a choice of account that did not take and would "
+                 "not open again, so %r is not chosen", label[:60])
+        return False
     if label == account_name(page) and _choice_unsure(page) is False:
         return True
     try:
@@ -1136,7 +1164,8 @@ def _select_plain_account(page, sel, label: str) -> bool:
     note in the page (_note_choice).
 
     The option is chosen by the page's own label for it when no other
-    option shares that label, which the page matches as it chooses, so an
+    option shares that label as Playwright compares labels
+    (_as_playwright_reads), which the page matches as it chooses, so an
     option list drawn again in between cannot put another account where
     the one wanted was a moment before. Otherwise by its place, and either
     way the account on show is read back after."""
@@ -1148,8 +1177,9 @@ def _select_plain_account(page, sel, label: str) -> bool:
     if i < 0:
         log.info("account %r not offered", label[:40])
         return False
-    own = options[i][1]
-    by = {"label": own} if own and [o for _t, o in options].count(own) == 1 else {"index": i}
+    own = _as_playwright_reads(options[i][1])
+    shared = [_as_playwright_reads(o) for _t, o in options].count(own)
+    by = {"label": options[i][1]} if own and shared == 1 else {"index": i}
     before = _list_text(page)
     _mark_sections(page)
     if not _note_choice(page, True):
@@ -2063,6 +2093,8 @@ def probe_api(page, seconds: int = 25) -> List[dict]:
         scroll_full_page(page, rounds=4)
         acct_sel, accounts = account_select(page)
         if acct_sel is not None:
+            # As usbank_collect's walk, chosen with no look at the list.
+            _note_choice(page, True)
             for a in accounts[:3]:
                 _select_option(page, acct_sel, a)
         for p in (period_options(page) or [])[:3]:
