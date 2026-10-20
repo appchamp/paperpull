@@ -282,29 +282,26 @@ _PLACES = frozenset(hashlib.sha256(("#%d" % n).encode("utf-8")).hexdigest()[:12]
 
 def keyed_by_ids(key: str, record) -> str:
     """The key of no account (legacy_key) a record 0.56.0 kept under the
-    list's own ids sits beside, or "" for any other record. Such a record
-    holds no account, and its key's digest is of no place, and of its own
-    entry when the record still holds one. Read off the key, so a history
-    moved with --minimal, which keeps no entry in a record, is read the
+    list's own ids sits beside, or "" for any other record. Read off the key
+    alone, a key of no account and a digest of no place. Only a document
+    with no account and an entry gets such a key (Document.key), so nothing
+    else in the record can say otherwise, and a history moved with
+    --minimal, which keeps neither the account nor the entry, is read the
     same."""
     m = _UNNAMED_DIGEST_RE.match(key or "")
     if not m or not isinstance(record, dict) or m.group("digest") in _PLACES:
-        return ""
-    if str(record.get("account") or "").strip():
-        return ""
-    entry = str(record.get("entry") or "")
-    if entry and hashlib.sha256(entry.encode("utf-8")).hexdigest()[:12] != m.group("digest"):
         return ""
     return m.group("legacy")
 
 
 def placed(key: str, record) -> str:
     """The key of no account a record kept by its place, "#1" or "#2",
-    sits beside, or "" for any other record."""
+    sits beside, or "" for any other record. Read off the key alone, as
+    keyed_by_ids is."""
     m = _UNNAMED_DIGEST_RE.match(key or "")
     if not m or not isinstance(record, dict) or m.group("digest") not in _PLACES:
         return ""
-    return "" if str(record.get("account") or "").strip() else m.group("legacy")
+    return m.group("legacy")
 
 
 def _first_to_keep(records: dict, keys) -> str:
@@ -312,11 +309,12 @@ def _first_to_keep(records: dict, keys) -> str:
     (keys.is_done), then one naming a file that is there (_held_under), then
     the first discovered, and of those one Discover listed together, the one
     whose file has the shortest name, "Statement.pdf" before "Statement
-    (2).pdf"."""
+    (2).pdf". Each is read off what --minimal carries too, the file's name
+    off its path."""
     def rank(key):
         rec = records[key]
         return (not _is_done(rec), not _held_under(records, key),
-                str(rec.get("discovered_at") or ""), len(str(rec.get("pdf_filename") or "")), key)
+                str(rec.get("discovered_at") or ""), len(Path(str(rec.get("pdf_path") or "")).name), key)
     return min(keys, key=rank)
 
 
@@ -932,16 +930,15 @@ class App:
         return 0
 
     def cmd_discover(self, quiet: bool = False) -> int:
-        """Read every list and record each document. When a list was not
-        read to its end, what the pages read gave is recorded, no record
-        kept before moves to another key, the listing stays noted as one
-        that stopped, and the run stops here, Pilot, Run All and Resume
-        included, before anything is taken. The download chooses a row by
-        what the lists said, and lists missing a page can say a date holds
-        one document when it holds two."""
         # A listing that stops on the way, however it stops, is noted as one
         # that stopped, for Resume (paperpull_core.listing).
         listing.started(self)
+        # When a list was not read to its end, what the pages read gave is
+        # recorded, no record kept before moves to another key, the listing
+        # stays noted as one that stopped, and the run stops at the end of
+        # this, Pilot, Run All and Resume included, before anything is taken.
+        # The download chooses a row by what the lists said, and lists
+        # missing a page can say a date holds one document when it holds two.
         page = self.page()
         n_new = 0
         # Open the documents page and read the date from every control that
@@ -984,9 +981,9 @@ class App:
             print("   so some documents may be missing. What the pages read gave is kept.")
             self.write_failure("read the documents list", unread[0],
                                extra={"not_read_to_the_end": list(unread)})
-        else:
-            # The whole list is in, and only now may a Resume that carries on
-            # from it call the run finished (paperpull_core.listing).
+        # The whole list is in, and only now may a Resume that carries on
+        # from it call the run finished (paperpull_core.listing).
+        if not unread:
             listing.read_whole(self)
         self.stats["discovered"] = len(self.discovery.data)
 
