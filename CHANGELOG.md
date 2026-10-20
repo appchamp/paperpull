@@ -7,7 +7,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.56.1] - 2026-10-20
+
+U.S. Bank walks every account in its account picker and downloads the
+statements it lists, and E*TRADE no longer lists and saves the same
+statements again on every run, and reads every page of its documents
+list. Amazon records a canceled order as canceled in the store's own
+language, Spectrum no longer stops on a statement it has just saved, and
+the Mac packages try Apple's ticket server again when it drops the
+connection.
 
 ### Fixed
 - **Spectrum no longer stops a run on a statement it has just saved.** It
