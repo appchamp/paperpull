@@ -892,6 +892,56 @@ def _wait_for_redraw(page, before: str) -> bool:
 
 _SELECTED_OPTION_JS = r"""s => s.selectedIndex >= 0 ? s.options[s.selectedIndex].text : ''"""
 
+# Each option of a plain picker, its text as the app reads it and its own
+# label, which the page matches when it is chosen by label.
+_OPTIONS_JS = r"""s => Array.from(s.options, o => [o.innerText || '', o.label || ''])"""
+
+# A choice of account under way or one that did not take, noted in the page
+# itself, so a page loaded again, its picker and list drawn afresh, holds
+# none.
+_NOTE_CHOICE_JS = r"""v => { window.__paperpullChoiceUnsure = v; return v; }"""
+_CHOICE_UNSURE_JS = r"""() => window.__paperpullChoiceUnsure === true"""
+
+
+def _note_choice(page, unsure: bool) -> bool:
+    """Note in the page that a choice of account is under way (True), set
+    before the picker is touched and left there when the choice does not
+    take, or that the list followed the one just made (False). Whether the
+    page holds the note. Nothing here raises."""
+    try:
+        return page.evaluate(_NOTE_CHOICE_JS, bool(unsure)) is bool(unsure)
+    except Exception:
+        return False
+
+
+def _choice_unsure(page) -> Optional[bool]:
+    """Whether the page holds a choice of account that did not take
+    (_note_choice), None when the page would not say."""
+    try:
+        return bool(page.evaluate(_CHOICE_UNSURE_JS))
+    except Exception:
+        return None
+
+
+def _not_taken(page, label: str, why: str) -> bool:
+    """A choice of account that did not take, after the picker was touched.
+    Its picker can show one account while its list holds another's rows, or
+    the list asked for can still come late and be read as the next choice's,
+    so the statements page is loaded again, picker and list drawn afresh.
+    Only a page on U.S. Bank's own site. A page that will not load again
+    keeps its note (_note_choice), so the account it shows is never taken as
+    chosen. False always, and nothing here raises."""
+    log.info("%s for %r, so it is not taken and the statements page is opened again",
+             why, label[:60])
+    try:
+        if is_safe_url(page.url):
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+            dismiss_timeout(page)
+            _wait_for_list(page)
+    except Exception as e:
+        log.info("could not open the statements page again: %s", str(e).split("\n")[0])
+    return False
+
 
 class PickerRefused(Exception):
     """The account dropdown holds a <select> that is not to be read or set,
@@ -923,11 +973,17 @@ def _plain_account_select(page):
     return sel.first
 
 
-def _plain_account_labels(sel) -> List[str]:
+def _plain_account_options(sel) -> List[Tuple[str, str]]:
+    """Each option of a plain picker as (its label as the app reads it, the
+    page's own label for it), read at once."""
     try:
-        return [" ".join(t.split()) for t in sel.locator("option").all_inner_texts()]
+        return [(" ".join(str(t).split()), str(own)) for t, own in sel.evaluate(_OPTIONS_JS)]
     except Exception:
         return []
+
+
+def _plain_account_labels(sel) -> List[str]:
+    return [label for label, _own in _plain_account_options(sel)]
 
 
 def _option_index(labels: List[str], label: str) -> int:
@@ -1015,7 +1071,19 @@ def account_options(page) -> Read:
 
 
 def select_account(page, label: str) -> bool:
-    if not label or label == account_name(page):
+    """Choose the account `label` and say whether it is chosen. The account
+    the picker already shows is taken as chosen only on a page holding no
+    choice that did not take (_note_choice). A choice whose list took over
+    REDRAW_MS to come, or whose picker went back, can leave the picker
+    showing this account while the list still holds the rows of the one
+    before, and on a list whose headings name no account a row of the same
+    date there would be pressed and saved as this account's statement
+    (review of 0.56.1). Such a page is opened again (_not_taken), and on one
+    that would not open again this account is chosen again, which a plain
+    picker takes only once its list draws again."""
+    if not label:
+        return True
+    if label == account_name(page) and _choice_unsure(page) is False:
         return True
     try:
         holder = page.locator(SEL["account"]).first
@@ -1038,12 +1106,22 @@ def select_account(page, label: str) -> bool:
             page.keyboard.press("Escape")
             log.info("account %r not offered", label[:40])
             return False
+        if not _note_choice(page, True):
+            page.keyboard.press("Escape")
+            log.info("the page would not hold the note of a choice, so %r is not chosen", label[:40])
+            return False
         opt.first.click()
         page.wait_for_timeout(3000)
         dismiss_timeout(page)
+        # This picker's choice is not read back, nor its list seen to draw
+        # again, as before (account_options), so a click that went through
+        # is taken as it always was.
+        _note_choice(page, False)
         return True
     except Exception as e:
         log.info("could not select account %r: %s", label[:40], e)
+        if _choice_unsure(page) is True:
+            return _not_taken(page, label, "the choice stopped on the way")
         return False
 
 
@@ -1054,26 +1132,41 @@ def _select_plain_account(page, sel, label: str) -> bool:
     `sel` has been through the money-control filter (_plain_account_select).
     The choice is taken only once the list let go of the account before
     (_wait_for_redraw), since a list still showing it could be read or
-    pressed as the new account's."""
+    pressed as the new account's. A choice that does not take leaves its
+    note in the page (_note_choice).
+
+    The option is chosen by the page's own label for it when no other
+    option shares that label, which the page matches as it chooses, so an
+    option list drawn again in between cannot put another account where
+    the one wanted was a moment before. Otherwise by its place, and either
+    way the account on show is read back after."""
     if not is_card_control(label):
         log.warning("REFUSED account option %r - not a card label", label[:60])
         return False
-    i = _option_index(_plain_account_labels(sel), label)
+    options = _plain_account_options(sel)
+    i = _option_index([text for text, _own in options], label)
     if i < 0:
         log.info("account %r not offered", label[:40])
         return False
+    own = options[i][1]
+    by = {"label": own} if own and [o for _t, o in options].count(own) == 1 else {"index": i}
     before = _list_text(page)
     _mark_sections(page)
+    if not _note_choice(page, True):
+        log.info("the page would not hold the note of a choice, so %r is not chosen", label[:40])
+        return False
     try:
-        sel.select_option(index=i, timeout=8000)
+        sel.select_option(timeout=8000, **by)
     except Exception as e:
         log.info("could not select account %r: %s", label[:40], str(e).split("\n")[0])
-        return False
+        return _not_taken(page, label, "the picker would not take the choice")
     if not _wait_for_redraw(page, before):
-        log.info("the statement list did not draw again for %r, so it is not taken", label[:60])
-        return False
+        return _not_taken(page, label, "the statement list did not draw again")
     dismiss_timeout(page)
-    return account_name(page) == label
+    if account_name(page) != label:
+        return _not_taken(page, label, "the picker shows another account after the choice")
+    _note_choice(page, False)
+    return True
 
 
 def _year_button(page):
