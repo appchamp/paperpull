@@ -148,6 +148,7 @@ SAFETY (this is a brokerage account that can trade and move money):
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sys
@@ -190,6 +191,7 @@ from paperpull_core.controls import escape_for_locator
 from paperpull_core.dates import checked as _checked_date
 from paperpull_core.dates import full_year as _full_year
 from paperpull_core import pressing
+from paperpull_core.words import Fixed
 from paperpull_core.words import words_for as _words_for
 from paperpull_core.characters import whole_json
 
@@ -587,11 +589,12 @@ class RawDoc:
     row_index: int = -1
     kind: str = "doc"
     # The list's own ids for the document, "<documentGuid>|<documentId>".
+    # They change every time the list loads, so they never key anything.
     guid: str = ""
     # What tells a document the list gave no account from another of the
-    # same date and title it gave none, the list's ids or the entry's place,
-    # and "" for every other document, so their keys stay what they were
-    # (#96).
+    # same date and title it gave none, the entry's place among them, "#1",
+    # "#2", and "" for every other document, so their keys stay what they
+    # were (#96).
     entry: str = ""
 
 
@@ -950,12 +953,17 @@ def one_account(digits: str, tail: str) -> bool:
 
 def goto_docs_capturing(page, capture: list) -> bool:
     """Open the Documents page while catching the searchItems answer that
-    fills it, so discovery never has to know how the page asks."""
+    fills it, so discovery never has to know how the page asks, and every
+    later page of it (_read_every_page)."""
+    start, asked = len(capture), []
+
     def on_response(res):
         try:
             url = res.url or ""
             if is_safe_url(url) and DOCS_API_RE.search(url):
-                capture.append(whole_json(res.json()))
+                body = whole_json(res.json())
+                asked.append(_asked_of(res))
+                capture.append(body)
         except Exception:
             pass
     page.on("response", on_response)
@@ -978,8 +986,235 @@ def goto_docs_capturing(page, capture: list) -> bool:
             page.remove_listener("response", on_response)
         except Exception:
             pass
+    # Once nothing listens, so a later page asked here is never caught as a
+    # list of its own.
+    _read_every_page(page, capture, asked, start)
     dismiss_overlay(page)
     return is_safe_url(page.url or "") and not looks_signed_out(page)
+
+
+# --- every page of a list ---------------------------------------------------------
+#
+# The page asks searchItems for one page of a period's list, with a pageNum
+# in the body, and the answer says how many documents the list holds,
+# numFound. Discovery read the first page alone, so on a list of several
+# pages every document past the first was never listed, and the run
+# finished clean (#96). Each later page is now asked the way the page asked
+# for the first, from inside the page, at the same address with the same
+# body and headers and the next pageNum, until the count is reached, and
+# its documents go after the first page's in that one list. A list that
+# cannot be read to its end says why, in these words, and only a listing
+# whose every list was read whole lets a run finish clean or move a record
+# kept before to another key.
+
+NO_COUNT = "the list gave no count"
+NO_REQUEST = "the request for the list could not be asked again"
+PAGE_REFUSED = "a later page was refused"
+PAGE_UNREAD = "a later page could not be read"
+PAGE_EMPTY = "a later page came back empty"
+PAGE_REPEATED = "a later page repeated an earlier one"
+TOO_MANY = "more documents came than the list counted"
+TOO_MANY_PAGES = "the list has more pages than are read"
+_UNREAD_WORDS = (NO_COUNT, NO_REQUEST, PAGE_REFUSED, PAGE_UNREAD, PAGE_EMPTY, PAGE_REPEATED,
+                 TOO_MANY, TOO_MANY_PAGES)
+
+# The most pages of one period's list that are read, and the pause before
+# each later page.
+MAX_PAGES = 40
+PAGE_PAUSE_MS = 500
+
+# Each list the last discovery read, as (pages read, why it was not read to
+# its end or ""), for Listing and the trace.
+_PAGED: list = []
+
+# Headers of the page's own request that are not sent again, the ones the
+# browser sets itself and will not take from a page, and the cookie, which
+# the browser sends of itself when the page's own request carried one.
+_NOT_RESENT_RE = re.compile(
+    r"^(?:cookie|host|origin|referer|user-agent|content-length|connection|keep-alive|"
+    r"accept-encoding|accept-language|priority|te|trailer|upgrade|via|expect|dnt|"
+    r"sec-.*|proxy-.*)$", re.I)
+# A header's name as a page may send it. Playwright also gives the
+# protocol's own, ":authority" and the like, which fetch refuses.
+_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+
+
+def _asked_of(res) -> dict:
+    """How the page asked for a list, its address, its body, the headers
+    worth sending again and whether it sent a cookie, so a later page is
+    asked the same way. Empty when any of it cannot be read. Never raises,
+    since it runs in a listener."""
+    try:
+        req = res.request
+        if (req.method or "").upper() != "POST":
+            return {}
+        sent = whole_json(json.loads(req.post_data or "null"))
+        if not isinstance(sent, dict):
+            return {}
+        # What the page's own script sent, never what the network added on
+        # the way, which as a page's own would ask the server's leave first.
+        kept = {str(k): str(v) for k, v in dict(req.headers or {}).items()
+                if _HEADER_NAME_RE.match(str(k)) and not _NOT_RESENT_RE.match(str(k))}
+        try:
+            cookie = any(str(k).lower() == "cookie" for k in (req.all_headers() or {}))
+        except Exception:
+            cookie = False
+        return {"url": req.url or "", "body": sent, "headers": kept, "cookie": cookie}
+    except Exception:
+        return {}
+
+
+def _count_of(body) -> Optional[int]:
+    """How many documents a list says it holds, its numFound, or None when
+    it gives no count that reads as one."""
+    found = body.get("numFound") if isinstance(body, dict) else None
+    if isinstance(found, bool):
+        return None
+    if isinstance(found, int):
+        return found if found >= 0 else None
+    if isinstance(found, float) and found.is_integer() and 0 <= found < 1e7:
+        return int(found)
+    if isinstance(found, str) and re.fullmatch(r"\s*\d{1,7}\s*", found):
+        return int(found)
+    return None
+
+
+def _entries_of(body) -> Tuple[str, list]:
+    """The name a list keeps its documents under and its documents, read
+    the way _docs_from_api reads them."""
+    if not isinstance(body, dict):
+        return "defaultDocumentList", []
+    for name in ("defaultDocumentList", "resultList"):
+        if body.get(name):
+            return name, list(body[name]) if isinstance(body[name], list) else []
+    return "defaultDocumentList", []
+
+
+def _page_number(value) -> Optional[int]:
+    """The page a request asks for, a number or a number written as words
+    of digits, or None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"\d{1,4}", value.strip()):
+        return int(value)
+    return None
+
+
+def _same_entry(entry) -> tuple:
+    """What a list's entry is whichever load brought it, without the ids
+    that change every time the list loads."""
+    if not isinstance(entry, dict):
+        return (repr(type(entry)),)
+    return tuple(str(entry.get(k) or "") for k in (
+        "documentDate", "documentLoadDate", "documentTitle", "documentDisplayName",
+        "documentTypeName", "displayMultipleAccounts"))
+
+
+_PAGE_JS = r"""async ([url, headers, body, credentials]) => {
+  let r = null;
+  try {
+    r = await fetch(url, {method: "POST", credentials, redirect: "error", headers,
+                          body: JSON.stringify(body)});
+  } catch (e) {
+    return {status: 0, url: "", data: null};
+  }
+  let data = null;
+  try { data = await ppJson(r); } catch (e) { if (ppRefused(e)) throw e; }
+  return {status: r.status, url: r.url, data};
+}"""
+
+
+def _later_pages(page, asked: dict, body) -> Tuple[object, int, str]:
+    """One list, `body` its first page, with every later page's documents
+    added after the first page's, how many pages that is, and why it was
+    not read to its end, "" when it was.
+
+    A list with no documents, or a count no larger than what its first
+    page holds, is whole as it is. One with documents and no count may
+    have more pages, and is not. Pages are asked by number after the first
+    one's, until the count is reached. A page that is refused, does not
+    read as a list, comes back empty, or holds exactly what an earlier page
+    held (a request whose page number is not heard), ends the reading
+    there, keeping what came before it. More documents than the count ends
+    it keeping the first page alone, since which page brought the extra
+    cannot be told. Nothing is asked of any address but the list's own on
+    E*TRADE's hosts, only from a tab on E*TRADE's site, and no redirect is
+    followed."""
+    name, first = _entries_of(body)
+    count = _count_of(body)
+    if count is None:
+        return body, 1, NO_COUNT if first else ""
+    if count <= len(first):
+        return body, 1, ""
+    asked = asked if isinstance(asked, dict) else {}
+    url, sent = asked.get("url") or "", asked.get("body")
+    start = _page_number(sent.get("pageNum")) if isinstance(sent, dict) else None
+    if start is None or not (is_safe_url(url) and DOCS_API_RE.search(url)):
+        return body, 1, NO_REQUEST
+    credentials = "include" if asked.get("cookie") else "same-origin"
+    entries, read = list(first), [[_same_entry(e) for e in first]]
+
+    def whole(why: str = "") -> Tuple[object, int, str]:
+        return dict(body, **{name: entries}), len(read), why
+
+    while len(entries) < count:
+        if len(read) >= MAX_PAGES:
+            return whole(TOO_MANY_PAGES)
+        number = start + len(read)
+        ask = dict(sent, pageNum=str(number) if isinstance(sent["pageNum"], str) else number)
+        try:
+            # A moment between pages, as a person paging would take. The
+            # page's own headers go only from a tab on E*TRADE's site, since
+            # a tab that went elsewhere could hand them to that site.
+            page.wait_for_timeout(PAGE_PAUSE_MS)
+            if not is_safe_url(page.url or ""):
+                log.info("the tab left E*TRADE's site before page %d of a list", number)
+                return whole(PAGE_UNREAD)
+            got = intake.evaluate(page, _PAGE_JS, [url, asked.get("headers") or {}, ask,
+                                                   credentials]) or {}
+        except Exception as e:
+            log.info("page %d of a list could not be asked for: %s", number, type(e).__name__)
+            return whole(PAGE_UNREAD)
+        status = got.get("status") if isinstance(got, dict) else None
+        if status != 200:
+            log.info("page %d of a list was answered %s", number, status)
+            return whole(PAGE_UNREAD if not status else PAGE_REFUSED)
+        landed = str(got.get("url") or "")
+        data = whole_json(got.get("data"))
+        if not (is_safe_url(landed) and DOCS_API_RE.search(landed)) or not isinstance(data, dict) \
+                or not any(k in data for k in ("defaultDocumentList", "resultList")):
+            return whole(PAGE_UNREAD)
+        _name, more = _entries_of(data)
+        if not more:
+            return whole(PAGE_EMPTY)
+        shape = [_same_entry(e) for e in more]
+        if shape in read:
+            return whole(PAGE_REPEATED)
+        read.append(shape)
+        entries.extend(more)
+    if len(entries) > count:
+        return body, 1, TOO_MANY
+    return whole()
+
+
+def _read_every_page(page, capture: list, asked: list, start: int) -> List[Tuple[int, str]]:
+    """Read every later page of each list caught into capture[start:],
+    `asked` holding how the page asked for each, in the same order. Each
+    list's pages become that one list, so a document's place among those of
+    its date and title is its place in the whole period. Returns (pages
+    read, why not read to the end or "") for each, and keeps them for the
+    trace and Listing."""
+    out = []
+    for i in range(start, len(capture)):
+        how = asked[i - start] if 0 <= i - start < len(asked) else {}
+        capture[i], pages, why = _later_pages(page, how, capture[i])
+        if why:
+            log.info("a list was not read to its end, %d page(s) read: %s", pages, why)
+        out.append((pages, why))
+    _PAGED.extend(out)
+    return out
 
 
 def is_date_filter(label: str) -> bool:
@@ -1283,11 +1518,14 @@ def _choose_period(page, choice: str, capture: list, trace: Optional[list] = Non
         entry["rows_before"] = _row_count(page)
         before = len(capture)
         navigations = [0]
+        asked: list = []
 
         def on_response(res):
             try:
                 if is_safe_url(res.url or "") and DOCS_API_RE.search(res.url or ""):
-                    capture.append(whole_json(res.json()))
+                    body = whole_json(res.json())
+                    asked.append(_asked_of(res))
+                    capture.append(body)
             except Exception:
                 pass
 
@@ -1325,6 +1563,11 @@ def _choose_period(page, choice: str, capture: list, trace: Optional[list] = Non
                     page.remove_listener(event, fn)
                 except Exception:
                     pass
+        # Every later page of each list that came, once nothing listens.
+        paged = _read_every_page(page, capture, asked, before)
+        entry["pages"] = [pages for pages, _why in paged]
+        entry["not_read_to_the_end"] = [Fixed(why if why in _UNREAD_WORDS else PAGE_UNREAD)
+                                        for _pages, why in paged if why]
         # The recording showed Apply submitting a form that the page
         # handles itself, no navigation, and a fresh searchItems answer.
         # Whether this run matched that is written down, and so is the
@@ -1484,10 +1727,25 @@ def _entries_only_where_shared(docs) -> None:
             d.entry = ""
 
 
-def collect_download_docs(page) -> List[RawDoc]:
+class Listing(list):
+    """The documents discovery found, and why a period's list was not read
+    to its end, in fixed words (_UNREAD_WORDS), none when every list was.
+    Only a listing read whole may move a record kept before to another key,
+    or let a run finish clean."""
+    unread: tuple = ()
+
+
+def _listing(docs, paged) -> Listing:
+    out = Listing(docs)
+    out.unread = tuple(sorted({why if why in _UNREAD_WORDS else PAGE_UNREAD
+                               for _pages, why in paged if why}))
+    return out
+
+
+def collect_download_docs(page) -> Listing:
     """Every document the Documents page lists, from the API answers the
     page loads for its default period and for every period the picker is
-    set to, else the rows."""
+    set to, every page of each, else the rows."""
     docs: List[RawDoc] = []
     seen = set()
     bodies: list = []
@@ -1497,6 +1755,7 @@ def collect_download_docs(page) -> List[RawDoc]:
     _LISTED_TITLES.clear()
     _LISTED_ACCOUNTS.clear()
     _LISTED_DOCS.clear()
+    del _PAGED[:]
     if goto_docs_capturing(page, bodies):
         trace.append({"note": "default list", "lists": len(bodies),
                       "dates": sorted({d["date"] for b in bodies for d in _docs_from_api(b)},
@@ -1517,13 +1776,17 @@ def collect_download_docs(page) -> List[RawDoc]:
                 key = (d["date"], d["title"], _norm(d["account"]))
                 entry = ""
                 if not d["account"]:
-                    # With no account, by the list's own ids, else its place
-                    # among this list's entries of that date and title with
-                    # none. Five accounts' statements the list gave no
-                    # account were one record here, and four were never
-                    # listed (#96).
+                    # With no account, by its place among this list's
+                    # entries of that date and title with none, a list being
+                    # every page of one period. Five accounts' statements
+                    # the list gave no account were one record here, and
+                    # four were never listed (#96). They were then told
+                    # apart by the list's own ids, which change every time
+                    # the list loads, so every list and every Discover added
+                    # each such statement again, and Run All saved the
+                    # copies (0.56.0, #96).
                     unlabeled[key] = unlabeled.get(key, 0) + 1
-                    entry = d["guid"] if re.search(r"[0-9A-Za-z]", d["guid"]) else "#%d" % unlabeled[key]
+                    entry = "#%d" % unlabeled[key]
                     key += (entry,)
                 if key in seen:
                     continue
@@ -1534,9 +1797,12 @@ def collect_download_docs(page) -> List[RawDoc]:
                                    kind="tax" if tax else "statement", guid=d["guid"], entry=entry))
         _entries_only_where_shared(docs)
         trace.append({"note": "discovery result", "documents": len(docs),
-                      "dates": sorted({d.date_text for d in docs}, reverse=True)[:60]})
+                      "dates": sorted({d.date_text for d in docs}, reverse=True)[:60],
+                      "pages": sum(pages for pages, _why in _PAGED),
+                      "lists_of_more_than_one_page": sum(1 for pages, _why in _PAGED if pages > 1),
+                      "not_read_to_the_end": [Fixed(w) for w in _listing((), _PAGED).unread]})
         if docs:
-            return docs
+            return _listing(docs, _PAGED)
     expand_all(page)
     scroll_full_page(page)
     ctrls = _bill_controls(page)
@@ -1587,7 +1853,7 @@ def collect_download_docs(page) -> List[RawDoc]:
                            href=href if PDF_HREF_RE.search(href or "") else "",
                            text=f"E*TRADE {kind_title} {disp}", row_index=i,
                            kind="tax" if tax else "statement"))
-    return docs
+    return _listing(docs, _PAGED)
 
 
 # ---------------------------------------------------------------------------
