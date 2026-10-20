@@ -288,11 +288,11 @@ def test_a_record_of_a_document_the_lists_no_longer_give_stays(app):
     # A place among documents sharing a date and title is today's key.
     (_key_by_ids(SINGLE, "#2"), {"entry": "#2", "account": ""}, ""),
     (_key_by_ids(SINGLE, "#2"), {"state": "Completed"}, ""),
-    # Its entry is not the one its key's digest is of.
-    (_key_by_ids(SINGLE, "{h}|x"), {"entry": "{i}|x", "account": ""}, ""),
-    # A record of an account, and the key of no account itself.
-    (_key_by_ids(SINGLE, "{h}|x"), {"entry": "{h}|x", "account": "Invented Brokerage -1111"}, ""),
+    # The key of no account itself, an account's key, and a whole label's.
     (_legacy_key(SINGLE), {"account": ""}, ""),
+    ("Statement:%s:%s:1111" % (DAY, SINGLE), {"account": "Invented Brokerage -1111"}, ""),
+    (etrade_docs.Document(category="Statement", date=DAY, title=SINGLE, account="Invented " * 12,
+                          whole_label=True).key, {"account": "Invented " * 12}, ""),
 ])
 def test_what_a_record_kept_under_the_ids_looks_like(key, record, legacy):
     assert etrade_docs.keyed_by_ids(key, record) == legacy
