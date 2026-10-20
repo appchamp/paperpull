@@ -413,6 +413,26 @@ def test_a_finished_record_wins_a_key_both_want(app, old_done):
     assert app.progress.data[new_key]["downloaded_ok"] is True
 
 
+def test_a_review_copy_with_its_file_wins_a_key_over_a_failed_attempt(app):
+    """A record kept before, set aside for review with a PDF that validates,
+    is done to the run (_already_done) and not to keys.is_done. Compared by
+    keys.is_done alone, the failed attempt under its account's key stayed,
+    the review copy's record went with its file left behind, and the
+    statement was taken again (review of 0.56.1)."""
+    path = _saved_before(app, BROKERAGE, "%s ETRADE Account Statement.pdf" % DAY, done=False,
+                         prints=_statement("Account Number: XXXX-1111"))
+    new_key = _key(BROKERAGE, "1111")
+    app.progress.data[new_key] = {"category": "Statement", "date": DAY, "title": BROKERAGE,
+                                  "account": FIRST, "state": "Failed", "downloaded_ok": False}
+    app.progress.save()
+    app.listing(_raw(BROKERAGE, FIRST, "g1"))
+    assert _legacy_key(BROKERAGE) not in app.progress.data
+    rec = app.progress.data[new_key]
+    assert (rec["state"], rec["pdf_path"]) == (State.NEEDS_MANUAL_REVIEW.value, str(path))
+    assert [d.account for d in app._select() if not app._already_done(d)] == []
+    assert path.exists()
+
+
 # --- records kept before, moved by what their own PDF shows ----------------------
 #
 # The promise made on #96. For a sign-in of several accounts, each saved

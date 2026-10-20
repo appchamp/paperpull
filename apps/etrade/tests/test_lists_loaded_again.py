@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import storage  # noqa: F401  binds this provider's AppSpec
 import etrade_docs
 import etrade_site as site
-from paperpull_core import doc_types, listing
+from paperpull_core import doc_types, listing, testkit
 from paperpull_core.models import State
 
 DAY = "2026-09-30"
@@ -258,6 +258,30 @@ def test_a_sign_in_that_began_on_0_56_0_keeps_the_statement_it_saved(app, second
     assert Path(rec["pdf_path"]).name == "2026-09-30 Statement.pdf" and rec["entry"] == ""
     assert etrade_docs.Document.from_dict(app.discovery.data[_legacy_key(SINGLE)]).key == _legacy_key(SINGLE)
     assert _left_to_take(app) == []
+
+
+def test_a_review_copy_kept_under_the_ids_takes_the_key_from_a_failed_record(app):
+    """A record of the key of no account from before 0.56.0 that failed, and
+    0.56.0's copy under the ids set aside for review with a PDF that
+    validates, which _already_done counts as done and keys.is_done does not.
+    Compared by keys.is_done alone, the failed record stayed, the review
+    copy's record went with its file left behind, and the statement was
+    taken again as a new file (review of 0.56.1)."""
+    _record(app, SINGLE, _legacy_key(SINGLE), None, State.FAILED, at="2026-10-15T09:00:00")
+    ids = "{i}|x&rowId=060124-1760000000008"
+    review = app.paths.manual_review / "2026-09-30 Statement.pdf"
+    review.write_bytes(testkit.text_pdf(["Invented Securities", "Single Account Statement"]))
+    copy = _record(app, SINGLE, _key_by_ids(SINGLE, ids), None, State.NEEDS_MANUAL_REVIEW, ids=ids)
+    app.progress.data[copy.key] = dict(copy.to_dict(), pdf_path=str(review), pdf_filename=review.name)
+    app.progress.save()
+    # The review copy is done to the run, the failed record is not.
+    assert _left_to_take(app) == [(DAY, SINGLE)]
+    app.listing(_list(_entry(SINGLE)), _list(_entry(SINGLE)))
+    assert sorted(app.progress.data) == sorted(app.discovery.data) == [_legacy_key(SINGLE)]
+    rec = app.progress.data[_legacy_key(SINGLE)]
+    assert (rec["state"], rec["pdf_path"], rec["entry"]) == (State.NEEDS_MANUAL_REVIEW.value, str(review), "")
+    assert _left_to_take(app) == []
+    assert review.exists()
 
 
 def test_on_a_day_two_statements_share_their_title_only_records_holding_nothing_go(app):

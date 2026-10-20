@@ -25,6 +25,15 @@ All notable changes to PaperPull are recorded here. Versioning follows
   drawn again a moment before cannot put another account in its place. The
   tester's page names the account in every heading, which kept this from
   happening there.
+- **E*TRADE keeps a statement set aside for review when it folds its
+  records.** Folding the duplicate records 0.56.0 made, and moving a record
+  kept before #96 to its account's key, kept the record that was finished,
+  and otherwise the one already there. A statement in Manual Review with a
+  PDF that opens counts as done to a run but not as finished, so a failed
+  record beside it won, the review copy's record was dropped with its file
+  left behind, and the statement was downloaded again as a new file. A
+  record holding a file that is there now wins over one holding nothing,
+  and a finished record still wins over both.
 
 ## [0.56.1] - 2026-10-20
 
