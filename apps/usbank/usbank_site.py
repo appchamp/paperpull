@@ -700,12 +700,54 @@ def is_card_control(label: str) -> bool:
     return not CARD_ACTION_RE.search(label)
 
 
-def account_name(page) -> str:
+_SELECTED_OPTION_JS = r"""s => s.selectedIndex >= 0 ? s.options[s.selectedIndex].text : ''"""
+
+
+def _plain_account_select(page):
+    """The account dropdown's own <select>, when the picker is drawn as one,
+    or None. Its text is every option run together, so the account on show
+    is its chosen option and each account is one option (#106). One that
+    reads as a money control is never handed out, so is never set."""
     try:
-        el = page.locator(SEL["account"]).first
-        if el.count() == 0:
-            return ""
-        text = " ".join((el.inner_text(timeout=3000) or "").split())
+        sel = page.locator(SEL["account"]).first.locator("select")
+        if sel.count() != 1:
+            return None
+    except Exception:
+        return None
+    if is_money_control(control_identity(sel.first)):
+        log.info("refusing account picker (money control)")
+        return None
+    return sel.first
+
+
+def _plain_account_labels(sel) -> List[str]:
+    try:
+        return [" ".join(t.split()) for t in sel.locator("option").all_inner_texts()]
+    except Exception:
+        return []
+
+
+def _option_index(labels: List[str], label: str) -> int:
+    """Which of a plain picker's option labels is the account `label`, as an
+    index into labels, or -1 when none is, or when it cannot be told which.
+    Only the whole label, spaces aside, is the account: a part of one, such
+    as "Visa ...3333" of "Business Visa ...3333", could be another card's,
+    and two options of one label are told apart by nothing."""
+    want = " ".join((label or "").split())
+    hits = [i for i, x in enumerate(labels) if " ".join(x.split()) == want]
+    return hits[0] if len(hits) == 1 else -1
+
+
+def account_name(page) -> str:
+    sel = _plain_account_select(page)
+    try:
+        if sel is not None:
+            text = " ".join((sel.evaluate(_SELECTED_OPTION_JS) or "").split())
+        else:
+            el = page.locator(SEL["account"]).first
+            if el.count() == 0:
+                return ""
+            text = " ".join((el.inner_text(timeout=3000) or "").split())
     except Exception:
         return ""
 
@@ -725,6 +767,14 @@ def account_options(page) -> List[str]:
             return []
         btn = holder.locator("button[aria-expanded], [role='combobox']")
         if btn.count() == 0:
+            sel = _plain_account_select(page)
+            if sel is not None:
+                labels = _plain_account_labels(sel)
+                out = [x for x in labels if is_card_control(x)]
+                for x in labels:
+                    if x and x not in out:
+                        log.info("refusing account option %r", x[:60])
+                return out
             one = account_name(page)
             return [one] if one else []
     except Exception:
@@ -758,7 +808,10 @@ def select_account(page, label: str) -> bool:
         holder = page.locator(SEL["account"]).first
         btn = holder.locator("button[aria-expanded], [role='combobox']")
         if btn.count() == 0:
-            return True
+            sel = _plain_account_select(page)
+            if sel is None:
+                return True
+            return _select_plain_account(page, sel, label)
         if is_money_control(control_identity(btn.first)):
             log.warning("REFUSED to set the account picker (money control)")
             return False
@@ -779,6 +832,28 @@ def select_account(page, label: str) -> bool:
     except Exception as e:
         log.info("could not select account %r: %s", label[:40], e)
         return False
+
+
+def _select_plain_account(page, sel, label: str) -> bool:
+    """Choose `label` on a plain <select> picker, and say whether it is the
+    account on show after. One the picker does not offer is never taken as
+    chosen, where before a picker with no menu button always was (#106).
+    `sel` has been through the money-control filter (_plain_account_select)."""
+    if not is_card_control(label):
+        log.warning("REFUSED account option %r - not a card label", label[:60])
+        return False
+    i = _option_index(_plain_account_labels(sel), label)
+    if i < 0:
+        log.info("account %r not offered", label[:40])
+        return False
+    try:
+        sel.select_option(index=i, timeout=8000)
+    except Exception as e:
+        log.info("could not select account %r: %s", label[:40], str(e).split("\n")[0])
+        return False
+    page.wait_for_timeout(3000)
+    dismiss_timeout(page)
+    return account_name(page) == label
 
 
 def _year_button(page):
