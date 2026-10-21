@@ -7,7 +7,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.56.2] - 2026-10-20
+
+Wells Fargo opens Statements & Documents from the top bar's Accounts menu,
+where some accounts summaries keep it. U.S. Bank never takes an account as
+chosen after a choice of it did not take, and E*TRADE keeps a statement
+set aside for review when it folds the records 0.56.0 made.
 
 ### Fixed
 - **U.S. Bank never takes an account as chosen after a choice of it did not
