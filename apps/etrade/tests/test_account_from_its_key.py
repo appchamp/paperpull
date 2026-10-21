@@ -817,3 +817,27 @@ def test_an_account_that_closes_keeps_its_records_key(app):
     app.listing(_accounts((K_BROKERAGE, BROKERAGE + " (Closed)")), _list(_entry(SINGLE, K_BROKERAGE)))
     assert sorted(app.discovery.data) == [key]
     assert _left_to_take(app) == []
+
+
+
+def _keyless(title, day=DAY):
+    entry = _entry(title, "", day)
+    del entry["keyAccountNo"]
+    return entry
+
+
+@pytest.mark.parametrize("both", [False, True], ids=["one account", "two, one keyless"])
+def test_documents_that_stop_carrying_their_key_stop_the_run(app, both):
+    """The list stops carrying keyAccountNo while the account list still
+    answers. Every statement saved under its account read as a new one of
+    no account and was taken again (review of #119)."""
+    meta = THEIRS if both else _accounts((K_BROKERAGE, BROKERAGE))
+    first = [_entry(SINGLE, K_BROKERAGE)] + ([_entry(BANK, K_CASH)] if both else [])
+    app.listing(meta, _list(*first))
+    _saved(app, *sorted(app.discovery.data))
+    before = _snapshot(app)
+    now = [_keyless(SINGLE)] + ([_entry(BANK, K_CASH)] if both else [])
+    with pytest.raises(SystemExit):
+        app.listing(meta, _list(*now))
+    assert _snapshot(app) == before
+    assert app.failures[-1] == ("read the documents list", site.ACCOUNT_LOST)

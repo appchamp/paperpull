@@ -96,8 +96,9 @@ paperpull etrade pilot            REM once the site layer is confirmed
   the documents, and gives each statement its account's label (#119). A
   closed account's label, ending in "(Closed)", is still that account. A key the
   list gives no label, or two labels, gives the statement no account,
-  never a guessed one. When the account list was not read at all, or an
-  account a saved statement holds has no label now, Discover writes a
+  never a guessed one. When the account list was not read at all, or the
+  lists give no account to a statement a saved record holds under its
+  account, Discover writes a
   failure file and stops before it records, moves or downloads anything,
   since every statement would read as one of no account and be taken
   again. One account's two documents of one title and day, two trade

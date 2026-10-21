@@ -23,8 +23,8 @@ All notable changes to PaperPull are recorded here. Versioning follows
   closed account's label, which ends in "(Closed)", still says which
   account it is. A key the list gives no label, or two labels, gives the
   statement no account, never a guessed one. A Discover that reads no
-  account list, or finds an account a saved statement holds with no label,
-  writes a failure file and stops before it records, moves or downloads
+  account list, or lists with no account a statement a saved record holds
+  under its account, writes a failure file and stops before it records, moves or downloads
   anything, since every statement would read as one of no account and be
   taken again. One account's two documents of one title and day, two trade
   confirmations, stay two records and go to Manual Review, since no link

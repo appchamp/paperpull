@@ -1580,6 +1580,25 @@ def show_period_for(page, iso_date: str, trace: Optional[list] = None) -> bool:
         return False
 
 
+def _list_shut(picker) -> bool:
+    """Whether the period picker says its list is shut, aria-expanded
+    "false". One that says nothing, or cannot be read, is not taken as shut."""
+    try:
+        return (picker.get_attribute("aria-expanded", timeout=1000) or "").strip().lower() == "false"
+    except Exception:
+        return False
+
+
+def _address_of(page) -> str:
+    """The tab's address without its query or fragment, "" when it cannot be
+    read, to tell whether a press took the tab to another page."""
+    url = getattr(page, "url", "")
+    if not isinstance(url, str):
+        return ""
+    parts = urlsplit(url)
+    return "%s://%s%s" % (parts.scheme, parts.netloc, parts.path)
+
+
 def _close_list(page) -> None:
     """Close the picker's open list. Escape first. If the picker still says
     its list is open, the picker itself is pressed once more, found again
@@ -1687,24 +1706,33 @@ def _choose_period(page, choice: str, capture: list, trace: Optional[list] = Non
         page.on("framenavigated", on_navigated)
         try:
             unsure: list = []
+            start = _address_of(page)
             clicked = _click_text(page, choice, unsure)
-            # Opened again only when nothing was pressed. A press that raised
-            # may have chosen the period already (review of #119).
+            # Opened again only when nothing was pressed, a press that raised
+            # having perhaps chosen the period already, and only when the
+            # picker says its list is shut. Pressed while its list was open,
+            # it shut the list, and the page was searched again for the
+            # period's words outside it (review of #119).
             if not clicked and already_open and not unsure:
                 picker, _ = _find_picker(page)
-                if picker is not None:
+                if picker is not None and _list_shut(picker):
                     picker.click(timeout=5000)
                     page.wait_for_timeout(1200)
-                    clicked = _click_text(page, choice)
+                    clicked = _click_text(page, choice, unsure)
             entry["option_clicked"] = clicked
             if not clicked:
-                entry["outcome"] = "option not found"
+                entry["outcome"] = "a press that raised" if unsure else "option not found"
                 page.keyboard.press("Escape")
                 return False
             page.wait_for_timeout(1500)
             entry["apply_clicked"] = False
+            # Apply only on the page the period was chosen on. A press that
+            # took the tab to another page met that page's own Apply (review
+            # of #119).
             apply = page.get_by_role("button", name=PERIOD_APPLY_RE)
-            if apply.count() and apply.first.is_visible():
+            if _address_of(page) != start:
+                entry["outcome"] = "the tab left the page"
+            elif apply.count() and apply.first.is_visible():
                 label = apply.first.get_attribute("aria-label") or apply.first.inner_text(timeout=800) or ""
                 if is_period_apply(label):
                     apply.first.click(timeout=5000)

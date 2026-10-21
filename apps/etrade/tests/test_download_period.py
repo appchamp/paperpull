@@ -423,6 +423,10 @@ def test_choose_period_retries_when_unopened_list_with_already_open():
         def is_visible(self):
             return True
 
+        def get_attribute(self, name, timeout=None):
+            # The picker says its list is shut, the one case it is opened again.
+            return "false" if name == "aria-expanded" else None
+
         def click(self, timeout=None):
             calls.append("picker_click")
 
@@ -560,4 +564,137 @@ def test_choose_period_opens_the_picker_again_only_when_nothing_was_pressed(monk
     monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
     trace: list = []
     assert site._choose_period(Page(), "2022", [], trace, already_open=True) is False
-    assert pressed == ["Escape"] and trace[0]["outcome"] == "option not found"
+    assert pressed == ["Escape"] and trace[0]["outcome"] == "a press that raised"
+
+
+class _Picker:
+    """The period picker, saying whether its list is open."""
+
+    def __init__(self, expanded):
+        self.expanded, self.clicks = expanded, 0
+
+    def get_attribute(self, name, timeout=None):
+        return self.expanded if name == "aria-expanded" else None
+
+    def click(self, timeout=None):
+        self.clicks += 1
+
+
+class _QuietPage:
+    url = "https://us.etrade.com/etx/pxy/accountdocs#/documents"
+
+    def __init__(self):
+        self.keys = []
+
+    def evaluate(self, *a, **k):
+        return 0
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def on(self, *a):
+        pass
+
+    def remove_listener(self, *a):
+        pass
+
+    @property
+    def keyboard(self):
+        page = self
+
+        class Keys:
+            @staticmethod
+            def press(k):
+                page.keys.append(k)
+        return Keys()
+
+
+@pytest.mark.parametrize("expanded", ["true", None])
+def test_choose_period_never_presses_a_picker_whose_list_may_be_open(monkeypatch, expanded):
+    """Pressed while its list was open, it shut the list, and the page was
+    searched again for the period's words outside it, where a tab named
+    for the year was pressed (review of #119)."""
+    picker = _Picker(expanded)
+    searched: list = []
+
+    def not_there(page, choice, unsure=None):
+        searched.append(choice)
+        return False
+    monkeypatch.setattr(site, "_click_text", not_there)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (picker, "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    trace: list = []
+    assert site._choose_period(_QuietPage(), "2022", [], trace, already_open=True) is False
+    assert (picker.clicks, searched, trace[0]["outcome"]) == (0, ["2022"], "option not found")
+
+
+def test_choose_period_says_so_when_the_press_raised(monkeypatch):
+    def raised(page, choice, unsure=None):
+        unsure.append(choice)
+        return False
+    monkeypatch.setattr(site, "_click_text", raised)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (_Picker("false"), "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    trace: list = []
+    site._choose_period(_QuietPage(), "2022", [], trace, already_open=True)
+    assert trace[0]["outcome"] == "a press that raised"
+
+
+class _Apply:
+    def __init__(self):
+        self.clicks = 0
+
+    def count(self):
+        return 1
+
+    @property
+    def first(self):
+        return self
+
+    def is_visible(self):
+        return True
+
+    def get_attribute(self, name, timeout=None):
+        return "Apply" if name == "aria-label" else None
+
+    def inner_text(self, timeout=None):
+        return "Apply"
+
+    def click(self, timeout=None):
+        self.clicks += 1
+
+
+@pytest.mark.parametrize("lands", ["https://us.etrade.com/etx/pxy/tax-center#/2022", None],
+                         ids=["another page", "the same page"])
+def test_apply_is_pressed_only_on_the_page_the_period_was_chosen_on(monkeypatch, lands):
+    """A period word pressed outside the list, a link of the year, took the
+    tab to another page, whose own Apply was pressed (review of #119)."""
+    page = _QuietPage()
+    apply = _Apply()
+    page.get_by_role = lambda role, name=None: apply
+
+    def chose(pg, choice, unsure=None):
+        if lands:
+            pg.url = lands
+        return True
+    monkeypatch.setattr(site, "_click_text", chose)
+    monkeypatch.setattr(site, "_find_picker", lambda pg: (None, ""))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    monkeypatch.setattr(site, "_row_count", lambda pg: 0)
+    trace: list = []
+    site._choose_period(page, "2022", [], trace, already_open=True)
+    assert apply.clicks == (0 if lands else 1), trace
+    assert trace[0].get("outcome") == ("the tab left the page" if lands else None)
+
+
+def test_a_picker_whose_list_is_open_is_not_pressed_to_read_its_periods(monkeypatch):
+    """#119's check. Pressed, an open list shut, and no period was read."""
+    picker = _Picker("true")
+    monkeypatch.setattr(site, "_control_texts", lambda page: set())
+    monkeypatch.setattr(site, "_short_visible_texts", lambda page: set())
+    monkeypatch.setattr(site, "_option_texts", lambda page: {"2025", "Year To Date"})
+    periods, _others = site._periods_offered(_QuietPage(), picker)
+    assert picker.clicks == 0 and "2025" in periods
+    picker = _Picker("false")
+    site._periods_offered(_QuietPage(), picker)
+    assert picker.clicks == 1

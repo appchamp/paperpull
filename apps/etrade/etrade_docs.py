@@ -1055,17 +1055,18 @@ class App:
         return n_new
 
     def _accounts_lost(self, pairs, listed: List[Document]) -> int:
-        """How many documents the lists give no account, their account's key
-        having no label in the page's account list, on a date and title a
-        saved record holds under an account's key that the lists do not give
-        now. That record's account is this document's, likely, missing its
-        label this time, and read as one of no account the statement would
-        be taken again under a key of none (review). Read off the keys alone,
-        so a history moved with --minimal is read the same."""
+        """How many documents the lists give no account, on a date and title
+        a saved record holds under an account's key that the lists do not
+        give now. That record's account is this document's, likely, missing
+        this time, its key with no label in the page's account list (review)
+        or no key at all, as when the list stops carrying keyAccountNo
+        (review of #119). Read as one of no account, the statement would be
+        taken again under a key of none. Read off the keys alone, so a
+        history moved with --minimal is read the same."""
         now = {d.key for d in listed}
         lost = 0
-        for raw, doc in pairs:
-            if doc is None or not getattr(raw, "unnamed", False) or (doc.account or "").strip():
+        for _raw, doc in pairs:
+            if doc is None or (doc.account or "").strip():
                 continue
             prefix = legacy_key(doc)[:-len("Unnamed")]
             if any(key.startswith(prefix) and key not in now and isinstance(rec, dict)
