@@ -201,11 +201,22 @@ def test_two_accounts_statements_of_one_day_are_both_listed(monkeypatch):
     ("Invented Card (...1111)", ["1111"]),
     ("Kids 2031 Fund ****1111", ["1111"]),
     ("Invented Brokerage -1111, Invented Roth IRA -2222", ["1111", "2222"]),
+    ("Invented Brokerage -3333 (Closed)", ["3333"]),
+    ("Invented Savings -4444 (closed)", ["4444"]),
+    ("Invented IRA -5555 [Closed]", ["5555"]),
     ("Joint Account", []),
     ("Account 1111", []),
 ])
 def test_an_account_is_known_by_the_masked_digits_its_label_ends_with(label, tails):
     assert site.account_tails(label) == tails
+
+
+def test_closed_account_tail_and_form():
+    """Closed accounts have a status suffix like (Closed), which should still
+    yield the masked tail and normalize to the same account_form (#96)."""
+    assert site.account_tails("Invented Brokerage -3333 (Closed)") == ["3333"]
+    assert site.account_form("Invented Brokerage -3333 (Closed)") == "invented brokerage -3333"
+    assert site.account_form("Invented Brokerage - 3333") == "invented brokerage -3333"
 
 
 def test_a_nickname_changed_on_etrade_keeps_the_key():

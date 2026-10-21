@@ -723,10 +723,11 @@ def _docs_from_api(body: dict) -> List[dict]:
 # The masked tail of an account as a list shows it, "-1234", "- 1234",
 # "...1234", "(...1234)", "****1234" or "xx1234", at the end of the label or
 # of one account in a label that names several, before a comma or a
-# semicolon. Digits printed any other way, a year in a nickname, are not
-# one.
+# semicolon, optionally followed by a "(Closed)" or "[inactive]" note. Digits
+# printed any other way, a year in a nickname, are not one.
 _ACCOUNT_TAIL_RE = re.compile(
-    r"(?:-|\.{2,}|\*{2,}|[xX•]{2,})\s*(\d{3,6})\)?\s*(?=[,;]|$)")
+    r"(?:-|\.{2,}|\*{2,}|[xX•]{2,})\s*(\d{3,6})\)?(?:\s*[\(\[]?(?:closed|inactive)[\)\]]?)?\s*(?=[,;]|$)",
+    re.I)
 
 
 def account_tails(label: str) -> List[str]:
@@ -3326,7 +3327,7 @@ _PRESS_JS = r"""
   // account_form), and whether the account a name gives is this one, by
   // its tails, or by its whole label when neither shows a tail or another
   // account shows the same tail (_same_account).
-  const TAIL = /(?:-|\.{2,}|\*{2,}|[xX•]{2,})\s*(\d{3,6})\)?\s*(?=[,;]|$)/g;
+  const TAIL = /(?:-|\.{2,}|\*{2,}|[xX•]{2,})\s*(\d{3,6})\)?(?:\s*[\(\[]?(?:closed|inactive)[\)\]]?)?\s*(?=[,;]|$)/gi;
   const tailsOf = (s) => Array.from(norm(s).matchAll(TAIL)).map(m => m[1]);
   const form = (s) => norm(s).replace(TAIL, (m, d) => '-' + d);
   const sameAccount = (f) => {
