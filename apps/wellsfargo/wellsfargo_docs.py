@@ -910,8 +910,10 @@ class App:
         So this is written beside it, on the same list of what may leave
         that the failure file uses, and it is the one to send. When
         Diagnose could not open Statements & Documents, it says so, and
-        the counts are of the page the window showed (#27).
+        the counts are of the page the window showed (#27). Either way it
+        says which menu was opened to reach the link and whether it showed.
         """
+        way = getattr(self, "_diagnose_way", None)
         failure.write_survey(
             self.paths.diagnostics,
             page=getattr(self, "_work_page", None),
@@ -919,6 +921,7 @@ class App:
             journal=self._journal,
             requests=self._requests,
             provider='Wells Fargo',
+            extra={"way": dict(way)} if way else None,
             stopped=stopped or getattr(self, "_diagnose_stopped", None))
 
     def cmd_diagnose(self):
@@ -939,9 +942,12 @@ class App:
                 "note": Fixed("Wells Fargo app built without an account. This survey is what "
                               "the maintainer repairs the site layer against.")}
         stopped = None
+        # Which menu goto_documents opened and whether the link showed, for
+        # both files, so a next round can tell how the page was reached (#27).
+        way = self._diagnose_way = {}
         try:
             try:
-                found = site.goto_documents(page)
+                found = site.goto_documents(page, way=way)
             except pressing.Stop as stop:
                 # The page would not open, and nothing past the stop was
                 # pressed. What the window shows is surveyed all the same,
@@ -957,7 +963,9 @@ class App:
             info["documents_link"] = {
                 "shown": site._documents_control(page) is not None,
                 "hidden": site._documents_controls_hidden(page),
-                "menu_button_shown": site._menu_button(page) is not None}
+                "menu_button_shown": site._menu_button(page) is not None,
+                "accounts_buttons_shown": len(site._accounts_buttons(page) or ()),
+                "way": dict(way)}
             site.set_private_words([self.config.get("owner", "")])
             info["survey"] = site.survey(page, max_follow=0 if stopped is not None else 6)
             if found:
