@@ -243,9 +243,11 @@ def adopt_account_keys(records: dict, listed) -> int:
     state, downloaded_ok, pdf_path, summary and everything else go with
     it, so a statement saved before is never fetched again and its file
     keeps its name. When a record already sits under the new key, the one
-    that is done stays (keys.is_done), and when both or neither is, the
-    one already there. Matched by key alone, so a history moved with
-    --minimal, which keeps no title or date in a record, moves the same.
+    that holds the document more firmly stays (_standing), done before not
+    done, then naming a file that is there before naming none, and when
+    they hold it alike, the one already there. Matched by key alone, so a
+    history moved with --minimal, which keeps no title or date in a record
+    but keeps its state, downloaded_ok and pdf_path, moves the same.
 
     Only ever run for a sign-in whose lists name one account. With more
     than one, a record kept before may hold either account's statement,
@@ -261,9 +263,9 @@ def adopt_account_keys(records: dict, listed) -> int:
         new_key = doc.key
         if new_key == old_key:
             continue
+        firmer = _standing(records, old_key) > _standing(records, new_key)
         rec = dict(rec, account=doc.account, guid=doc.guid)
-        other = records.get(new_key)
-        if not isinstance(other, dict) or (_is_done(rec) and not _is_done(other)):
+        if not isinstance(records.get(new_key), dict) or firmer:
             records[new_key] = rec
         del records[old_key]
         changed += 1
@@ -318,6 +320,18 @@ def _first_to_keep(records: dict, keys) -> str:
     return min(keys, key=rank)
 
 
+def _standing(records: dict, key: str) -> tuple:
+    """How firmly the record under this key holds its document, to be
+    compared with another's. Done (keys.is_done) first, then naming a file
+    that is there (_held_under), the order _first_to_keep ranks them in. A
+    Needs Manual Review copy whose PDF validates is done to _already_done
+    and not to keys.is_done, and a record compared by keys.is_done alone
+    gave way to one that held nothing, its file left with no record and its
+    statement taken again (review of 0.56.1)."""
+    rec = records.get(key)
+    return (isinstance(rec, dict) and _is_done(rec), bool(_held_under(records, key)))
+
+
 def fold_keys_by_ids(records: dict, listed) -> int:
     """Fold the records 0.56.0 kept under the list's own ids (keyed_by_ids)
     into the key of no account of their category, date and title, after
@@ -334,16 +348,17 @@ def fold_keys_by_ids(records: dict, listed) -> int:
 
     When the lists give that category, date and title one document, every
     such record is that document. The record under the key of no account
-    stays when it is done, or when none of the others is. Otherwise the
-    first of them to keep (_first_to_keep) takes that key, holding nothing
-    of the ids any more, and the rest go. So a statement saved before is
-    never fetched again, and a statement with an account moves from that key
-    the way every record kept before #96 does (adopt_account_keys,
-    relabel_by_statement). When the lists give it more than one document,
-    which of them each record holds cannot be told, so only the records that
-    are not done and name no file that is there go, and the rest stay as
-    they are. One the lists do not give now stays as it is. No file is
-    touched.
+    stays unless the first of the others to keep (_first_to_keep) holds the
+    document more firmly (_standing), done where it is not, or naming a file
+    that is there where it names none. Then that one takes the key, holding
+    nothing of the ids any more. Either way the rest go. So a statement saved
+    before, or set aside for review with its file, is never fetched again,
+    and a statement with an account moves from that key the way every record
+    kept before #96 does (adopt_account_keys, relabel_by_statement). When
+    the lists give it more than one document, which of them each record
+    holds cannot be told, so only the records that are not done and name no
+    file that is there go, and the rest stay as they are. One the lists do
+    not give now stays as it is. No file is touched.
 
     A record kept by its place, "#1" or "#2", of a date and title the lists
     gave more than one document with no account, goes too when the lists
@@ -372,9 +387,9 @@ def fold_keys_by_ids(records: dict, listed) -> int:
                     del records[key]
                     changed += 1
             continue
-        held = records.get(legacy)
-        if not isinstance(held, dict) or (not _is_done(held) and any(_is_done(records[k]) for k in keys)):
-            records[legacy] = dict(records[_first_to_keep(records, keys)], entry="")
+        keep = _first_to_keep(records, keys)
+        if not isinstance(records.get(legacy), dict) or _standing(records, keep) > _standing(records, legacy):
+            records[legacy] = dict(records[keep], entry="")
         for key in keys:
             del records[key]
             changed += 1

@@ -42,6 +42,8 @@ const STUCK = %(stuck)s;
 const BARE = %(bare)s;
 const YEAR_DELAY = %(year_delay)d;
 const LIST_DELAY = %(list_delay)d;
+const HELD = %(held)s;
+const waiting = [];
 let chosen = %(chosen)s, year = "2031";
 function rows(label) {
   return (DATA[label] && DATA[label][year] || []).map((d, i) =>
@@ -56,18 +58,22 @@ function section(label) {
   if (BARE && !rows(label)) return "<p>No statements for this period.</p>";
   return "<div class='document-list'><h3>" + heading(label) + "</h3><ul>" + rows(label) + "</ul></div>";
 }
-function drawList() {
+function drawList(label) {
+  const shown = label === undefined ? chosen : label;
   const list = document.querySelector("[data-testid='list-of-statements']");
-  if (!chosen) {
+  if (!shown) {
     list.innerHTML = "<p>Choose an account to see its statements.</p>";
     return;
   }
-  if (NEVER.includes(chosen)) {
+  if (NEVER.includes(shown)) {
     list.innerHTML = "";
     return;
   }
-  list.innerHTML = section(chosen) + (ALSO && ALSO !== chosen ? section(ALSO) : "");
+  list.innerHTML = section(shown) + (ALSO && ALSO !== shown ? section(ALSO) : "");
 }
+// The lists held back for the accounts in HELD, each drawn now as the
+// late answer it is, that account's rows whichever account is chosen.
+window.deliverHeld = () => { while (waiting.length) drawList(waiting.shift()); return true; };
 function later(fn) { DELAY ? setTimeout(fn, DELAY) : fn(); }
 function drawPage() {
   const options = ["<option value=''>%(placeholder)s</option>"].concat(ACCOUNTS.map((a, i) =>
@@ -88,6 +94,12 @@ function drawPage() {
       sel.value = Array.from(sel.options).find(o => o.text === chosen).value;
     }
     chosen = picked;
+    if (HELD.includes(picked)) {
+      // Asked for, and held back until deliverHeld, the list before kept
+      // on show meanwhile.
+      waiting.push(picked);
+      return;
+    }
     const list = document.querySelector("[data-testid='list-of-statements']");
     if (REDRAW === "blank") list.innerHTML = "";
     if (REDRAW === "overlay") list.insertAdjacentHTML("afterbegin", "<p>Loading statements</p>");
@@ -124,7 +136,8 @@ later(drawPage);
 def page_html(accounts=(CHECKING, CARD, BUSINESS), statements=None, chosen=BUSINESS,
               delay_ms=0, heading=" statements", placeholder=PLACEHOLDER, never=(),
               locked=(), blank_values=False, redraw="blank", names=None, unnamed=False,
-              also="", stuck=(), bare_empty=False, year_delay_ms=0, list_delay_ms=0):
+              also="", stuck=(), bare_empty=False, year_delay_ms=0, list_delay_ms=0,
+              held=()):
     """The page, with `chosen` the account the picker starts on ("" for its
     placeholder) and `delay_ms` how long the page takes to draw its parts
     after it loads, and the list after each change of account.
@@ -139,8 +152,11 @@ def page_html(accounts=(CHECKING, CARD, BUSINESS), statements=None, chosen=BUSIN
     every account chosen. `never` are accounts whose list never draws,
     `locked` accounts the picker goes back from when one is chosen, `stuck`
     years whose choice does not take, `year_delay_ms` and `list_delay_ms`
-    how long after the rest the year picker and the first list draw, and
-    `blank_values` puts an empty value on every option."""
+    how long after the rest the year picker and the first list draw,
+    `blank_values` puts an empty value on every option, and `held` are
+    accounts whose list, once chosen, comes only when the page's
+    deliverHeld() is called, the list before on show until then, and draws
+    that account's rows whichever account is chosen by then."""
     return PAGE % {"accounts": json.dumps(list(accounts)),
                    "data": json.dumps(statements if statements is not None else STATEMENTS),
                    "delay": delay_ms, "heading": json.dumps(heading),
@@ -150,7 +166,7 @@ def page_html(accounts=(CHECKING, CARD, BUSINESS), statements=None, chosen=BUSIN
                    "blank": json.dumps(bool(blank_values)), "redraw": json.dumps(redraw),
                    "also": json.dumps(also), "stuck": json.dumps(list(stuck)),
                    "bare": json.dumps(bool(bare_empty)), "year_delay": int(year_delay_ms),
-                   "list_delay": int(list_delay_ms)}
+                   "list_delay": int(list_delay_ms), "held": json.dumps(list(held))}
 
 
 def show(page, **kw):
