@@ -583,9 +583,9 @@ admin rights and no Python on the machine, and `PaperPull-<version>.zip`, the
 same folder for anyone who would rather not run an installer. The package
 is x64 and runs on Windows on ARM (a Snapdragon laptop, say) under the
 emulation Windows 11 provides, where the browser it drives is your own
-native Edge or Chrome and the Python side spends its life waiting on it. A
-native ARM64 build is one flag away in `packaging/build_windows.py` and
-will be shipped when someone needs it.
+native Edge or Chrome and the Python side spends its life waiting on it.
+There is no native ARM64 build, because cryptography, the package PaperPull
+opens encrypted PDFs with, stopped publishing builds for Windows on ARM.
 
 **Two Windows editions, one program.** The GitHub release is free. The
 [Microsoft Store edition](https://apps.microsoft.com/detail/9P5LZRR773FP) is the same package from the same build, for

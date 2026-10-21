@@ -16,9 +16,10 @@ platform other than its own. pip-compile, which server/lock.py runs inside
 the server image's base, resolves only for the Python running it. Only
 versions with built wheels for the platform are chosen, as the builders
 install them, and a Mac lock takes only wheels that run on MACOS_MIN, the
-oldest macOS the bundle opens on. That is why there are four. cryptography
-has no newer wheel for Intel Macs or for Windows on ARM, and pypdfium2's
-newest needs a newer macOS than the bundle promises.
+oldest macOS the bundle opens on. That is why there are three, Windows x64
+and the two Macs. cryptography has no wheel for Intel Macs after 48.0.1
+(49.0.0 dropped x86_64 macOS), and pypdfium2's newest needs a newer macOS
+than the bundle promises.
 
 Nothing published after AS_OF is considered, so running this again gives
 the same files, and --check shows the committed locks are what
