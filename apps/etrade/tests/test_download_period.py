@@ -363,3 +363,116 @@ def test_a_list_that_draws_late_is_read_once_it_draws(picker_site, monkeypatch):
     periods, _others = site._periods_offered(pg, picker)
     assert "2025" in periods and "Year To Date" in periods, periods
     pg.close()
+
+
+def test_click_text_checks_subsequent_elements_when_first_is_not_visible():
+    """If opt.first or loc.first is hidden, _click_text checks subsequent elements."""
+    class DummyElement:
+        def __init__(self, visible=False):
+            self._visible = visible
+            self.clicked = False
+
+        def is_visible(self):
+            return self._visible
+
+        def scroll_into_view_if_needed(self, timeout=None):
+            pass
+
+        def click(self, timeout=None):
+            if not self._visible:
+                raise Exception("Element not visible")
+            self.clicked = True
+
+    class DummyLocator:
+        def __init__(self, elements):
+            self.elements = elements
+
+        def count(self):
+            return len(self.elements)
+
+        @property
+        def first(self):
+            return self.elements[0] if self.elements else None
+
+        def nth(self, i):
+            return self.elements[i]
+
+    el_hidden = DummyElement(visible=False)
+    el_visible = DummyElement(visible=True)
+
+    class DummyPage:
+        def get_by_role(self, role, name=None):
+            if role == "option":
+                return DummyLocator([el_hidden, el_visible])
+            return DummyLocator([])
+
+        def get_by_text(self, pat):
+            return DummyLocator([])
+
+    pg = DummyPage()
+    assert site._click_text(pg, "2022") is True
+    assert el_visible.clicked is True
+
+
+def test_choose_period_retries_when_unopened_list_with_already_open():
+    """When already_open=True is passed but option cannot be clicked,
+    _choose_period reopens the picker and retries."""
+    calls = []
+
+    class DummyElement:
+        def is_visible(self):
+            return True
+
+        def click(self, timeout=None):
+            calls.append("picker_click")
+
+    class DummyPage:
+        def __init__(self):
+            self.attempts = 0
+
+        def evaluate(self, *a, **k):
+            return 10
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def on(self, *a):
+            pass
+
+        def remove_listener(self, *a):
+            pass
+
+        class keyboard:
+            @staticmethod
+            def press(k):
+                pass
+
+        def get_by_role(self, role, name=None):
+            class DummyApplyLocator:
+                def count(self):
+                    return 0
+
+                @property
+                def first(self):
+                    return None
+            return DummyApplyLocator()
+
+    pg = DummyPage()
+
+    def mock_click_text(page, choice):
+        pg.attempts += 1
+        return pg.attempts > 1
+
+    dummy_picker = DummyElement()
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(site, "_click_text", mock_click_text)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (dummy_picker, "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+
+    entry = []
+    ok = site._choose_period(pg, "2022", [], entry, already_open=True)
+    monkeypatch.undo()
+    assert ok is True
+    assert "picker_click" in calls
+    assert entry[0]["option_clicked"] is True
+
