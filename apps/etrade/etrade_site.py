@@ -1388,8 +1388,13 @@ def _periods_offered(page, picker, current: str = "") -> Tuple[List[str], int]:
     page counted as having appeared, an account's last four or a year
     printed beside it among them (review)."""
     before = _control_texts(page) | _short_visible_texts(page)
-    picker.click(timeout=5000)
-    page.wait_for_timeout(1500)
+    try:
+        is_open = (picker.get_attribute("aria-expanded", timeout=1000) or "").lower() == "true"
+    except Exception:
+        is_open = False
+    if not is_open:
+        picker.click(timeout=5000)
+        page.wait_for_timeout(1500)
     until = time.monotonic() + PERIODS_WAIT_S
     while True:
         offered = _option_texts(page) | ((_control_texts(page) | _short_visible_texts(page)) - before)
@@ -1585,6 +1590,12 @@ def _choose_period(page, choice: str, capture: list, trace: Optional[list] = Non
         page.on("framenavigated", on_navigated)
         try:
             clicked = _click_text(page, choice)
+            if not clicked and already_open:
+                picker, _ = _find_picker(page)
+                if picker is not None:
+                    picker.click(timeout=5000)
+                    page.wait_for_timeout(1200)
+                    clicked = _click_text(page, choice)
             entry["option_clicked"] = clicked
             if not clicked:
                 entry["outcome"] = "option not found"
@@ -2517,17 +2528,28 @@ def _click_text(page, text: str) -> bool:
     for role in ("menuitem", "option", "radio", "menuitemradio", "button", "link", "tab"):
         try:
             opt = page.get_by_role(role, name=pat)
-            if opt.count() and opt.first.is_visible():
-                opt.first.click(timeout=5000)
-                return True
+            for i in range(min(opt.count(), 10)):
+                el = opt.nth(i)
+                try:
+                    if el.is_visible():
+                        el.scroll_into_view_if_needed(timeout=1000)
+                        el.click(timeout=5000)
+                        return True
+                except Exception:
+                    continue
         except Exception:
             continue
     try:
         loc = page.get_by_text(pat)
-        for i in range(min(loc.count(), 6)):
-            if loc.nth(i).is_visible():
-                loc.nth(i).click(timeout=5000)
-                return True
+        for i in range(min(loc.count(), 20)):
+            el = loc.nth(i)
+            try:
+                if el.is_visible():
+                    el.scroll_into_view_if_needed(timeout=1000)
+                    el.click(timeout=5000)
+                    return True
+            except Exception:
+                continue
     except Exception:
         pass
     return False
