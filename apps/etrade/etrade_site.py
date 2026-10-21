@@ -219,6 +219,10 @@ BILLING_CANDIDATES = [
     f"{BASE}/etx/hw/v2/accountshome",
 ]
 DOCS_API_RE = re.compile(r"/etaz/api/adsal/accountdocs/v2/searchItems", re.I)
+# The usermetadata answer carries the account list, each with a keyAccount
+# that matches keyAccountNo in searchItems and an accountDisplayValue that
+# is the human-readable label shown in the Account column (#96).
+METADATA_API_RE = re.compile(r"/etaz/api/adsal/accountdocs/usermetadata", re.I)
 DOCS_URL = f"{BASE}/etx/pxy/accountdocs#/documents"
 # The date filter (second survey, #36) is a button reading its current
 # choice, "Last 90 Days", that opens a list of periods. These are the
@@ -653,19 +657,48 @@ def date_shape(value) -> str:
     return re.sub(r"\d", "#", str(value))[:40]
 
 
+# keyAccountNo -> accountDisplayValue, populated from the usermetadata
+# answer when the page loads (#96). Cleared at the start of each Discover.
+_ACCOUNT_MAP: dict = {}
+
+
+def _accounts_from_metadata(body: dict) -> dict:
+    """The account map from a usermetadata answer, as {keyAccount:
+    accountDisplayValue}. keyAccount is the stable opaque key each
+    document carries as keyAccountNo; accountDisplayValue is the
+    human-readable label the Account column shows, "Name - 1234". When
+    the answer gives no useful list, an empty dict is returned."""
+    if not isinstance(body, dict):
+        return {}
+    accts = body.get("accountList")
+    if not isinstance(accts, list):
+        return {}
+    result = {}
+    for a in accts:
+        if not isinstance(a, dict):
+            continue
+        key = str(a.get("keyAccount") or "").strip()
+        label = re.sub(r"\s+", " ", str(a.get("accountDisplayValue") or "")).strip()
+        if key and label:
+            result[key] = label
+    return result
+
+
 def _docs_from_api(body: dict) -> List[dict]:
     """The documents in one searchItems answer, as {date, title, kind,
     hint, guid, account}. The guid rides as the hint and as the guid. It
     names a document, not a person.
 
-    The account is displayMultipleAccounts, what the list's Account column
-    shows, kept whole with its spacing tidied. It used to go through the
-    redaction meant for diagnostic files and be cut to forty characters,
-    which turned the masked tail "...1234" into "...####" and left two
-    accounts reading the same, and then discovery dropped it anyway (#96).
-    It is the person's own label on their own machine, so it is kept for
-    the record and the file name, and it never goes into a trace or a
-    log. keyAccountNo is not read, since no survey has shown its shape."""
+    The account is resolved in this order:
+    1. keyAccountNo looked up in _ACCOUNT_MAP (built from usermetadata).
+       This is the primary path: every document carries a keyAccountNo
+       that is stable across renames, and usermetadata maps it to the
+       human-readable label (#96).
+    2. displayMultipleAccounts, what the list's Account column shows
+       directly. This is always empty on the tester's account but kept
+       as a fallback.
+    The label is kept whole for the record and the file name and never
+    written to a trace or a log."""
     out = []
     for e in (body or {}).get("defaultDocumentList") or (body or {}).get("resultList") or []:
         if not isinstance(e, dict):
@@ -676,7 +709,12 @@ def _docs_from_api(body: dict) -> List[dict]:
         title = str(e.get("documentTitle") or e.get("documentDisplayName") or e.get("documentTypeName") or "Document").strip()
         kind = str(e.get("documentTypeName") or "")
         hint = "|".join(str(e.get(k) or "") for k in ("documentGuid", "documentId"))
-        account = re.sub(r"\s+", " ", str(e.get("displayMultipleAccounts") or "")).strip()
+        # Prefer the usermetadata lookup (keyAccountNo) over displayMultipleAccounts,
+        # since displayMultipleAccounts is empty when a sign-in holds multiple
+        # accounts (#96). Fall back to displayMultipleAccounts for resilience.
+        account_key_no = str(e.get("keyAccountNo") or "").strip()
+        account = (_ACCOUNT_MAP.get(account_key_no)
+                   or re.sub(r"\s+", " ", str(e.get("displayMultipleAccounts") or "")).strip())
         out.append({"date": iso, "title": title, "kind": kind, "hint": hint, "guid": hint,
                     "account": account})
     return out
@@ -954,16 +992,23 @@ def one_account(digits: str, tail: str) -> bool:
 def goto_docs_capturing(page, capture: list) -> bool:
     """Open the Documents page while catching the searchItems answer that
     fills it, so discovery never has to know how the page asks, and every
-    later page of it (_read_every_page)."""
+    later page of it (_read_every_page). Also catches the usermetadata
+    answer, which maps keyAccountNo to a human-readable account label,
+    and stores it in _ACCOUNT_MAP for _docs_from_api to use (#96)."""
     start, asked = len(capture), []
 
     def on_response(res):
         try:
             url = res.url or ""
-            if is_safe_url(url) and DOCS_API_RE.search(url):
+            if not is_safe_url(url):
+                return
+            if DOCS_API_RE.search(url):
                 body = whole_json(res.json())
                 asked.append(_asked_of(res))
                 capture.append(body)
+            elif METADATA_API_RE.search(url):
+                body = whole_json(res.json())
+                _ACCOUNT_MAP.update(_accounts_from_metadata(body))
         except Exception:
             pass
     page.on("response", on_response)
@@ -1755,6 +1800,7 @@ def collect_download_docs(page) -> Listing:
     _LISTED_TITLES.clear()
     _LISTED_ACCOUNTS.clear()
     _LISTED_DOCS.clear()
+    _ACCOUNT_MAP.clear()
     del _PAGED[:]
     if goto_docs_capturing(page, bodies):
         trace.append({"note": "default list", "lists": len(bodies),

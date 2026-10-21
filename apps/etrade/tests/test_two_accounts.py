@@ -60,6 +60,105 @@ def _raw(title, account, guid, day=DAY):
     return raw
 
 
+# --- usermetadata account map (#96) ---------------------------------------------
+
+KEY1 = "1111-11-11-11.11.11.111111"
+KEY2 = "2222-22-22-22.22.22.222222"
+METADATA_BODY = {
+    "accountList": [
+        {"keyAccount": KEY1, "accountDisplayValue": FIRST},
+        {"keyAccount": KEY2, "accountDisplayValue": SECOND},
+        {"keyAccount": "9999-xx", "accountDisplayValue": "Closed Account - 9999"},
+    ]
+}
+
+
+def test_accounts_from_metadata_returns_key_to_label_map():
+    """Each accountList entry's keyAccount maps to its accountDisplayValue."""
+    result = site._accounts_from_metadata(METADATA_BODY)
+    assert result == {
+        KEY1: FIRST,
+        KEY2: SECOND,
+        "9999-xx": "Closed Account - 9999",
+    }
+
+
+def test_accounts_from_metadata_tolerates_bad_input():
+    assert site._accounts_from_metadata(None) == {}
+    assert site._accounts_from_metadata({}) == {}
+    assert site._accounts_from_metadata({"accountList": "not a list"}) == {}
+    assert site._accounts_from_metadata({"accountList": [None, 42, {}]}) == {}
+    # Entry with empty key or empty label is skipped.
+    assert site._accounts_from_metadata({"accountList": [
+        {"keyAccount": "", "accountDisplayValue": FIRST},
+        {"keyAccount": KEY1, "accountDisplayValue": ""},
+    ]}) == {}
+
+
+def _entry_with_key(title, key_account_no, display_multiple="", guid="g1"):
+    """A searchItems entry carrying keyAccountNo."""
+    e = _entry(title, display_multiple, guid)
+    e["keyAccountNo"] = key_account_no
+    return e
+
+
+def test_docs_from_api_uses_key_account_no_when_account_map_is_loaded(monkeypatch):
+    """When _ACCOUNT_MAP is loaded from usermetadata, keyAccountNo resolves
+    the label even though displayMultipleAccounts is empty (#96)."""
+    monkeypatch.setattr(site, "_ACCOUNT_MAP", {KEY1: FIRST, KEY2: SECOND})
+    got = site._docs_from_api({"defaultDocumentList": [
+        _entry_with_key(BROKERAGE, KEY1, "", "g1"),
+        _entry_with_key(BROKERAGE, KEY2, "", "g2"),
+    ]})
+    assert [d["account"] for d in got] == [FIRST, SECOND]
+
+
+def test_docs_from_api_falls_back_to_display_multiple_accounts(monkeypatch):
+    """When keyAccountNo is absent or not in the map, displayMultipleAccounts
+    is still used, so existing single-account installs keep working."""
+    monkeypatch.setattr(site, "_ACCOUNT_MAP", {})
+    got = site._docs_from_api({"defaultDocumentList": [
+        _entry(BROKERAGE, FIRST, "g1"),
+        _entry(BROKERAGE, SECOND, "g2"),
+    ]})
+    assert [d["account"] for d in got] == [FIRST, SECOND]
+
+
+def test_docs_from_api_prefers_key_account_no_over_display_multiple_accounts(monkeypatch):
+    """The usermetadata label wins when both are present and disagree."""
+    monkeypatch.setattr(site, "_ACCOUNT_MAP", {KEY1: FIRST})
+    got = site._docs_from_api({"defaultDocumentList": [
+        _entry_with_key(BROKERAGE, KEY1, "Some Other Label", "g1"),
+    ]})
+    assert got[0]["account"] == FIRST
+
+
+def test_account_map_is_cleared_between_discover_runs(monkeypatch):
+    """_ACCOUNT_MAP is cleared at the start of collect_download_docs, so
+    stale metadata from a previous run never leaks into the next."""
+    # Prime the map, then run collect_download_docs with an empty page response.
+    real_map = {KEY1: FIRST}
+    monkeypatch.setattr(site, "_ACCOUNT_MAP", real_map)
+    for name in ("_LISTED", "_LISTED_TITLES", "_LISTED_ACCOUNTS", "_LISTED_DOCS"):
+        monkeypatch.setattr(site, name, {})
+    monkeypatch.setattr(site, "_PAGED", [])
+
+    def capturing(page, capture):
+        return True  # page returned nothing
+    monkeypatch.setattr(site, "goto_docs_capturing", capturing)
+    monkeypatch.setattr(site, "widen_date_filter", lambda page, wider, trace=None: False)
+    monkeypatch.setattr(site, "expand_all", lambda page: None)
+    monkeypatch.setattr(site, "scroll_full_page", lambda page: None)
+    monkeypatch.setattr(site, "_bill_controls", lambda page: _FakeControls())
+    site.collect_download_docs(None)
+    assert real_map == {}  # mutated in-place by clear()
+
+
+class _FakeControls:
+    def count(self):
+        return 0
+
+
 # --- what the list says ---------------------------------------------------------
 
 def test_the_list_keeps_each_accounts_label_whole():
