@@ -134,6 +134,15 @@ this one's answer, nothing refusing a control that signs out, and page
 digits and parameter names leaving in the traces by their shape. The
 rules above close them.
 
+From a tester's live page after 0.56.2 (#96), read for labels and shapes
+only. displayMultipleAccounts is empty on every document, so no account
+was ever read. Each document carries keyAccountNo, and the page's account
+list, usermetadata, gives each key the label its Account column shows, so
+discovery catches that answer as it catches searchItems and gives each
+document its label (_note_accounts). The list's pagination holds a Next
+page button, turned off on the last page, which the download presses to
+reach a document listed past the first page (_page_with).
+
 SAFETY (this is a brokerage account that can trade and move money):
   This module is strictly READ-ONLY. It opens the documents area, reads
   the list, and saves the PDFs E*TRADE already generated. It must NEVER
@@ -225,9 +234,10 @@ DOCS_API_RE = re.compile(r"/etaz/api/adsal/accountdocs/v2/searchItems", re.I)
 METADATA_API_RE = re.compile(r"/etaz/api/adsal/accountdocs/usermetadata", re.I)
 DOCS_URL = f"{BASE}/etx/pxy/accountdocs#/documents"
 # The date filter (second survey, #36) is a button reading its current
-# choice, "Last 90 Days", that opens a list of periods. These are the
-# only controls outside a document row the app touches, and each has to
-# read as a period and nothing else. The widest period wins. A period is a
+# choice, "Last 90 Days", that opens a list of periods. These and the
+# list's own Next page button (_next_page) are the only controls outside a
+# document row the app touches, and each of these has to read as a period
+# and nothing else. The widest period wins. A period is a
 # word from this list, and its numbers are a year 19xx or 20xx or a count
 # of at most three digits. Any four digits used to pass, so an account's
 # last four printed alone on the page read as a period and left in
@@ -327,7 +337,7 @@ FALLBACK = {
     "doc_link": "a[href*='.pdf'], a[download], button[class*='download']",
     "download_control": "a[download], a[href$='.pdf'], button:has-text('Download')",
     "page_ready": "table, [role='row'], [class*='statement'], main, [role='main']",
-    "next_page": ("a[aria-label*='Next' i], button[aria-label*='Next' i], "
+    "next_page":("a[aria-label*='Next' i], button[aria-label*='Next' i], "
                   "[class*='next']"),
 }
 
@@ -595,11 +605,14 @@ class RawDoc:
     # The list's own ids for the document, "<documentGuid>|<documentId>".
     # They change every time the list loads, so they never key anything.
     guid: str = ""
-    # What tells a document the list gave no account from another of the
-    # same date and title it gave none, the entry's place among them, "#1",
-    # "#2", and "" for every other document, so their keys stay what they
-    # were (#96).
+    # What tells a document from another of the same date, title and
+    # account, the list giving it none or the same one, the entry's place
+    # among them, "#1", "#2", and "" for every other document, so their keys
+    # stay what they were (#96).
     entry: str = ""
+    # The document carries a key for its account that the page's account
+    # list gave no label, so its account is not known (_account_of).
+    unnamed: bool = False
 
 
 # The date a bill control belongs to. The control's own name first, then
@@ -668,28 +681,15 @@ def _accounts_from_metadata(body: dict) -> dict:
     document carries as keyAccountNo; accountDisplayValue is the
     human-readable label the Account column shows, "Name - 1234". When
     the answer gives no useful list, an empty dict is returned."""
-    if not isinstance(body, dict):
-        return {}
-    accts = body.get("accountList")
-    if not isinstance(accts, list):
-        return {}
-    result = {}
-    for a in accts:
-        if not isinstance(a, dict):
-            continue
-        key = str(a.get("keyAccount") or "").strip()
-        label = re.sub(r"\s+", " ", str(a.get("accountDisplayValue") or "")).strip()
-        if key and label:
-            result[key] = label
-    return result
+    return dict(_labels_of(body))
 
 
 def _docs_from_api(body: dict) -> List[dict]:
     """The documents in one searchItems answer, as {date, title, kind,
-    hint, guid, account}. The guid rides as the hint and as the guid. It
-    names a document, not a person.
+    hint, guid, account, unnamed}. The guid rides as the hint and as the
+    guid. It names a document, not a person.
 
-    The account is resolved in this order:
+    The account is resolved in this order (_account_of):
     1. keyAccountNo looked up in _ACCOUNT_MAP (built from usermetadata).
        This is the primary path: every document carries a keyAccountNo
        that is stable across renames, and usermetadata maps it to the
@@ -698,7 +698,9 @@ def _docs_from_api(body: dict) -> List[dict]:
        directly. This is always empty on the tester's account but kept
        as a fallback.
     The label is kept whole for the record and the file name and never
-    written to a trace or a log."""
+    written to a trace or a log. `unnamed` says the document carries an
+    account key the account list gave no label it could use, so it has
+    none here, counted for the trace and never guessed."""
     out = []
     for e in (body or {}).get("defaultDocumentList") or (body or {}).get("resultList") or []:
         if not isinstance(e, dict):
@@ -712,12 +714,92 @@ def _docs_from_api(body: dict) -> List[dict]:
         # Prefer the usermetadata lookup (keyAccountNo) over displayMultipleAccounts,
         # since displayMultipleAccounts is empty when a sign-in holds multiple
         # accounts (#96). Fall back to displayMultipleAccounts for resilience.
-        account_key_no = str(e.get("keyAccountNo") or "").strip()
-        account = (_ACCOUNT_MAP.get(account_key_no)
-                   or re.sub(r"\s+", " ", str(e.get("displayMultipleAccounts") or "")).strip())
+        account = _account_of(e)
         out.append({"date": iso, "title": title, "kind": kind, "hint": hint, "guid": hint,
-                    "account": account})
+                    "account": account, "unnamed": not account and bool(_key_account(e))})
     return out
+
+
+# --- the account each document is for ---------------------------------------------
+#
+# A tester's live page (#96) showed displayMultipleAccounts empty on every
+# document, so no account was ever read. Each document carries keyAccountNo
+# instead, one value per account, which is no account number and does not
+# change when the account is renamed, and the page's account list
+# (METADATA_API_RE) gives each one the label its Account column shows. The
+# label is what a record, a file name and the download read, as before. The
+# key a record is kept under is still the label's masked digits
+# (Document.key), which a rename leaves alone too, so keyAccountNo only
+# finds the label, and it is never kept, logged or written anywhere.
+
+# The keys of _ACCOUNT_MAP a label cannot be trusted for, one two answers
+# or two entries label two ways, or every key of a label two keys share, so
+# a document of theirs has no label from the map.
+_ACCOUNTS_UNSURE: set = set()
+
+
+def _key_account(entry) -> str:
+    """The keyAccountNo of a searchItems document, or "" when it has none
+    that reads as one."""
+    key = entry.get("keyAccountNo") if isinstance(entry, dict) else None
+    return key.strip() if isinstance(key, str) else ""
+
+
+def _account_of(entry) -> str:
+    """The account the list's Account column shows for one searchItems
+    document. The label the page's account list gives its keyAccountNo,
+    else displayMultipleAccounts, else "". A key the list gives no label,
+    or two, gives none from the map, since a label is never guessed and a
+    document with none is refused wherever another document shares its date
+    and title (#96)."""
+    key = _key_account(entry)
+    mapped = _ACCOUNT_MAP.get(key, "") if key and key not in _ACCOUNTS_UNSURE else ""
+    return mapped or re.sub(r"\s+", " ", str(entry.get("displayMultipleAccounts") or "")).strip()
+
+
+def _labels_of(body) -> List[Tuple[str, str]]:
+    """(keyAccount, accountDisplayValue) for each account in one
+    usermetadata answer whose two are both words, spacing tidied. Anything
+    else in the answer is passed over unread."""
+    accounts = body.get("accountList") if isinstance(body, dict) else None
+    out = []
+    for a in accounts if isinstance(accounts, list) else []:
+        if not isinstance(a, dict):
+            continue
+        key, label = a.get("keyAccount"), a.get("accountDisplayValue")
+        if not isinstance(key, str) or not isinstance(label, str):
+            continue
+        key, label = key.strip(), re.sub(r"\s+", " ", label).strip()
+        if key and label:
+            out.append((key, label))
+    return out
+
+
+def _note_accounts(body) -> int:
+    """Keep the labels one usermetadata answer gives, and how many it gave.
+    A key labeled two ways, by two answers or by two entries of one, and
+    every key of a label two keys share, account_form telling them apart no
+    better than the Account column does, keep no label, so a document of
+    theirs reads as one with no account rather than as either one."""
+    pairs = _labels_of(body)
+    for key, label in pairs:
+        held = _ACCOUNT_MAP.get(key)
+        if held is not None and account_form(held) != account_form(label):
+            _ACCOUNTS_UNSURE.add(key)
+        _ACCOUNT_MAP[key] = label
+    by_form: dict = {}
+    for key, label in _ACCOUNT_MAP.items():
+        by_form.setdefault(account_form(label), set()).add(key)
+    for keys in by_form.values():
+        if len(keys) > 1:
+            _ACCOUNTS_UNSURE.update(keys)
+    return len(pairs)
+
+
+def accounts_named() -> int:
+    """How many accounts the page's account list gave a label this
+    discovery could use, for the log and the trace."""
+    return sum(1 for key in _ACCOUNT_MAP if key not in _ACCOUNTS_UNSURE)
 
 
 # The masked tail of an account as a list shows it, "-1234", "- 1234",
@@ -995,8 +1077,10 @@ def goto_docs_capturing(page, capture: list) -> bool:
     fills it, so discovery never has to know how the page asks, and every
     later page of it (_read_every_page). Also catches the usermetadata
     answer, which maps keyAccountNo to a human-readable account label,
-    and stores it in _ACCOUNT_MAP for _docs_from_api to use (#96)."""
-    start, asked = len(capture), []
+    and stores it in _ACCOUNT_MAP for _docs_from_api to use (#96), only
+    from E*TRADE's own hosts and only as its answer is read, nothing asked
+    of it here (_note_accounts)."""
+    start, asked, accounts = len(capture), [], []
 
     def on_response(res):
         try:
@@ -1009,7 +1093,7 @@ def goto_docs_capturing(page, capture: list) -> bool:
                 capture.append(body)
             elif METADATA_API_RE.search(url):
                 body = whole_json(res.json())
-                _ACCOUNT_MAP.update(_accounts_from_metadata(body))
+                accounts.append(_note_accounts(body))
         except Exception:
             pass
     page.on("response", on_response)
@@ -1025,6 +1109,11 @@ def goto_docs_capturing(page, capture: list) -> bool:
             if capture:
                 break
         page.wait_for_timeout(1500)
+        # The account list may come a moment after the documents.
+        for _ in range(6):
+            if accounts:
+                break
+            page.wait_for_timeout(500)
     except Exception as e:
         log.info("goto documents failed: %s", e)
     finally:
@@ -1061,8 +1150,16 @@ PAGE_EMPTY = "a later page came back empty"
 PAGE_REPEATED = "a later page repeated an earlier one"
 TOO_MANY = "more documents came than the list counted"
 TOO_MANY_PAGES = "the list has more pages than are read"
+# The documents carry keys for their accounts and no account list gave any
+# of them a label, so every account is missing from what was read (review).
+# Read as a list missing its accounts, every statement saved before came
+# out as a new document of no account, taken again.
+ACCOUNTS_UNREAD = "the account list was not read"
+# An account a record holds has no label now, on a document of its date and
+# title, the docs side's own check (App._accounts_lost).
+ACCOUNT_LOST = "an account the lists named before has no label now"
 _UNREAD_WORDS = (NO_COUNT, NO_REQUEST, PAGE_REFUSED, PAGE_UNREAD, PAGE_EMPTY, PAGE_REPEATED,
-                 TOO_MANY, TOO_MANY_PAGES)
+                 TOO_MANY, TOO_MANY_PAGES, ACCOUNTS_UNREAD, ACCOUNT_LOST)
 
 # The most pages of one period's list that are read, and the pause before
 # each later page.
@@ -1155,7 +1252,7 @@ def _same_entry(entry) -> tuple:
         return (repr(type(entry)),)
     return tuple(str(entry.get(k) or "") for k in (
         "documentDate", "documentLoadDate", "documentTitle", "documentDisplayName",
-        "documentTypeName", "displayMultipleAccounts"))
+        "documentTypeName", "displayMultipleAccounts", "keyAccountNo"))
 
 
 _PAGE_JS = r"""async ([url, headers, body, credentials]) => {
@@ -1677,6 +1774,12 @@ _LISTED_ACCOUNTS: dict = {}
 # no account at all, and then their labels are one empty label (#96).
 _LISTED_DOCS: dict = {}
 
+# How many documents each date, title and account carried in those lists,
+# by (date, title, account) as _norm writes them, an account of "" for none,
+# the most any one list held. Only where this is more than one is a
+# document told apart from another by its place (#96).
+_LISTED_SAME: dict = {}
+
 
 def _note_listed(bodies) -> None:
     """Count the documents per date, and per date and title, in searchItems
@@ -1684,22 +1787,36 @@ def _note_listed(bodies) -> None:
     for body in bodies or []:
         counts: dict = {}
         per_title: dict = {}
+        same: dict = {}
         for d in _docs_from_api(body):
             counts[d["date"]] = counts.get(d["date"], 0) + 1
             day_title = (d["date"], _norm(d["title"]))
             per_title[day_title] = per_title.get(day_title, 0) + 1
+            one = day_title + (_norm(d["account"]),)
+            same[one] = same.get(one, 0) + 1
             _LISTED_TITLES.setdefault(d["date"], set()).add(d["title"])
             _LISTED_ACCOUNTS.setdefault(day_title, set()).add(_norm(d["account"]))
         for day, n in counts.items():
             _LISTED[day] = max(_LISTED.get(day, 0), n)
         for day_title, n in per_title.items():
             _LISTED_DOCS[day_title] = max(_LISTED_DOCS.get(day_title, 0), n)
+        for one, n in same.items():
+            _LISTED_SAME[one] = max(_LISTED_SAME.get(one, 0), n)
 
 
 def _listed_docs(iso_date: str, title: str) -> int:
     """How many documents the lists gave this date and title, 0 when they
     gave none or were not read."""
     return int(_LISTED_DOCS.get((iso_date, _norm(title)), 0))
+
+
+def _places_still_listed(iso_date: str, title: str, account: str = "") -> bool:
+    """Whether the lists still gave this date and title more than one
+    document of this account, or of no account when `account` is "", the
+    only lists where such a document is told apart by its place. Once they
+    give that day's documents accounts of their own, a record kept by its
+    place is one of another listing (#96)."""
+    return int(_LISTED_SAME.get((iso_date, _norm(title), _norm(account)), 0)) > 1
 
 
 def _shared_with_no_account(iso_date: str, title: str) -> bool:
@@ -1771,16 +1888,17 @@ def _names_another(texts, title: str, iso_date: str) -> bool:
 
 
 def _entries_only_where_shared(docs) -> None:
-    """Keep the entry, what tells one document with no account from the
-    next, only on a document the list gave no account whose date and title
-    another such document shares. Every other one keeps the key it always
-    had, so nothing a sign-in of one account saved is taken again (#96)."""
+    """Keep the entry, what tells one document from the next of the same
+    date, title and account, the list giving them none or the same one,
+    only where another document shares all three. Every other one keeps the
+    key it always had, so nothing a sign-in of one account saved is taken
+    again (#96)."""
     shared: dict = {}
     for d in docs:
-        if not d.account:
-            shared[(d.date_text, d.title)] = shared.get((d.date_text, d.title), 0) + 1
+        one = (d.date_text, d.title, _norm(d.account))
+        shared[one] = shared.get(one, 0) + 1
     for d in docs:
-        if not d.account and shared.get((d.date_text, d.title), 0) < 2:
+        if shared.get((d.date_text, d.title, _norm(d.account)), 0) < 2:
             d.entry = ""
 
 
@@ -1788,14 +1906,18 @@ class Listing(list):
     """The documents discovery found, and why a period's list was not read
     to its end, in fixed words (_UNREAD_WORDS), none when every list was.
     Only a listing read whole may move a record kept before to another key,
-    or let a run finish clean."""
+    or let a run finish clean. `unnamed_accounts` counts the accounts whose
+    key the account list gave no label, each one an account the sign-in
+    has, so it is counted with the rest, never named."""
     unread: tuple = ()
+    unnamed_accounts: int = 0
 
 
-def _listing(docs, paged) -> Listing:
+def _listing(docs, paged, more=(), unnamed_accounts: int = 0) -> Listing:
     out = Listing(docs)
     out.unread = tuple(sorted({why if why in _UNREAD_WORDS else PAGE_UNREAD
-                               for _pages, why in paged if why}))
+                               for _pages, why in paged if why} | set(more)))
+    out.unnamed_accounts = unnamed_accounts
     return out
 
 
@@ -1812,8 +1934,12 @@ def collect_download_docs(page) -> Listing:
     _LISTED_TITLES.clear()
     _LISTED_ACCOUNTS.clear()
     _LISTED_DOCS.clear()
+    _LISTED_SAME.clear()
     _ACCOUNT_MAP.clear()
+    _ACCOUNTS_UNSURE.clear()
     del _PAGED[:]
+    # The page is loaded again here, so it shows a list's first page.
+    _MOVED_ON[0] = False
     if goto_docs_capturing(page, bodies):
         trace.append({"note": "default list", "lists": len(bodies),
                       "dates": sorted({d["date"] for b in bodies for d in _docs_from_api(b)},
@@ -1826,41 +1952,55 @@ def collect_download_docs(page) -> Listing:
         bodies = bodies + wider
         _note_listed(bodies)
         for body in bodies:
-            unlabeled: dict = {}
+            places: dict = {}
             for d in _docs_from_api(body):
                 # Two accounts can each have a statement of one title on one
                 # day. Kept by date and title alone, the second account's
                 # was dropped here and never listed (#96).
                 key = (d["date"], d["title"], _norm(d["account"]))
-                entry = ""
-                if not d["account"]:
-                    # With no account, by its place among this list's
-                    # entries of that date and title with none, a list being
-                    # every page of one period. Five accounts' statements
-                    # the list gave no account were one record here, and
-                    # four were never listed (#96). They were then told
-                    # apart by the list's own ids, which change every time
-                    # the list loads, so every list and every Discover added
-                    # each such statement again, and Run All saved the
-                    # copies (0.56.0, #96).
-                    unlabeled[key] = unlabeled.get(key, 0) + 1
-                    entry = "#%d" % unlabeled[key]
-                    key += (entry,)
+                # And by its place among this list's entries of that date,
+                # title and account, a list being every page of one period.
+                # Five accounts' statements the list gave no account were
+                # one record here, and four were never listed (#96). They
+                # were then told apart by the list's own ids, which change
+                # every time the list loads, so every list and every
+                # Discover added each such statement again, and Run All
+                # saved the copies (0.56.0, #96). One account's two
+                # documents of a title and day, two trade confirmations,
+                # were one record once the account was read, and the second
+                # was never listed (review).
+                places[key] = places.get(key, 0) + 1
+                entry = "#%d" % places[key]
+                key += (entry,)
                 if key in seen:
                     continue
                 seen.add(key)
                 tax = bool(re.search(r"1099|1098|5498|tax", d["title"] + " " + d["kind"], re.I))
                 docs.append(RawDoc(title=d["title"], account=d["account"], date_text=d["date"],
                                    href=d["hint"], text=f"E*TRADE {d['title']} {_human_date(d['date'])}",
-                                   kind="tax" if tax else "statement", guid=d["guid"], entry=entry))
+                                   kind="tax" if tax else "statement", guid=d["guid"], entry=entry,
+                                   unnamed=d["unnamed"]))
         _entries_only_where_shared(docs)
+        # Counts only, never a label or a key (#96). By date and title, since
+        # every list gives the same document under new ids. The keys of the
+        # accounts with no label are counted here and go no further.
+        unnamed = {(d["date"], _norm(d["title"])) for b in bodies for d in _docs_from_api(b)
+                   if d["unnamed"]}
+        unnamed_accounts = len({_key_account(e) for b in bodies for e in _entries_of(b)[1]
+                                if isinstance(e, dict) and _key_account(e) and not _account_of(e)})
+        # Keys and not one label means the account list was missed, and every
+        # document would read as one of no account (review).
+        missed = (ACCOUNTS_UNREAD,) if unnamed_accounts and not accounts_named() else ()
         trace.append({"note": "discovery result", "documents": len(docs),
                       "dates": sorted({d.date_text for d in docs}, reverse=True)[:60],
+                      "accounts_named": accounts_named(),
+                      "accounts_not_named": unnamed_accounts,
+                      "documents_of_an_account_not_named": len(unnamed),
                       "pages": sum(pages for pages, _why in _PAGED),
                       "lists_of_more_than_one_page": sum(1 for pages, _why in _PAGED if pages > 1),
-                      "not_read_to_the_end": [Fixed(w) for w in _listing((), _PAGED).unread]})
+                      "not_read_to_the_end": [Fixed(w) for w in _listing((), _PAGED, missed).unread]})
         if docs:
-            return _listing(docs, _PAGED)
+            return _listing(docs, _PAGED, missed, unnamed_accounts)
     expand_all(page)
     scroll_full_page(page)
     ctrls = _bill_controls(page)
@@ -1932,6 +2072,11 @@ _INSERT_RE = re.compile(r"insert|client\s+re", re.I)
 # which the docs side sends to Manual Review saying so (#96).
 SHARED_WITH_NO_ACCOUNT = "the document names no account and the lists gave its title more than once that day"
 
+# One account's documents of one title and day, two trade confirmations,
+# which no row or link tells apart, so nothing is pressed for either
+# (review).
+TWICE_FOR_ONE_ACCOUNT = "the lists gave this account the title more than once that day"
+
 # Fewer rows of the date naming the document, for any account, than the
 # lists gave documents of its date and title. The others are on another
 # page of the list, behind a filter, not drawn yet, or worded some other
@@ -1941,6 +2086,7 @@ FEWER_NAMED = "not as many rows name this document as the lists gave"
 # Why a lookup refused, in the only words that may say so.
 _REFUSALS = (
     SHARED_WITH_NO_ACCOUNT,
+    TWICE_FOR_ONE_ACCOUNT,
     FEWER_NAMED,
     "more than one row of this date names this document",
     "no row of this date names this document",
@@ -3745,9 +3891,7 @@ def _row_by_date(page, iso_date: str, title: str):
     what every row of the date says and which controls it holds, for
     _row_holds_only_this and _document_rows. Neither is ever written
     down."""
-    y, m, d = iso_date.split("-")
-    dates = [f"{m}/{d}/{y}", f"{m}/{d}/{y[2:]}", _human_date(iso_date),
-             f"{int(m)}/{int(d)}/{y}", f"{int(m)}/{int(d)}/{y[2:]}"]
+    dates = _row_date_forms(iso_date)
     try:
         h = page.evaluate_handle(_ROW_BY_DATE_JS, [dates, _js_title(title), _alone_that_day(iso_date, title),
                                                    _listed_docs(iso_date, title)])
@@ -4218,6 +4362,237 @@ def _try_every_way(page, dl_dir, iso_date: str, out_path: Path, title: str, trac
     return False
 
 
+# --- a document listed on a later page --------------------------------------------
+#
+# The list shows one page of a period at a time. Discovery reads every page
+# through the page's own request, but the download looks for a document's
+# row on the page shown, so a document listed on a later page went to
+# Manual Review (#96). On a tester's live page the list's next-page control
+# is a button whose aria-label is "Next page" inside <ms-pagination
+# role="navigation" aria-label="Table pagination">, turned off on the last
+# page. Only that button is pressed, only while it is on, and only while the
+# page shown holds no row of the document's date naming its title. A press
+# that does not move the list ends it, and the next download opens the
+# documents page again first, so it starts from a list's first page.
+
+NEXT_PAGE_LABEL = "Next page"
+PAGINATION_LABEL = "Table pagination"
+PAGE_MOVE_WAIT_S = 15
+
+# Whether a download moved a list past its first page since the documents
+# page was last opened.
+_MOVED_ON = [False]
+
+# Playwright's CSS reads through open shadow roots, and an attribute's value
+# in brackets matches it exactly, capitals and spaces as written.
+_NEXT_CSS = 'button[aria-label="%s"]' % NEXT_PAGE_LABEL
+_PAGINATION_CSS = '[role="navigation"][aria-label="%s"]' % PAGINATION_LABEL
+_NEXT_IN_PAGINATION_CSS = "%s %s" % (_PAGINATION_CSS, _NEXT_CSS)
+
+# The pagination's words through its shadow root, which say the page shown
+# ("Page 1 of 3"), compared before and after a press and never written down.
+_PAGINATION_WORDS_JS = r"""nav => {
+  const textOf = (el, d) => {
+    if (d > 12) return '';
+    let s = '';
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3) s += ' ' + n.textContent;
+      else if (n.nodeType === 1) s += ' ' + textOf(n, d + 1);
+    }
+    if (el.shadowRoot) s += ' ' + textOf(el.shadowRoot, d + 1);
+    return s;
+  };
+  return textOf(nav, 0).replace(/\s+/g, ' ').trim().slice(0, 120);
+}"""
+
+# The rows the page shows of the titles `titles`, for any account, as
+# [which title, what its row says], and whether any element prints the date
+# `dates` gives in its forms, the way the row walk finds a date. An element
+# printing a title, its whole words, its label or its own text nodes, is in
+# the row of the nearest element above it that prints a date. A list's
+# container prints every row's date, and a title in a row printing none
+# reaches it. What a row says is compared in Python and never written down.
+_SHOWS_JS = r"""([titles, dates, docName]) => {""" + _PRESS_JS + r"""
+  const forms = dates.filter(Boolean);
+  const dateRes = forms.map(d => new RegExp('(^|[^0-9/])' + esc(d) + '($|[^0-9/])'));
+  const anyDate = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/i;
+  const res = titles.map(t => new RegExp('^\\s*' + esc(String(t).trim()) + '(\\s+pdf(\\s+for\\s+\\S.*)?)?\\s*$', 'i'));
+  const which = (el) => {
+    if (!el.getAttribute) return -1;
+    const w = wordsIn(el);
+    const shows = w.length < 200 ? w : '';
+    const aria = (el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    const o = own(el);
+    return res.findIndex(r => r.test(shows) || r.test(aria) || r.test(o));
+  };
+  const all = [];
+  const walk = (el) => { for (const c of el.children) { all.push(c); if (c.shadowRoot) for (const s of c.shadowRoot.children) { all.push(s); walk(s); } walk(c); } };
+  walk(document.body);
+  const rows = [];
+  for (const el of all) {
+    if (rows.length >= 200) break;
+    const i = which(el);
+    if (i < 0 || !shown(el)) continue;
+    for (let node = up(el), d = 0; node && node !== document.body && node !== document.documentElement && d < 12; node = up(node), d++) {
+      const said = [];
+      sayInto(node, 0, said);
+      const text = said.join(' | ');
+      if (anyDate.test(text)) { rows.push([i, text.slice(0, 4000)]); break; }
+    }
+  }
+  const dated = all.some(el => (dateRes.some(r => r.test(own(el))) || forms.some(d => (el.innerText || '').trim() === d)) && shown(el));
+  return {rows, dated};
+}"""
+
+
+def _row_date_forms(iso_date: str) -> List[str]:
+    """The ways a row may print a date, as the row walk looks for it."""
+    y, m, d = iso_date.split("-")
+    return [f"{m}/{d}/{y}", f"{m}/{d}/{y[2:]}", _human_date(iso_date),
+            f"{int(m)}/{int(d)}/{y}", f"{int(m)}/{int(d)}/{y[2:]}"]
+
+
+def _shows_document(page, iso_date: str, title: str) -> Optional[bool]:
+    """Whether the page may show the document, a row of this date naming
+    this title for any account, or this date printed anywhere at all. False
+    only when the page shows rows of the titles the lists gave, none of
+    them is this one, and nothing prints its date, and None when it shows
+    no such row it can read, or could not be read, since then the document
+    may be there in a shape these rows do not take."""
+    titles = [title] + sorted({t for ts in _LISTED_TITLES.values() for t in ts
+                               if _norm(t) and _norm(t) != _norm(title)})[:40]
+    forms = _row_date_forms(iso_date) + [iso_date]
+    try:
+        got = page.evaluate(_SHOWS_JS, [titles, forms, [title or "", "", False, False]])
+    except Exception as e:
+        log.info("could not read whether the page shows the document: %s", type(e).__name__)
+        return None
+    got = got if isinstance(got, dict) else {}
+    rows = [r for r in got.get("rows") or [] if isinstance(r, list) and len(r) == 2]
+    if not rows:
+        return None
+    return bool(got.get("dated")) or any(r[0] == 0 and iso_date in _dates_in(str(r[1])) for r in rows)
+
+
+def _pagination_words(page) -> str:
+    """What the list's pagination says, "" when it cannot be read."""
+    try:
+        return str(page.locator(_PAGINATION_CSS).first.evaluate(_PAGINATION_WORDS_JS) or "")
+    except Exception:
+        return ""
+
+
+def _next_page(page, trace: Optional[list] = None) -> bool:
+    """Press the list's Next page button once, and whether the list then
+    moved. Pressed only when the page holds exactly one button whose
+    aria-label is exactly NEXT_PAGE_LABEL, it sits inside the navigation
+    labeled PAGINATION_LABEL, it is shown and on, turned off neither itself
+    nor by aria-disabled, its words are clear of the guard, and the tab is
+    on E*TRADE's site. Moved means a searchItems answer came, or the
+    pagination's words changed. The trace says what was seen in counts and
+    booleans."""
+    note: dict = {"note": "next page"}
+    if trace is not None:
+        trace.append(note)
+    try:
+        everywhere = page.locator(_NEXT_CSS).count()
+        inside = page.locator(_NEXT_IN_PAGINATION_CSS)
+        here = inside.count()
+        note.update(buttons=int(everywhere), in_the_pagination=int(here))
+        if everywhere != 1 or here != 1:
+            return False
+        button = inside.first
+        label = button.get_attribute("aria-label")
+        off = str(button.get_attribute("aria-disabled") or "").strip().lower() == "true"
+        on = bool(button.is_enabled()) and not off
+        shown = bool(button.is_visible())
+        words = str(button.inner_text(timeout=2000) or "")
+    except Exception as e:
+        note["error"] = type(e).__name__
+        return False
+    note.update(turned_on=on, shown=shown)
+    if label != NEXT_PAGE_LABEL or not on or not shown:
+        return False
+    url = page.url if isinstance(page.url, str) else ""
+    if not _guard_allows([words, label]) or not is_safe_url(url):
+        note["refused"] = True
+        return False
+    before = _pagination_words(page)
+    lists = [0]
+
+    def on_response(res):
+        try:
+            if is_safe_url(res.url or "") and DOCS_API_RE.search(res.url or ""):
+                lists[0] += 1
+        except Exception:
+            pass
+    page.on("response", on_response)
+    moved = False
+    try:
+        # From here the list may show another page, whatever comes of it.
+        _MOVED_ON[0] = True
+        button.click(timeout=5000)
+        note["pressed"] = True
+        for _ in range(PAGE_MOVE_WAIT_S * 2):
+            page.wait_for_timeout(500)
+            if lists[0] or _pagination_words(page) != before:
+                moved = True
+                break
+        page.wait_for_timeout(1500)
+    except Exception as e:
+        note["error"] = type(e).__name__
+        return False
+    finally:
+        try:
+            page.remove_listener("response", on_response)
+        except Exception:
+            pass
+    note["moved"] = moved
+    return moved
+
+
+def _page_with(page, iso_date: str, title: str, trace: Optional[list] = None) -> int:
+    """Move the list on, by its Next page button, to the page that shows
+    the document, and how many presses that took. Only for a document the
+    lists gave, only while the page shown holds no row of its date naming
+    its title (_shows_document), and at most MAX_PAGES - 1 times. A page
+    that cannot be read stops it, and so does a press that did not move the
+    list, and so does a page whose rows of the listed titles cannot be
+    read. Whatever page it stops on, the steps after look for the document
+    there and refuse as they always did when they cannot tell which row is
+    its own."""
+    if not title or _listed_docs(iso_date, title) < 1:
+        return 0
+    moved = 0
+    while moved < MAX_PAGES - 1 and _shows_document(page, iso_date, title) is False:
+        if not _next_page(page, trace):
+            break
+        moved += 1
+    if trace is not None and moved:
+        trace.append({"note": "the list was moved on to a later page", "pages": moved})
+    return moved
+
+
+def _first_page_again(page) -> bool:
+    """Open the documents page again after a download moved its list past
+    its first page, so this download looks from a list's first page, and
+    whether it did. The page's own reload shows the first page of its
+    default period, and show_period_for then chooses this document's. A tab
+    that left the documents page is opened afresh by goto_documents. When
+    the reload fails, the list may still show a later page, so the next
+    download tries again (review)."""
+    url = page.url or ""
+    try:
+        if is_safe_url(url) and "accountdocs" in url:
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(3000)
+    except Exception as e:
+        log.info("could not open the documents page again: %s", type(e).__name__)
+        return False
+    _MOVED_ON[0] = False
+    return True
+
+
 def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
                   trace: Optional[list] = None, account: str = "") -> bool:
     """Save the document dated `iso_date` and titled `title`. The period
@@ -4244,7 +4619,14 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
     to more than one label, nothing is pressed (SHARED_WITH_NO_ACCOUNT).
     Every guard that reads the account passes a document of none, so of
     several accounts' statements of one title and day, the one row the page
-    showed was taken for it, whichever account's it was (#96)."""
+    showed was taken for it, whichever account's it was (#96). Nor is it
+    for one account's documents of one title and day, which no link tells
+    apart (TWICE_FOR_ONE_ACCOUNT).
+
+    A document the period's list holds on a later page is looked for on
+    that page, the list moved on by its own Next page button while the page
+    shown holds no row of its date naming its title (_page_with). It went to
+    Manual Review (#96)."""
     _FOR.clear()
     if account and title:
         _FOR.update(date=iso_date, title=_norm(title), account=_norm(account))
@@ -4252,10 +4634,15 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
         if not account and _shared_with_no_account(iso_date, title):
             _refuse(trace, "listed document", SHARED_WITH_NO_ACCOUNT, iso_date, 0, 0)
             return False
+        if account and _places_still_listed(iso_date, title, account):
+            _refuse(trace, "listed document", TWICE_FOR_ONE_ACCOUNT, iso_date, 0, 0)
+            return False
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # Every control pressed for this document, through every attempt below.
         tried: list = []
+        if _MOVED_ON[0] and not _first_page_again(page):
+            return False
         if not goto_documents(page):
             log.info("could not open the documents page for %s", iso_date)
             return False
@@ -4264,6 +4651,7 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
         # discovery does, so the period that lists this document is chosen.
         if "accountdocs" in (page.url or ""):
             show_period_for(page, iso_date, trace)
+            _page_with(page, iso_date, title, trace)
         el, label = _row_link_for(page, iso_date, title, trace)
         if el is not None and is_safe_control(label):
             unsure: list = []
@@ -4282,7 +4670,8 @@ def download_bill(page, dl_dir, iso_date: str, out_path, title: str = "",
             log.info("no document control by name for %s, looking for its row by date", iso_date)
             return _try_every_way(page, dl_dir, iso_date, out_path, title, trace, tried)
         if not is_safe_control(label):
-            log.info("refusing unsafe control %r for %s", label, iso_date)
+            # By its date alone. A link's label can say "PDF for" an account.
+            log.info("refusing an unsafe control for %s", iso_date)
             return False
 
         try:

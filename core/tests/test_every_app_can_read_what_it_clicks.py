@@ -74,9 +74,13 @@ class Control:
         pass
 
 
-def page_showing(control):
-    """A page whose only pagination candidate is this control."""
+def page_showing(control, site=None):
+    """A page whose only pagination candidate is this control. For an app
+    whose pagination is one exact label (exact_label), a page of its own
+    site, since such a pager presses nothing anywhere else."""
     page = MagicMock()
+    if site is not None and exact_label(site):
+        page.url = "https://%s/" % sorted(site.ALLOWED_HOSTS)[0]
     handle = MagicMock()
     handle.count.return_value = 1
     handle.first = control
@@ -85,6 +89,13 @@ def page_showing(control):
     page.query_selector_all.return_value = [control]
     page.querySelectorAll = page.query_selector_all
     return page
+
+
+def exact_label(site):
+    """The one label an app's pagination carries, when its site says so,
+    E*TRADE's "Next page". Its pager presses only a control labeled exactly
+    that, so the ordinary Next it is handed carries it."""
+    return getattr(site, "NEXT_PAGE_LABEL", None)
 
 
 def run_each(site, app: Path, page):
@@ -116,7 +127,7 @@ def test_a_control_with_no_readable_label_is_not_clicked(app, label):
     site = site_of(app)
     control = Control(text=label, aria=label)
     try:
-        run_each(site, app, page_showing(control))
+        run_each(site, app, page_showing(control, site))
     except Exception:
         pass
     assert control.clicked == 0, \
@@ -131,7 +142,7 @@ def test_a_control_that_commits_something_is_still_not_clicked(app):
     for label in ("Pay now", "Place Order", "Manage AutoPay"):
         control = Control(text=label, aria=label)
         try:
-            run_each(site, app, page_showing(control))
+            run_each(site, app, page_showing(control, site))
         except Exception:
             pass
         assert control.clicked == 0, \
@@ -145,9 +156,9 @@ def test_an_ordinary_next_control_is_still_clicked(app):
     site = site_of(app)
     clicked = 0
     for label in ("Next", "Next page", ">"):
-        control = Control(text=label, aria="Next")
+        control = Control(text=label, aria=exact_label(site) or "Next")
         try:
-            run_each(site, app, page_showing(control))
+            run_each(site, app, page_showing(control, site))
         except Exception:
             pass
         clicked += control.clicked
