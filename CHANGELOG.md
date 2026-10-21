@@ -15,15 +15,17 @@ All notable changes to PaperPull are recorded here. Versioning follows
   top bar's Accounts button opens, as View Statements & Documents, and the
   page builds that menu only when it is opened. So every run stopped at its
   first step, saying the page had no such link. When no such link shows and
-  there is no Menu button to open, the app now opens a button named exactly
+  the page has no Menu button, the app now opens a button named exactly
   Accounts, only when it is the only one and only while it says it is
-  closed, and in that menu presses the link by its whole name and nothing
-  else. The same menu holds Close an Account, Stop Future Payments and
-  overdraft services, and none of them is ever pressed. When the menu shows
-  no such link, the run stops with the menu left open and nothing more
-  pressed, and the failure file and Diagnose say whether the menu was
-  opened and how many of its controls name statements or documents. Thanks
-  to @crazyhorse90210 for the screenshots and the Diagnose file (#27).
+  closed. Then it presses only the control named exactly View Statements &
+  Documents or Statements & Documents that the open menu shows. The same
+  menu holds Close an Account, Stop Future Payments and overdraft services,
+  and none of them is ever pressed. When no such link shows, the run stops
+  with the menu left open and nothing more pressed, and the failure file
+  and Diagnose say whether the menu was opened, how many controls the page
+  showed before and after, and how many of them name statements or
+  documents. Thanks to @crazyhorse90210 for the screenshots and the
+  Diagnose file (#27).
 
 ## [0.56.1] - 2026-10-20
 

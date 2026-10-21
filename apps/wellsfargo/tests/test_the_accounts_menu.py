@@ -367,21 +367,56 @@ def test_two_accounts_buttons_open_neither(open_site):
     assert _pressed(pg) == [] and fake.navigations == []
 
 
-def test_with_a_menu_button_the_accounts_button_is_never_pressed(open_site):
+@pytest.mark.parametrize("expanded", ["false", "true"])
+def test_with_a_menu_button_the_accounts_button_is_never_pressed(open_site, expanded):
     """A narrow window's Menu is opened as it was, and the Accounts menu
-    is not tried after it."""
-    menu = ('<button data-name="menu" aria-expanded="false" onclick="this.setAttribute('
+    is not tried after it. A Menu that says it is open is not pressed, and
+    neither is Accounts on a page like that, which this app does not know."""
+    menu = ('<button data-name="menu" aria-expanded="%s" onclick="this.setAttribute('
             '\'aria-expanded\', \'true\'); document.getElementById(\'drawer\').hidden = false;">'
-            'Menu</button><div id="drawer" hidden><a role="link" tabindex="0" data-name="help">'
-            'Help</a></div>')
+            'Menu</button><div id="drawer" %s><a role="link" tabindex="0" data-name="help">'
+            'Help</a></div>') % (expanded, "hidden" if expanded == "false" else "")
     fake = Site(_page(extra=menu))
     pg = open_site(fake)
     stop = _stops(pg)
-    assert stop.reason == "the menu has no statements and documents link"
-    assert stop.facts["menu_pressed"] is True
+    opened = expanded == "false"
+    assert stop.reason == ("the menu has no statements and documents link" if opened
+                           else "the page has no statements and documents link")
+    assert stop.facts["menu_pressed"] is opened
+    assert stop.facts["menu_button_shown"] is True
     assert "accounts_menu_pressed" not in stop.facts
-    assert _pressed(pg) == ["menu"], _pressed(pg)
+    assert _pressed(pg) == (["menu"] if opened else []), _pressed(pg)
     assert fake.navigations == []
+
+
+def test_a_link_named_for_a_screen_reader_alone_is_never_pressed(open_site):
+    """Its own words, read again before the press, are those of View Check
+    Copies, which the guard alone would let through."""
+    link = ('<a role="link" tabindex="0" data-name="copies-too" data-go="/elsewhere/copies" '
+            'aria-labelledby="named">View Check Copies</a>'
+            '<span id="named" hidden>View Statements &amp; Documents</span>')
+    fake = Site(_page(menu=_menu(link)))
+    pg = open_site(fake)
+    stop = _stops(pg)
+    assert stop.reason == "the accounts menu has no statements and documents link"
+    assert stop.facts["documents_link_shown"] is True
+    assert _pressed(pg) == ["accounts"], _pressed(pg)
+    assert fake.navigations == []
+
+
+def test_an_accounts_button_under_a_cover_is_not_pressed_and_not_said_pressed(open_site):
+    """A press that stops the run leaves whether it was made unknown, not
+    a no."""
+    cover = ('<div data-name="cover" style="position:fixed;top:0;left:0;width:100%;'
+             'height:300px;background:#fff"></div>')
+    fake = Site(_page(extra=cover))
+    pg = open_site(fake)
+    way = {}
+    with pytest.raises(pressing.Covered):
+        site.goto_documents(pg, way=way)
+    assert way["accounts_buttons_shown"] == 1
+    assert way["accounts_menu_pressed"] is None
+    assert _pressed(pg) == [] and fake.navigations == []
 
 
 def test_a_link_that_shows_already_is_pressed_with_the_accounts_menu_left_closed(open_site):
@@ -409,6 +444,14 @@ def test_only_the_links_whole_name_and_the_buttons_whole_name_are_taken():
         assert site.is_safe_control(w), w
         assert not site.is_accounts_button(w), w
     assert site.is_accounts_button("Accounts") and site.is_accounts_button("  accounts ")
+    # The guard over every press refuses these by their own words too.
+    for w in ("Close an Account", "Close Account", "Stop a Check", "Stop Future Payments",
+              "Add or Change Overdraft Services", "Manage Delivery Preferences"):
+        assert not site.is_safe_control(w), w
+    # And by the words that refuse a control whatever else it says.
+    for w in ("Close an Account", "Close a account", "Stop a Check", "stop check"):
+        assert site.FORBIDDEN_CONTROL_RE.search(w), w
+        assert not site.is_safe_control("View statement, " + w), w
 
 
 # -- Diagnose -----------------------------------------------------------------------

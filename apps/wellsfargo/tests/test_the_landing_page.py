@@ -67,6 +67,8 @@ def _doc(tag="a", name="Statements &amp; Documents"):
 # is driven in test_the_accounts_menu.py.
 OTHERS = ('<a role="link" tabindex="0" data-name="transfer">Transfer &amp; Pay</a>'
           '<button data-name="plan" aria-expanded="false">Plan &amp; Learn</button>')
+# The Accounts button, beside a Menu button that shows, is never pressed.
+ACCOUNTS = '<button data-name="accounts" aria-expanded="false">Accounts</button>'
 
 LANDING = """<!doctype html><meta charset="utf-8"><title>Account Summary</title>
 <header>%(header)s</header>
@@ -212,7 +214,7 @@ def test_a_page_with_no_such_control_stops_as_it_did(open_site):
 
 
 def test_a_menu_that_holds_no_such_link_stops_with_nothing_else_pressed(open_site):
-    fake = Site(_menu(OTHERS))
+    fake = Site(_menu(OTHERS + ACCOUNTS))
     pg = open_site(fake)
     with pytest.raises(pressing.Stop) as stop:
         site.goto_documents(pg)
@@ -234,8 +236,9 @@ def test_a_button_whose_name_is_more_than_menu_is_never_opened(open_site, label)
 
 
 def test_a_menu_that_says_it_is_open_is_never_pressed(open_site):
-    """Pressing an open menu closes it."""
-    fake = Site(_menu(OTHERS, expanded="true"))
+    """Pressing an open menu closes it. Nor is the Accounts button beside
+    it pressed, on a page this app does not know."""
+    fake = Site(_menu(OTHERS + ACCOUNTS, expanded="true"))
     pg = open_site(fake)
     with pytest.raises(pressing.Stop) as stop:
         site.goto_documents(pg)
