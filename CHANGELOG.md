@@ -7,7 +7,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.56.3] - 2026-10-21
+
+PaperPull Server's image takes Pillow 13.0.0, past a heap overflow in its
+JPEG decoding, and brings 0.56.2's Wells Fargo, U.S. Bank and E*TRADE fixes
+to the server. Nothing in the Windows and Mac packages changed since 0.56.2
+besides the version.
 
 ### Security
 - **The server image takes Pillow 13.0.0.** Pillow 12.3.0, which the
