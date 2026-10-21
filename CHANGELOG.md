@@ -7,6 +7,16 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Security
+- **The server image takes Pillow 13.0.0.** Pillow 12.3.0, which the
+  server image installed for reading PDFs, has a heap buffer overflow in
+  its JPEG decoding (GHSA-8g5g-8vmr-9782) and several other advisories,
+  all fixed in 13.0.0. The image's own check found it after 0.56.2 was
+  tagged and stopped that image from being published, so the server stayed
+  on 0.56.1. The Windows and Mac packages already carried 13.0.0.
+
 ## [0.56.2] - 2026-10-20
 
 Wells Fargo opens Statements & Documents from the top bar's Accounts menu,
