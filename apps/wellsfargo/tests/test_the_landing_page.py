@@ -62,8 +62,13 @@ def _doc(tag="a", name="Statements &amp; Documents"):
     return '<%s data-name="documents"%s>%s</%s>' % (tag, role, name, tag)
 
 
+# A collapsed button that opens a menu of its own and is never pressed here.
+# The Accounts button, which the app opens when nothing else shows the link,
+# is driven in test_the_accounts_menu.py.
 OTHERS = ('<a role="link" tabindex="0" data-name="transfer">Transfer &amp; Pay</a>'
-          '<button data-name="accounts" aria-expanded="false">Accounts</button>')
+          '<button data-name="plan" aria-expanded="false">Plan &amp; Learn</button>')
+# The Accounts button, beside a Menu button that shows, is never pressed.
+ACCOUNTS = '<button data-name="accounts" aria-expanded="false">Accounts</button>'
 
 LANDING = """<!doctype html><meta charset="utf-8"><title>Account Summary</title>
 <header>%(header)s</header>
@@ -203,12 +208,13 @@ def test_a_page_with_no_such_control_stops_as_it_did(open_site):
         site.goto_documents(pg)
     assert stop.value.reason == "the page has no statements and documents link"
     assert stop.value.facts == {"menu_pressed": False, "menu_button_shown": False,
-                                "hidden_documents_links": 0}
+                                "hidden_documents_links": 0, "accounts_buttons_shown": 0,
+                                "accounts_menu_pressed": False, "documents_link_shown": False}
     assert fake.navigations == [] and _pressed(pg) == []
 
 
 def test_a_menu_that_holds_no_such_link_stops_with_nothing_else_pressed(open_site):
-    fake = Site(_menu(OTHERS))
+    fake = Site(_menu(OTHERS + ACCOUNTS))
     pg = open_site(fake)
     with pytest.raises(pressing.Stop) as stop:
         site.goto_documents(pg)
@@ -230,8 +236,9 @@ def test_a_button_whose_name_is_more_than_menu_is_never_opened(open_site, label)
 
 
 def test_a_menu_that_says_it_is_open_is_never_pressed(open_site):
-    """Pressing an open menu closes it."""
-    fake = Site(_menu(OTHERS, expanded="true"))
+    """Pressing an open menu closes it. Nor is the Accounts button beside
+    it pressed, on a page this app does not know."""
+    fake = Site(_menu(OTHERS + ACCOUNTS, expanded="true"))
     pg = open_site(fake)
     with pytest.raises(pressing.Stop) as stop:
         site.goto_documents(pg)
@@ -315,7 +322,10 @@ def test_diagnose_on_a_page_it_cannot_leave_writes_both_files(open_site, tmp_pat
     assert info["documents_page_opened"] is False
     assert info["documents_page_found"] is False
     assert info["stopped"]["reason"] == "the page has no statements and documents link"
-    assert info["documents_link"] == {"shown": False, "hidden": 0, "menu_button_shown": False}
+    assert info["documents_link"] == {
+        "shown": False, "hidden": 0, "menu_button_shown": False, "accounts_buttons_shown": 0,
+        "way": {"accounts_buttons_shown": 0, "accounts_menu_pressed": False,
+                "menu_pressed": False, "documents_link_shown": False}}
     # The page the window shows is surveyed, and no link on it followed.
     assert info["survey"]["followed"] == 0
     assert info["survey"]["pages"][0]["controls"], "no control of the page was named"

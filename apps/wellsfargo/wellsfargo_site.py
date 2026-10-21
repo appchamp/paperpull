@@ -38,9 +38,12 @@ SAFETY (this is a bank account that can move money):
   an address, or edits any setting. FORBIDDEN_CONTROL_RE is the guard. A
   control must ALSO look like a document action (SAFE_DOC_CONTROL_RE)
   before it may be clicked. There is no code here that submits a form or
-  confirms a dialog. The one press of a control without document words is
-  the page's own Menu button, a button whose whole name is Menu, opened
-  only to show a Statements & Documents link when none shows (#27).
+  confirms a dialog. Two controls without document words are pressed on
+  the way to the Statements & Documents page, each only when no link to it
+  shows and only while it says it is closed. They are the page's Menu
+  button, a button whose whole name is Menu, and the top bar's Accounts
+  button, a button whose whole name is Accounts, whose menu holds the link
+  (#27). Of that menu nothing but the link is ever pressed.
 """
 from __future__ import annotations
 
@@ -126,7 +129,8 @@ LOGIN_URL_MARKERS = ["/login", "/signin", "/sign-in", "/auth/", "/mfa",
 FORBIDDEN_CONTROL_RE = re.compile(
     r"(transfer|zelle|\bwire\b|\bpay\b|payment|bill\s*pay|autopay|auto\s*pay|"
     r"deposit|withdraw|send\s+money|request\s+money|move\s+money|"
-    r"\bapply\b|open\s+(an?\s+)?account|close\s+account|\bloan\b|\bborrow|"
+    r"\bapply\b|open\s+(an?\s+)?account|close\s+(an?\s+)?account|stop\s+(an?\s+)?check|"
+    r"\bloan\b|\bborrow|"
     r"\bcard\b|\bcards\b|replace|activate|lock|unlock|\bpin\b|limit|"
     r"overdraft|alerts?\b|\bbudget|\bgoal|\brewards?\b|\boffers?\b|"
     r"enroll|unenroll|sign\s+up|paperless|delivery\s+preference|"
@@ -389,14 +393,24 @@ def _shows_dated_documents(page) -> bool:
 # after it. Each statement is a link with no address, "Statement 09/30/26
 # (123K, PDF)", that opens the PDF in this same tab.
 # ---------------------------------------------------------------------------
-DOCUMENTS_LINK_RE = re.compile(r"^\s*statements?\s*(?:&|and)\s*documents\s*$", re.I)
+# The link's whole name, "Statements & Documents", or "View Statements &
+# Documents" as the Accounts menu names it (#27).
+DOCUMENTS_LINK_RE = re.compile(r"^\s*(?:view\s+)?statements?\s*(?:&|and)\s*documents\s*$", re.I)
 STATEMENTS_SECTION_RE = re.compile(r"^\s*statements?\s*(?:&|and)\s*disclosures\s*$", re.I)
 # The page's menu, a button named exactly Menu, opened only to show a
 # Statements & Documents link it holds when none shows on the page (#27).
 # A tester's run from the accounts summary found no such link to press,
-# where a link drawn behind a menu would not show. Nothing else that opens
-# something is pressed for this.
+# where a link drawn behind a menu would not show.
 MENU_BUTTON_RE = re.compile(r"^\s*menu\s*$", re.I)
+# The top bar's Accounts button, opened only when no Statements & Documents
+# link shows and no Menu button shows. A tester's accounts summary
+# draws the link only inside the menu this button opens, as View Statements
+# & Documents, and builds that menu only when it is opened (#27). The same
+# menu holds Close an Account, Stop Future Payments, overdraft services and
+# more, and of it only the link, by its whole name, is ever pressed.
+ACCOUNTS_BUTTON_RE = re.compile(r"^\s*accounts\s*$", re.I)
+# How long a menu that was opened is given to show the link, in milliseconds.
+_MENU_SHOW_MS = 5000
 # The roles the Statements & Documents control has been seen in, or could
 # be drawn in, a link, a button or an entry of a menu.
 _DOCUMENTS_ROLES = ("link", "button", "menuitem")
@@ -565,7 +579,106 @@ def _open_menu(page) -> bool:
     return True
 
 
-def goto_documents(page) -> bool:
+def is_accounts_button(name: str) -> bool:
+    """Whether a button's words are the top bar's Accounts button's,
+    exactly Accounts and nothing else."""
+    return bool(ACCOUNTS_BUTTON_RE.match(" ".join((name or "").split())))
+
+
+def _accounts_buttons(page) -> list:
+    """The buttons whose whole name is Accounts that show, none when they
+    cannot be read."""
+    loc = page.get_by_role("button", name=ACCOUNTS_BUTTON_RE)
+    shown = []
+    try:
+        for i in range(min(loc.count(), 6)):
+            if loc.nth(i).is_visible():
+                shown.append(loc.nth(i))
+    except Exception:
+        return []
+    return shown
+
+
+# How many controls the page shows, and how many of them name statements or
+# documents, counts only, for the failure file to say what an opened menu
+# showed. An open shadow root is read too.
+_CONTROLS_SHOWN_JS = r"""() => {
+  const roots = [document];
+  for (let i = 0; i < roots.length && roots.length < 200; i++)
+    for (const el of roots[i].querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot);
+  let shown = 0, statements = 0, documents = 0;
+  for (const root of roots)
+    for (const el of root.querySelectorAll('a, button, [role=link], [role=button], [role=menuitem]')) {
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      if (r.width < 1 || r.height < 1 || s.visibility === 'hidden' || s.opacity === '0') continue;
+      shown += 1;
+      const name = el.getAttribute('aria-label') || el.textContent || '';
+      if (/\bstatements?\b/i.test(name)) statements += 1;
+      if (/\bdocuments?\b/i.test(name)) documents += 1;
+    }
+  return {shown, statements, documents};
+}"""
+
+
+def _controls_shown(page) -> dict:
+    try:
+        seen = page.evaluate(_CONTROLS_SHOWN_JS) or {}
+        return {k: int(seen.get(k) or 0) for k in ("shown", "statements", "documents")}
+    except Exception:
+        return {}
+
+
+def _open_accounts_menu(page, way: dict):
+    """Open the top bar's Accounts menu to show the Statements & Documents
+    link it holds, the button pressed or None. Only when exactly one button
+    whose whole name is Accounts shows, read again before the press, and
+    only while it says it is closed, since pressing an open menu closes it.
+    `way` is told how many such buttons showed, whether one was pressed,
+    None while that is not known, and how many controls showed before the
+    press."""
+    buttons = _accounts_buttons(page)
+    way["accounts_buttons_shown"] = len(buttons)
+    way["accounts_menu_pressed"] = False
+    if len(buttons) != 1 or not is_accounts_button(_label_of(buttons[0])):
+        return None
+    button = buttons[0]
+    try:
+        if (button.get_attribute("aria-expanded", timeout=_READ_MS) or "").lower() != "false":
+            return None
+    except Exception:
+        return None
+    before = _controls_shown(page)
+    # Not known while the press is under way, since a press can be made
+    # and still stop the run.
+    way["accounts_menu_pressed"] = None
+    pressing.click(page, button, css=pressing.BUTTONS,
+                   what="the Accounts button of the page's top bar",
+                   words=_words(), step="open the accounts menu")
+    way["accounts_menu_pressed"] = True
+    if before:
+        way["controls_shown_before"] = before["shown"]
+    return button
+
+
+def _what_the_menu_showed(page, button, way: dict) -> None:
+    """What the opened Accounts menu showed, into `way` for the failure
+    file, whether the button says its menu is open and how many controls
+    show now, and of them how many name statements or documents. Nothing
+    is pressed or closed."""
+    try:
+        way["accounts_menu_said_open"] = \
+            (button.get_attribute("aria-expanded", timeout=_READ_MS) or "").lower() == "true"
+    except Exception:
+        way["accounts_menu_said_open"] = None
+    after = _controls_shown(page)
+    if after:
+        way["controls_shown_after"] = after["shown"]
+        way["statements_controls_shown"] = after["statements"]
+        way["documents_controls_shown"] = after["documents"]
+
+
+def goto_documents(page, way: Optional[dict] = None) -> bool:
     """Open Statements & Documents in this tab, False when Wells Fargo
     shows a signed-out page.
 
@@ -574,9 +687,14 @@ def goto_documents(page) -> bool:
     it always was. Otherwise the page's own Statements & Documents control
     is pressed, a link, a button or an entry of a menu, and on the page the
     statements section is opened. When none shows, the page's Menu button
-    is opened to show one, and nothing else is. A tab that is not on the
+    is opened to show one, and on a page with no Menu button, the top bar's
+    Accounts button, and nothing else is. A tab that is not on the
     signed-in site, or a signed-in page with no such control, stops the run
-    with what to do, since the address is never typed."""
+    with what to do, since the address is never typed.
+
+    `way` is told which menu was opened and whether the link showed, the
+    facts a stop here carries, for Diagnose to write down."""
+    way = {} if way is None else way
     dismiss_overlay(page)
     if _signed_in_area(page.url or "") and _shows_a_pdf(page):
         try:
@@ -597,20 +715,38 @@ def goto_documents(page) -> bool:
         return True
     link = _documents_control(page)
     menu_pressed = False
+    accounts = None
     if link is None:
         menu_pressed = _open_menu(page)
-        for _ in range(12 if menu_pressed else 0):
+        # A Menu button that shows and was not pressed, one that says it
+        # is open say, is a page this app does not know, so the Accounts
+        # menu is tried only on a page with no Menu button at all.
+        if not menu_pressed and _menu_button(page) is None:
+            accounts = _open_accounts_menu(page, way)
+        # No control of the link's whole name showed before the press, so
+        # one that shows now came with the menu that was opened.
+        for _ in range(_MENU_SHOW_MS // 250 if menu_pressed or accounts is not None else 0):
             page.wait_for_timeout(250)
             link = _documents_control(page)
             if link is not None:
                 break
-    if link is None or not is_safe_control(_label_of(link)):
+    way["menu_pressed"] = menu_pressed
+    way["documents_link_shown"] = link is not None
+    # The link's own words are read again, and must be its whole name as
+    # well as words the guard lets through.
+    said = _label_of(link) if link is not None else ""
+    if link is None or not DOCUMENTS_LINK_RE.match(said) or not is_safe_control(said):
+        # The menu that was opened is left open and nothing more is
+        # pressed, so the failure file counts what it shows.
+        if accounts is not None:
+            _what_the_menu_showed(page, accounts, way)
         raise _cannot_open(
             "the menu has no statements and documents link" if menu_pressed
+            else "the accounts menu has no statements and documents link" if accounts is not None
             else "the page has no statements and documents link",
             {"menu_pressed": menu_pressed,
              "menu_button_shown": _menu_button(page) is not None,
-             "hidden_documents_links": _documents_controls_hidden(page)})
+             "hidden_documents_links": _documents_controls_hidden(page), **way})
     pressing.click(page, link, css="%s, %s, [role=menuitem]" % (pressing.LINKS, pressing.BUTTONS),
                    what="the Statements & Documents link", words=_words(),
                    step="open the statements page")
