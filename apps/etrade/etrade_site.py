@@ -1686,8 +1686,11 @@ def _choose_period(page, choice: str, capture: list, trace: Optional[list] = Non
         page.on("response", on_response)
         page.on("framenavigated", on_navigated)
         try:
-            clicked = _click_text(page, choice)
-            if not clicked and already_open:
+            unsure: list = []
+            clicked = _click_text(page, choice, unsure)
+            # Opened again only when nothing was pressed. A press that raised
+            # may have chosen the period already (review of #119).
+            if not clicked and already_open and not unsure:
                 picker, _ = _find_picker(page)
                 if picker is not None:
                     picker.click(timeout=5000)
@@ -2667,37 +2670,48 @@ def _short_visible_texts(page) -> set:
         return set()
 
 
-def _click_text(page, text: str) -> bool:
+def _click_text(page, text: str, unsure: Optional[list] = None) -> bool:
     """Click the visible element whose whole text is `text`, by role
-    first, then by text alone. The text has passed is_date_filter."""
+    first, then by text alone. The text has passed is_date_filter.
+
+    A candidate that is hidden, or will not scroll into view, is passed
+    over for the next one (#119). A click that raised is the last one
+    tried, since it may have reached the page, and `unsure` then gets the
+    text, so nothing else is pressed for it, another element of the same
+    words included (review of #119, the rule of pressing.press_once)."""
     pat = re.compile("^\\s*" + escape_for_locator(text) + "\\s*$", re.I)
-    for role in ("menuitem", "option", "radio", "menuitemradio", "button", "link", "tab"):
-        try:
-            opt = page.get_by_role(role, name=pat)
-            for i in range(min(opt.count(), 10)):
-                el = opt.nth(i)
-                try:
-                    if el.is_visible():
-                        el.scroll_into_view_if_needed(timeout=1000)
-                        el.click(timeout=5000)
-                        return True
-                except Exception:
-                    continue
-        except Exception:
-            continue
-    try:
-        loc = page.get_by_text(pat)
-        for i in range(min(loc.count(), 20)):
-            el = loc.nth(i)
+
+    def candidates():
+        for role in ("menuitem", "option", "radio", "menuitemradio", "button", "link", "tab"):
             try:
-                if el.is_visible():
-                    el.scroll_into_view_if_needed(timeout=1000)
-                    el.click(timeout=5000)
-                    return True
+                opt = page.get_by_role(role, name=pat)
+                many = min(opt.count(), 10)
             except Exception:
                 continue
-    except Exception:
-        pass
+            for i in range(many):
+                yield opt.nth(i)
+        try:
+            loc = page.get_by_text(pat)
+            many = min(loc.count(), 20)
+        except Exception:
+            return
+        for i in range(many):
+            yield loc.nth(i)
+
+    for el in candidates():
+        try:
+            if not el.is_visible():
+                continue
+            el.scroll_into_view_if_needed(timeout=1000)
+        except Exception:
+            continue
+        try:
+            el.click(timeout=5000)
+        except Exception:
+            if unsure is not None:
+                unsure.append(text)
+            return False
+        return True
     return False
 
 

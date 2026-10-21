@@ -43,7 +43,9 @@ All notable changes to PaperPull are recorded here. Versioning follows
   Only the first element of that name was tried for each kind of control,
   so a period whose first one was hidden could go unchosen, older years in
   a list that scrolls among them. Each one is tried in turn, scrolled into
-  view first, and a list that had closed is opened once more (#119).
+  view first, and a list that had closed is opened once more (#119). A
+  press that raised is the last one made, so nothing else of the same
+  words is pressed after it.
 - **E*TRADE takes a statement listed on a later page of its list.**
   Discovery reads every page, but the download looked for a statement's
   row only on the page shown, so one listed past the first page went to

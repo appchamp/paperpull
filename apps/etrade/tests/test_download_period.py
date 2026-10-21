@@ -459,7 +459,7 @@ def test_choose_period_retries_when_unopened_list_with_already_open():
 
     pg = DummyPage()
 
-    def mock_click_text(page, choice):
+    def mock_click_text(page, choice, unsure=None):
         pg.attempts += 1
         return pg.attempts > 1
 
@@ -476,3 +476,88 @@ def test_choose_period_retries_when_unopened_list_with_already_open():
     assert "picker_click" in calls
     assert entry[0]["option_clicked"] is True
 
+
+
+# --- a press that raised is the last one (review of #119) ---------------------
+
+class _Candidate:
+    """A period option a click may land on, which raises when told to."""
+
+    def __init__(self, raises=False):
+        self.raises, self.clicks = raises, 0
+
+    def is_visible(self):
+        return True
+
+    def scroll_into_view_if_needed(self, timeout=None):
+        pass
+
+    def click(self, timeout=None):
+        self.clicks += 1
+        if self.raises:
+            raise RuntimeError("invented, after the press reached the page")
+
+
+class _Candidates:
+    def __init__(self, elements):
+        self.elements = elements
+
+    def count(self):
+        return len(self.elements)
+
+    def nth(self, i):
+        return self.elements[i]
+
+
+def test_click_text_presses_nothing_more_after_a_click_that_raised():
+    """A click that raised may have reached the page, so neither the next
+    option of those words nor an element of the same words found by its
+    text is pressed for it."""
+    first, second, by_text = _Candidate(raises=True), _Candidate(), _Candidate()
+
+    class Page:
+        def get_by_role(self, role, name=None):
+            return _Candidates([first, second] if role == "option" else [])
+
+        def get_by_text(self, pat):
+            return _Candidates([by_text])
+
+    unsure: list = []
+    assert site._click_text(Page(), "2022", unsure) is False
+    assert (first.clicks, second.clicks, by_text.clicks, unsure) == (1, 0, 0, ["2022"])
+
+
+def test_choose_period_opens_the_picker_again_only_when_nothing_was_pressed(monkeypatch):
+    pressed: list = []
+
+    class Picker:
+        def click(self, timeout=None):
+            pressed.append("picker")
+
+    class Page:
+        def evaluate(self, *a, **k):
+            return 0
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def on(self, *a):
+            pass
+
+        def remove_listener(self, *a):
+            pass
+
+        class keyboard:
+            @staticmethod
+            def press(k):
+                pressed.append(k)
+
+    def raised(page, choice, unsure=None):
+        unsure.append(choice)
+        return False
+    monkeypatch.setattr(site, "_click_text", raised)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (Picker(), "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    trace: list = []
+    assert site._choose_period(Page(), "2022", [], trace, already_open=True) is False
+    assert pressed == ["Escape"] and trace[0]["outcome"] == "option not found"
