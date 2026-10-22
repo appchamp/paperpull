@@ -3380,9 +3380,15 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
     # nothing changes nothing. Asked again in the stream with nothing awaited,
     # so two tabs pressing at once may both get here, and both write the
     # same folder.
-    documents_said = (_documents_before_run(apps, app, account)
-                      if not blocked and not _IMPORTING.locked() and (app, account) not in _RUNS
-                      else [])
+    documents_said = []
+    if not blocked and not _IMPORTING.locked() and (app, account) not in _RUNS:
+        try:
+            documents_said = _documents_before_run(apps, app, account)
+        except Exception as e:
+            # Never the reason a run does not start. Its documents go where
+            # its config already says.
+            documents_said = ["Documents stay where they were, since the folder for every "
+                              "provider could not be applied (%s)." % type(e).__name__]
 
     if blocked:
         # Said here rather than let the app start under an interpreter
@@ -3761,26 +3767,36 @@ def _write_config(cfg_path: Path, key: str, value: str, stamp: str,
         current[key] = value
     else:
         current.pop(key, None)
-    bak = cfg_path.parent / "Backups" / ("%s-%s" % (why, stamp)) / cfg_path.name
-    was = [os.path.lexists(p) for p in (bak, bak.parent, bak.parent.parent)]
+    # A copy of its own, never one an earlier write in the same second kept.
+    folder, n = cfg_path.parent / "Backups" / ("%s-%s" % (why, stamp)), 1
+    while os.path.lexists(folder / cfg_path.name):
+        n += 1
+        folder = cfg_path.parent / "Backups" / ("%s-%s-%d" % (why, stamp, n))
+    bak = folder / cfg_path.name
+    was = [os.path.lexists(p) for p in (folder, folder.parent)]
     try:
-        _make_folder(bak.parent)
+        _make_folder(folder)
         _copy_file(cfg_path, bak)
         _replace_text(cfg_path, json.dumps(current, indent=2) + "\n")
     except OSError:
         # The config is as it was, so what was made for its copy goes again,
         # or a config that cannot be written would gain a copy each time it
-        # is tried, as the documents folder is before a run.
-        for path, there in zip((bak, bak.parent, bak.parent.parent), was):
-            if there:
-                break
+        # is tried, as the documents folder is before a run. Not on
+        # PaperPull Server, where a folder of the share may be a link by now
+        # and nothing is ever taken away through one.
+        if not server_mode.enabled():
             try:
-                if path == bak:
-                    path.unlink(missing_ok=True)
-                else:
-                    path.rmdir()
+                if os.path.lexists(bak):
+                    # A copy of a read-only config is read-only too, and
+                    # Windows will not delete a read-only file.
+                    os.chmod(bak, stat.S_IREAD | stat.S_IWRITE)
+                    bak.unlink()
+                for made, there in zip((folder, folder.parent), was):
+                    if there:
+                        break
+                    made.rmdir()
             except OSError:
-                break
+                pass
         return False
     return True
 
@@ -3932,9 +3948,18 @@ def _account_config(meta: dict, account: str) -> Path:
                                 else "config.%s.json" % account)
 
 
+def _config_of(meta: dict, account: str) -> dict:
+    """An account's config, or {} for one that is missing, is not JSON or
+    holds something other than an object, a list or a number written by
+    hand or left in the shared folder, so one such file stops nothing that
+    reads the others."""
+    cfg = _read_json(_account_config(meta, account))
+    return cfg if isinstance(cfg, dict) else {}
+
+
 def _documents_of(meta: dict, account: str) -> str:
     """The documents folder an account's config names, or ""."""
-    value = (_read_json(_account_config(meta, account)) or {}).get(DOCUMENTS_KEY)
+    value = _config_of(meta, account).get(DOCUMENTS_KEY)
     return value if isinstance(value, str) else ""
 
 
@@ -3957,7 +3982,7 @@ def _profiles_known(apps: dict) -> list:
     for meta in apps.values():
         install = Path(meta["dir"])
         for account in meta["accounts"]:
-            profile = (_read_json(_account_config(meta, account)) or {}).get("profile_dir")
+            profile = _config_of(meta, account).get("profile_dir")
             if isinstance(profile, str) and profile.strip():
                 path = Path(profile.strip())
                 out.append(path if path.is_absolute() else install / path)
@@ -4033,7 +4058,7 @@ def _follows_root(meta: dict, account: str, root: str) -> bool:
     """Whether an account's documents folder follows the one documents
     folder, its config naming none or the folder the root gives it. Any
     other value, "" for its own folder included, is one set for it alone."""
-    cfg = _read_json(_account_config(meta, account)) or {}
+    cfg = _config_of(meta, account)
     if DOCUMENTS_KEY not in cfg:
         return True
     value = cfg[DOCUMENTS_KEY]
@@ -4108,9 +4133,35 @@ def _in_root_problem(apps: dict, app_name: str, account: str, root: str):
                 continue
             theirs = Path(_documents_for(other, other_account, root)).name
             if _in_root_name(theirs) == _in_root_name(name):
-                return ("%s would get that folder too, so give one of them a folder of their "
-                        "own first." % _who(other_name, other_account))
+                return ("%s would get that same folder, and no two providers or people share "
+                        "one." % _who(other_name, other_account))
+            # A folder set for another alone, before the one documents
+            # folder was, that is this folder or inside it.
+            own = _documents_of(other, other_account)
+            if own and Path(own).is_absolute() and _within(own, want):
+                return ("%s has that folder, or one inside it, as a folder of their own. Choose "
+                        "another folder for them first." % _who(other_name, other_account))
     return _documents_problem(apps, app_name, account, want)
+
+
+def _own_in_root_problem(apps: dict, app_name: str, account: str, folder: str, root: str):
+    """Why a folder set for one account alone cannot be used while the one
+    documents folder is set, or None. It may not be that folder itself,
+    where every provider's folder is, nor another provider's or person's
+    folder inside it, or a folder inside that one."""
+    if not root:
+        return None
+    if _within(folder, root) and _within(root, folder):
+        return ("That is the folder for every provider itself. Use the folder for every "
+                "provider gives this one its folder inside it, or choose another folder.")
+    for other_name, other in apps.items():
+        for other_account in other.get("accounts", ()):
+            if (other_name, other_account) != (app_name, account) and \
+                    _within(folder, _documents_for(other, other_account, root)):
+                return ("That folder is %s's folder inside the folder for every provider, or "
+                        "inside it. Choose a folder of their own."
+                        % _who(other_name, other_account))
+    return None
 
 
 def _sync_documents(apps: dict, old: str, only=None, force: bool = False,
@@ -4362,19 +4413,33 @@ async def api_documents_save(request: Request):
     folder, is its own folder, kept as that even when a documents folder is
     set. Nothing is moved."""
     body = await _folder_body(request)
+    # Off the event loop, since every account's config is read and a folder
+    # on a share that does not answer would hold every other request.
+    return await to_thread.run_sync(_save_account_documents, body)
+
+
+def _save_account_documents(body: dict) -> dict:
     folder = body["folder"]
     app_name, account = str(body.get("app") or ""), str(body.get("account") or "primary")
     apps, meta, root = _documents_account(app_name, account)
     docs_root = _documents_root()
-    if body.get("follow") is True:
+    follow = body.get("follow") is True
+    if follow:
         folder = _documents_for(meta, account, docs_root)
     elif folder and Path(folder).is_absolute() and _within(folder, root) and _within(root, folder):
         # The account's own folder, where its documents go already.
         folder = ""
-    if folder:
-        problem = _documents_problem(apps, app_name, account, folder)
+    if folder and follow:
+        problem = _in_root_problem(apps, app_name, account, docs_root)
+        if problem:
+            raise HTTPException(400, "%s would get %s inside the folder for every provider. %s"
+                                % (_who(app_name, account), folder, problem))
+    elif folder:
+        problem = (_documents_problem(apps, app_name, account, folder)
+                   or _own_in_root_problem(apps, app_name, account, folder, docs_root))
         if problem:
             raise HTTPException(400, problem)
+    if folder:
         folder = os.path.normpath(folder)
     cfg_path = _account_config(meta, account)
     if not cfg_path.is_file():
@@ -4399,8 +4464,16 @@ async def api_documents_root_save(request: Request):
     saved, the one whose accounts with a folder of their own the page
     listed before it was pressed."""
     body = await _folder_body(request)
-    folder = body["folder"]
-    apply_all = body.get("all") is True
+    # Off the event loop, as an account's own folder is (_save_account_documents).
+    return await to_thread.run_sync(_save_documents_root, body["folder"], body.get("all") is True)
+
+
+def _save_documents_root(folder: str, apply_all: bool) -> dict:
+    if _IMPORTING.locked():
+        # An import fills in the configs it sets up, and the two would each
+        # write a config the other had just read.
+        raise HTTPException(409, "A history file is being imported. Save this once it has "
+                                 "finished.")
     if apply_all and (not folder or os.path.normpath(folder) != _documents_root()):
         raise HTTPException(409, "Save that folder first. Use it for every provider gives every "
                                  "provider and person a folder inside the folder saved.")

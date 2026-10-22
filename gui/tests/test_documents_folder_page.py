@@ -691,3 +691,112 @@ def test_on_the_server_the_folder_and_each_folder_in_it_stay_in_the_data_folder(
     d = save_root(str(data / "Documents"))
     assert d["configs"] == 3, d
     assert config(apps["Target Receipts"])["documents_dir"] == str(left)
+
+
+# -- the fresh review of the merged branch ------------------------------------
+#
+# One person's own folder is never the folder for every provider itself,
+# nor another's folder in it, and following it is judged as the save is. A
+# read-only config keeps no copy on Windows either, and on PaperPull Server
+# nothing is taken away. A config that is no JSON object stops nothing
+# else. Two writes of one config in one second keep two copies, and the
+# folder is not saved while a history file is being imported.
+
+@pytest.mark.parametrize("where", ["the folder itself", "another's folder", "inside another's"])
+def test_a_folder_of_their_own_is_never_another_ones_in_it(apps, tmp_path, where):
+    docs = tmp_path / "Drive"
+    save_root(str(docs))
+    folder = {"the folder itself": docs,
+              "another's folder": docs / "Target Receipts",
+              "inside another's": docs / "target receipts" / "Chase"}[where]
+    with pytest.raises(HTTPException) as e:
+        save({"app": "Chase Statements", "folder": str(folder)})
+    assert e.value.status_code == 400, e.value.detail
+    assert config(apps["Chase Statements"])["documents_dir"] == str(docs / "Chase Statements")
+    # Its own folder in it, the one the field is filled in with, still saves.
+    assert save({"app": "Chase Statements", "account": "spouse",
+                 "folder": str(docs / "Chase Statements - spouse")})["follows"]
+
+
+def test_following_the_folder_is_judged_as_saving_it_is(apps, tmp_path):
+    docs = tmp_path / "Drive"
+    save({"app": "Chase Statements", "account": "spouse", "folder": ""})
+    save_root(str(docs))
+    save({"app": "Chase Statements", "account": "spouse", "folder": ""})
+    other = install(tmp_path / "Elsewhere", "Chase Statements - spouse")
+    app_module.discover_apps()["Chase Statements - spouse"] = {
+        "name": "Chase Statements - spouse", "dir": str(other), "accounts": ["primary"]}
+    with pytest.raises(HTTPException) as e:
+        save({"app": "Chase Statements", "account": "spouse", "follow": True})
+    assert "same folder" in e.value.detail, e.value.detail
+    assert config(apps["Chase Statements"], "config.spouse.json")["documents_dir"] == ""
+
+
+def test_a_folder_set_before_that_another_would_get_in_it_is_refused(apps, tmp_path):
+    docs = tmp_path / "Drive"
+    save({"app": "Chase Statements", "account": "spouse", "folder": str(docs / "Target Receipts")})
+    with pytest.raises(HTTPException) as e:
+        save_root(str(docs))
+    assert "Target Receipts" in e.value.detail and "Chase Statements, spouse" in e.value.detail
+    assert app_module._documents_root() == ""
+
+
+def test_a_read_only_config_keeps_no_copy(apps, tmp_path, monkeypatch):
+    """A copy made with copy2 is read-only too, and Windows will not delete
+    one until that is taken off. The write itself is refused here, since
+    POSIX replaces a read-only file in a folder it may write."""
+    import stat
+    cfg = apps["Target Receipts"] / "config.json"
+    os.chmod(cfg, stat.S_IREAD)
+    try:
+        monkeypatch.setattr(app_module, "_replace_text",
+                            lambda path, text: (_ for _ in ()).throw(PermissionError("read-only")))
+        assert "Target Receipts" in save_root(str(tmp_path / "Drive"))["missed"]
+        assert not (apps["Target Receipts"] / "Backups").exists()
+    finally:
+        os.chmod(cfg, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_on_the_server_nothing_is_taken_away_when_a_write_fails(apps, tmp_path, monkeypatch):
+    data = apps["Chase Statements"].parent
+    monkeypatch.setattr(app_module.server_mode, "enabled", lambda: True)
+    monkeypatch.setattr(app_module.server_mode, "data_root", lambda: data)
+    monkeypatch.setenv("PAPERPULL_PROFILES", str(tmp_path / "profiles"))
+
+    def refuse(path, text):
+        raise PermissionError("read-only")
+    monkeypatch.setattr(app_module, "_replace_text", refuse)
+    save_root(str(data / "Documents"))
+    assert list((apps["Target Receipts"] / "Backups").glob("documents-*/config.json"))
+
+
+@pytest.mark.parametrize("held", ["[1]", "5", '"text"'])
+def test_a_config_that_is_no_object_stops_nothing_else(apps, tmp_path, held):
+    """In another install, as one left in the shared folder could be."""
+    (apps["Target Receipts"] / "config.kid.json").write_text(held, encoding="utf-8")
+    metas = app_module.discover_apps()
+    metas["Target Receipts"]["accounts"] = app_module._accounts(apps["Target Receipts"])
+    docs = tmp_path / "Drive"
+    assert save_root(str(docs))["configs"] == 3
+    assert app_module.api_documents("Chase Statements")["documents_root"] == str(docs)
+    assert app_module._documents_before_run(metas, "Chase Statements", "primary") == []
+
+
+def test_two_writes_of_one_config_in_one_second_keep_two_copies(apps):
+    cfg = apps["Target Receipts"] / "config.json"
+    assert app_module._write_config(cfg, "documents_dir", "A", "20260101-000000", why="documents")
+    assert app_module._write_config(cfg, "documents_dir", "B", "20260101-000000", why="documents")
+    kept = sorted(json.loads(p.read_text("utf-8")).get("documents_dir", "")
+                  for p in (apps["Target Receipts"] / "Backups").glob("documents-*/config.json"))
+    assert kept == ["", "A"]
+
+
+def test_the_folder_is_not_saved_while_a_history_file_is_imported(apps, tmp_path):
+    app_module._IMPORTING.acquire()
+    try:
+        with pytest.raises(HTTPException) as e:
+            save_root(str(tmp_path / "Drive"))
+    finally:
+        app_module._IMPORTING.release()
+    assert e.value.status_code == 409
+    assert app_module._documents_root() == ""
