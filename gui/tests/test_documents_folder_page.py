@@ -530,10 +530,13 @@ def test_a_root_that_cannot_hold_documents_is_refused(apps, where, says):
 #
 # A run fills in a person's folder in the one documents folder only when
 # their config names no documents folder at all, only for a run that
-# starts, and says so in its output. A config that cannot be written keeps
-# no copy and is named. Each folder in it is one folder's name, never
+# starts, and says so in its output. Use it for every provider names each
+# folder it would replace before it is pressed, and applies the folder
+# saved, the one that list was made for. A config that cannot be written
+# keeps no copy and is named. Each folder in it is one folder's name, never
 # shared by two providers or people, and on PaperPull Server it stays in
 # the data folder, a link left in its place included.
+
 def _drive(tmp_path: Path) -> Path:
     """A documents folder beside the started stand-in's install."""
     return tmp_path.parent / (tmp_path.name + " Drive")
@@ -598,6 +601,31 @@ def test_a_config_that_cannot_be_written_keeps_no_copy_and_is_named(apps, tmp_pa
         assert app_module._sync_documents(app_module.discover_apps(), d["documents_root"]) == 0
     for folder in apps.values():
         assert not (folder / "Backups").exists(), list((folder / "Backups").rglob("*"))
+
+
+def test_using_it_for_every_provider_names_each_folder_it_replaces_first(apps, tmp_path):
+    chase, target = apps["Chase Statements"], apps["Target Receipts"]
+    own = tmp_path / "Spouse Watched"
+    save({"app": "Chase Statements", "account": "spouse", "folder": str(own)})
+    docs = tmp_path / "Drive"
+    assert save_root(str(docs))["own"] == [
+        {"who": "Chase Statements, spouse", "folder": str(own)}]
+    save({"app": "Target Receipts", "folder": ""})
+    got = app_module.api_documents("Chase Statements")
+    assert got["own"] == [{"who": "Chase Statements, spouse", "folder": str(own)},
+                          {"who": "Target Receipts", "folder": ""}]
+    assert got["unfollowed"] == 2
+    # Only for the folder saved, whose list the page showed.
+    with pytest.raises(HTTPException) as e:
+        save_root(str(tmp_path / "Elsewhere"), all=True)
+    assert e.value.status_code == 409, e.value.detail
+    assert config(chase, "config.spouse.json")["documents_dir"] == str(own)
+    assert app_module._documents_root() == str(docs)
+    d = save_root(str(docs), all=True)
+    assert d["configs"] == 2 and d["own"] == [] and d["unfollowed"] == 0
+    assert config(target)["documents_dir"] == str(docs / "Target Receipts")
+    kept = list((chase / "Backups").glob("documents-*/config.spouse.json"))
+    assert str(own) in [json.loads(k.read_text("utf-8")).get("documents_dir") for k in kept]
 
 
 def test_two_that_would_share_a_folder_in_it_are_refused(apps, tmp_path):

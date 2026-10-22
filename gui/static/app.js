@@ -1864,10 +1864,14 @@ function renderSettings() {
 }
 // The documents folder (#102). One folder for every provider, each provider's
 // person given a folder of their own inside it, or one of their own set here,
-// which the panel writes into that person's config. Saving moves nothing. Documents saved before stay where
-// they are until Move, which is the app's own Rename, offered only once a
-// preview of the same person has finished cleanly.
+// which the panel writes into that person's config. Saving moves nothing.
+// Documents saved before stay where they are until Move, which is the app's
+// own Rename, offered only once a preview of the same person has finished
+// cleanly.
 let DC_PREVIEWED = false;
+// The folder for every provider as saved, the one Use it for every provider
+// applies, since the list beside it is of the folders it would replace there.
+let DR_ROOT = '';
 function dcPick() {
   const [app, account] = ($('dcpick').value || '').split('\n');
   return app ? {app, account: account || 'primary'} : null;
@@ -1900,18 +1904,28 @@ async function dcLoad() {
   try { d = await (await fetch('/api/documents?' + new URLSearchParams(p))).json(); }
   catch (e) { return; }
   if (!d || d.detail) { $('dcnow').textContent = (d && d.detail) || ''; return; }
+  DR_ROOT = d.documents_root || '';
   $('drnow').textContent = d.documents_root ? 'Every provider’s documents go to ' + d.documents_root + ', unless one has a folder of their own.'
     : 'No folder for every provider. Each provider keeps its documents in its own folder, or one of their own set below.';
   if (document.activeElement !== $('drinput')) $('drinput').value = d.documents_root || '';
   $('drclear').hidden = !d.documents_root;
-  $('dcnow').textContent = !d.documents_dir ? 'Documents and records both go to ' + d.output_dir + '.'
-    : (d.follows ? 'From the folder for every provider, documents' : 'Set for them alone, documents') +
-      ' go to ' + d.documents_dir + '. Records stay in ' + d.output_dir + '.';
+  $('dcnow').textContent = d.documents_dir
+    ? (d.follows ? 'From the folder for every provider, documents' : 'Set for them alone, documents') +
+      ' go to ' + d.documents_dir + '. Records stay in ' + d.output_dir + '.'
+    // One added since the folder was saved gets it as its next run starts.
+    : d.follows && d.in_root ? 'From the folder for every provider, documents go to ' + d.in_root +
+      ' from their next run. Records stay in ' + d.output_dir + '.'
+    : 'Documents and records both go to ' + d.output_dir + '.';
   if (document.activeElement !== $('dcinput')) $('dcinput').value = d.documents_dir || '';
   const isUnix = SERVER || Boolean(META.apps_root && META.apps_root.startsWith('/'));
   $('dcinput').placeholder = d.in_root || (SERVER ? '/data/Documents' : (isUnix ? '/Users/you/Documents/Statements' : 'C:\\Users\\you\\Documents\\Statements'));
   $('dcfollow').hidden = !d.documents_root || d.follows;
-  if ($('drapplyall')) $('drapplyall').hidden = !d.documents_root || !d.unfollowed;
+  // Each one Use it for every provider would change, named before it is pressed.
+  const own = d.documents_root ? (d.own || []) : [];
+  $('drown').hidden = !own.length;
+  $('drownlist').innerHTML = own.map(o => '<li>' + esc(o.who) + ' keeps ' +
+    esc(o.folder || 'the folder its records are in') + '</li>').join('');
+  $('drapplyall').hidden = !own.length;
   $('dcleft').hidden = !d.left;
   $('dclefttext').textContent = !d.left ? ''
     : d.documents_dir ? many(d.left, 'document') + (d.left === 1 ? ' is' : ' are') + ' not in ' +
@@ -1923,7 +1937,7 @@ async function dcLoad() {
 async function drSave(how) {
   const clear = how === 'clear';
   const applyAll = how === 'all';
-  const folder = clear ? '' : $('drinput').value.trim();
+  const folder = clear ? '' : applyAll ? DR_ROOT : $('drinput').value.trim();
   $('drmsg').textContent = '';
   if (!clear && !folder) { $('drmsg').textContent = 'Paste the folder path first, or use each provider’s own folder.'; return; }
   let d;
@@ -1939,12 +1953,18 @@ async function drSave(how) {
     $('drmsg').textContent = 'Nothing to change.';
     return;
   }
-  let msg = 'Saved. ';
-  if (d.unfollowed > 0) {
-    msg += many(d.following, 'provider and person', 'providers and people') + (d.following === 1 ? ' follows' : ' follow') +
-      ' it now. ' + many(d.unfollowed, 'provider has', 'providers have') + ' a folder of their own.';
-  } else {
-    msg += 'All ' + many(d.following, 'provider and person', 'providers and people') + (d.following === 1 ? ' follows' : ' follow') + ' it now.';
+  const own = d.own || [];
+  let msg = 'Saved. ' + (own.length
+    ? many(d.following, 'provider and person follows', 'providers and people follow') + ' it now, and ' +
+      many(own.length, 'keeps', 'keep') + ' a folder of their own, listed below.'
+    : !d.following ? 'Each provider and person gets their folder inside it as their first run starts.'
+    : d.following === 1 ? 'The one provider and person follows it now.'
+    : 'All ' + d.following + ' providers and people follow it now.');
+  if (applyAll && d.configs) {
+    msg += ' The folder each had before is in a copy of its config, in its provider’s Backups folder.';
+  }
+  if (d.missed && d.missed.length) {
+    msg += ' The config of ' + d.missed.join(' and of ') + ' could not be written, and is as it was.';
   }
   $('drmsg').textContent = msg;
 }

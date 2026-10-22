@@ -4041,11 +4041,15 @@ def _follows_root(meta: dict, account: str, root: str) -> bool:
         os.path.normpath(value) == _documents_for(meta, account, root)
 
 
-def _documents_counts(apps: dict, root: str) -> tuple[int, int]:
-    """(following, unfollowed) count of configured accounts under root."""
-    following, unfollowed = 0, 0
+def _documents_counts(apps: dict, root: str) -> tuple[int, list]:
+    """How many configured accounts follow the one documents folder, and
+    each that keeps a folder of its own instead, by the name the page gives
+    it and the folder its config names, "" for the folder its records are
+    in. Those are what Use it for every provider replaces, so the page
+    lists them before it is pressed."""
+    following, own = 0, []
     if not root:
-        return 0, 0
+        return 0, []
     for name, meta in apps.items():
         for account in meta.get("accounts", ()):
             cfg_path = _account_config(meta, account)
@@ -4054,8 +4058,8 @@ def _documents_counts(apps: dict, root: str) -> tuple[int, int]:
             if _follows_root(meta, account, root):
                 following += 1
             else:
-                unfollowed += 1
-    return following, unfollowed
+                own.append({"who": _who(name, account), "folder": _documents_of(meta, account)})
+    return following, own
 
 
 def _documents_root_problem(apps: dict, root: str, force: bool = False):
@@ -4318,13 +4322,14 @@ def _documents_answer(meta: dict, account: str, root: Path, apps: dict = None) -
     docs_root = _documents_root()
     if apps is None:
         apps = discover_apps()
-    following, unfollowed = _documents_counts(apps, docs_root)
+    following, own = _documents_counts(apps, docs_root)
     return {"documents_dir": _documents_of(meta, account), "output_dir": str(root),
             "documents_root": docs_root,
             "follows": bool(docs_root) and _follows_root(meta, account, docs_root),
             "in_root": _documents_for(meta, account, docs_root),
             "following": following,
-            "unfollowed": unfollowed,
+            "unfollowed": len(own),
+            "own": own,
             "left": _documents_left(meta, account),
             "kept": list(KEPT_FOLDERS)}
 
@@ -4390,10 +4395,15 @@ async def api_documents_root_save(request: Request):
     config, a copy of each config kept in Backups first. An account with a
     folder of its own keeps it, unless "all" is True to apply it to all
     accounts. Every following account's folder has to pass, or nothing is
-    saved. Nothing is moved."""
+    saved. Nothing is moved. "all" is taken only with the folder already
+    saved, the one whose accounts with a folder of their own the page
+    listed before it was pressed."""
     body = await _folder_body(request)
     folder = body["folder"]
     apply_all = body.get("all") is True
+    if apply_all and (not folder or os.path.normpath(folder) != _documents_root()):
+        raise HTTPException(409, "Save that folder first. Use it for every provider gives every "
+                                 "provider and person a folder inside the folder saved.")
     apps = discover_apps()
     if folder:
         problem = _documents_root_problem(apps, folder, force=apply_all)
@@ -4412,10 +4422,10 @@ async def api_documents_root_save(request: Request):
         raise HTTPException(500, "could not save the folder: %s" % e)
     missed = []
     written = _sync_documents(apps, old, force=apply_all, missed=missed)
-    following, unfollowed = _documents_counts(apps, folder)
+    following, own = _documents_counts(apps, folder)
     return {"documents_root": folder, "written": old != folder or bool(written),
-            "configs": written, "following": following, "unfollowed": unfollowed,
-            "missed": missed}
+            "configs": written, "following": following, "unfollowed": len(own),
+            "own": own, "missed": missed}
 
 
 # -- the terms of use ---------------------------------------------------------

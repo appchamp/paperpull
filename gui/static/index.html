@@ -282,8 +282,13 @@ __CSS__
         One given a folder of its own below keeps it.</p>
       <div class="row-actions"><button class="btn btn-s" type="button" data-do="dr-save">Save</button>
         <button class="btn btn-ghost" type="button" id="drclear" data-do="dr-clear">Use each provider's own folder</button>
-        <button class="btn btn-ghost" type="button" id="drapplyall" data-do="dr-apply-all" hidden>Use for all providers</button>
+        <button class="btn btn-ghost" type="button" id="drapplyall" data-do="dr-apply-all" hidden>Use it for every provider</button>
         <span class="hint" id="drmsg" role="status"></span></div>
+      <div id="drown" class="stack" hidden>
+        <p class="hint">These keep a folder of their own. Use it for every provider gives each of them their folder
+          inside it instead, a copy of their config kept in the provider's Backups folder first. Nothing is moved.</p>
+        <ul class="mono small" id="drownlist" style="word-break:break-all;margin:0;padding-left:20px"></ul>
+      </div>
       <label class="field" for="dcpick">Provider and person<select id="dcpick"></select></label>
       <p class="mono small" id="dcnow" style="word-break:break-all"></p>
       <label class="field" for="dcinput">A folder of their own instead, as its full path</label>
