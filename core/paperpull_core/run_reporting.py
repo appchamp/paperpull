@@ -20,9 +20,11 @@ _MARK = re.compile(r"[0-9a-f]{32}")
 # What cannot be shown on one line of a run's output. A line feed or a
 # carriage return ends the line, the other control characters and the two
 # Unicode separators end it for str.splitlines or move a terminal about.
-# A tab is left as it is. gui/run_result.py keeps the same set, and
+# Half of a character, which a name that is not UTF-8 on Linux reads as,
+# cannot be written as UTF-8 at all. A tab is left as it is. gui/run_result.py keeps the same set, and
 # core/tests/test_one_line.py holds the two to it.
-_NOT_ONE_LINE = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f" + chr(0x2028) + chr(0x2029) + "]")
+_NOT_ONE_LINE = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f" + chr(0x2028) + chr(0x2029)
+                           + chr(0xd800) + "-" + chr(0xdfff) + "]")
 
 
 def one_line(text) -> str:

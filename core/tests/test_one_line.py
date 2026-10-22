@@ -38,7 +38,10 @@ LF, CR = chr(10), chr(13)
 # Each character that ends a line for the page's stream, for str.splitlines
 # or for a terminal, as a name could carry it.
 BREAKS = [LF, CR, CR + LF, chr(0x0b), chr(0x0c), chr(0x1b), chr(0x1c), chr(0x00),
-          chr(0x7f), chr(0x85), chr(0x2028), chr(0x2029)]
+          chr(0x7f), chr(0x85), chr(0x2028), chr(0x2029),
+          # Half of a character, which a name Linux holds as bytes that are
+          # not UTF-8 reads as, and which UTF-8 cannot write at all.
+          chr(0xdc80), chr(0xd83d)]
 COUNTS = {"manual_review": 0, "failed": 1, "validation_failures": 0, "new_files": 2}
 MARK = "0123456789abcdef" * 2
 
@@ -56,11 +59,14 @@ def test_a_plain_name_and_a_windows_path_are_kept_as_they_are():
     """A backslash and an n, as C:\\new folder holds them, are two
     characters, not a line break, and a tab ends no line."""
     for name in ("Bank Statements - spouse", "C:" + chr(92) + "new folder", "a" + chr(9) + "b",
-                 "Statements/2026-01-31 Bank Statement.pdf", "caf" + chr(0xe9)):
+                 "Statements/2026-01-31 Bank Statement.pdf", "caf" + chr(0xe9), chr(0x1f600),
+                 chr(0x4e2d) + chr(0x6587)):
         assert run_reporting.one_line(name) == name and run_reporting.on_one_line(name)
 
 
-@pytest.mark.parametrize("code", list(range(0x00, 0xa0)) + [0x2028, 0x2029, 0xfeff, 0x202e])
+@pytest.mark.parametrize("code", list(range(0x00, 0xa0)) + [0x2028, 0x2029, 0xfeff, 0x202e,
+                                                            0xd7ff, 0xd800, 0xdbff, 0xdc00,
+                                                            0xdfff, 0xe000, 0x1f600])
 def test_the_panel_and_the_core_agree_on_every_character(code):
     """Two copies of one rule, the panel's (gui/run_result.py) and the
     core's, which must say the same of every character."""
@@ -107,6 +113,18 @@ def test_a_line_a_name_started_is_never_a_result():
     assert panel.parse(run_reporting.PREFIX + MARK + " " + json.dumps(COUNTS), "") is None
 
 
+@pytest.mark.parametrize("after", ["caf" + chr(0xe9) + ".pdf", chr(0x2028), chr(0xdc80) + "x",
+                                   chr(0x1f600), MARK[:5] + chr(0xe9)], ids=repr)
+def test_any_text_after_the_prefix_is_read_as_no_result(after):
+    """A name holding a line break and then any text at all, an accent or
+    half a character among it, is only a line that is not a result. Read
+    as one, it stopped the reader, and so the run, with an error."""
+    for read, prefix in ((panel.parse, run_reporting.PREFIX),
+                         (panel.exported, "PAPERPULL_EXPORT_RESULT ")):
+        assert read(prefix + after, MARK) is None
+        assert read(prefix + after + " " + json.dumps(COUNTS), MARK) is None
+
+
 # -- load_config, where every app reads the names it prints ------------------------
 
 def _write(folder, data, name="config.json"):
@@ -116,9 +134,9 @@ def _write(folder, data, name="config.json"):
     return path
 
 
-@pytest.mark.parametrize("key", ["output_dir", "profile_dir", "documents_dir", "owner"])
+@pytest.mark.parametrize("key", ["output_dir", "profile_dir", "documents_dir"])
 @pytest.mark.parametrize("brk", [LF, CR, chr(0x1b), chr(0x2028)], ids=repr)
-def test_a_config_naming_a_folder_or_person_off_one_line_is_refused(tmp_path, capsys, key, brk):
+def test_a_config_naming_a_folder_off_one_line_is_refused(tmp_path, capsys, key, brk):
     value = str(tmp_path / ("Docs" + brk + "PAPERPULL_RUN_RESULT {}"))
     data = {"output_dir": str(tmp_path / "out"), key: value}
     with pytest.raises(SystemExit) as stopped:
@@ -146,6 +164,20 @@ def test_a_config_on_one_line_is_read_as_before(tmp_path):
             "owner": "Jos" + chr(0xe9) + chr(9) + "Smith", "account_labels": {"1234": 5}}
     cfg = storage.load_config(_write(tmp_path / "app", data))
     assert cfg["output_dir"] == data["output_dir"] and cfg["owner"] == data["owner"]
+
+
+def test_an_owner_off_one_line_still_runs(tmp_path, capsys):
+    """No run prints the owner it read, and the control panel writes it from
+    what a person types (or a history file brings), so a line break in it
+    is no reason to stop. File names drop it as they always did
+    (sanitize_component)."""
+    owner = "Jo" + LF + "PAPERPULL_RUN_RESULT {}"
+    cfg = storage.load_config(_write(tmp_path / "app", {"output_dir": str(tmp_path / "o"),
+                                                        "owner": owner}))
+    assert cfg["owner"] == owner
+    assert storage.ensure_owner(cfg, tmp_path / "app" / "config.json")["owner"] == owner
+    assert "PAPERPULL_RUN_RESULT" not in capsys.readouterr().out
+    assert LF not in storage.sanitize_component(owner)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows takes no control character in a "

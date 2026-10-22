@@ -3967,6 +3967,11 @@ def _documents_problem(apps: dict, app_name: str, account: str, folder: str):
     never a folder holding a provider's own folder, and never inside the
     folder another account keeps its records in. On PaperPull Server it has
     to be inside the data folder, where its links lead."""
+    # A run refuses a config naming such a folder (core load_config), since
+    # it prints its folders, so the panel never saves one.
+    if not run_result.on_one_line(folder):
+        return ("A folder's path has to be one line of plain text, with no line break "
+                "or other control character in it.")
     if not Path(folder).is_absolute():
         return "Give the folder's full path, starting with a drive letter or a /."
     target = Path(os.path.normpath(folder))

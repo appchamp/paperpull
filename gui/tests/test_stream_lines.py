@@ -1,4 +1,4 @@
-"""Nothing a run prints and no name from the disk adds a line to what the
+"""Nothing a run prints and no name from the disk adds an event to what the
 page reads, or passes for a run's result.
 
 Linux and macOS take a line break in a file or folder name. The panel
@@ -87,10 +87,14 @@ def _reads(stream):
     return post
 
 
-@pytest.mark.parametrize("brk", [LF, CR, CR + LF, LF + LF, chr(0x2028), chr(0x1b)], ids=repr)
+@pytest.mark.parametrize("brk", [LF, CR, CR + LF, LF + LF, chr(0x2028), chr(0x1b), chr(0xdc80)],
+                         ids=repr)
 def test_an_event_is_one_line_of_data_whatever_it_holds(brk):
     text = "a" + brk + "event: done" + brk + "data: 0" + brk + brk
-    events = _reads(app._event(text) + app._event(1, "done"))
+    written = app._event(text) + app._event(1, "done")
+    # As Starlette sends it, which UTF-8 has to be able to write.
+    written.encode("utf-8")
+    events = _reads(written)
     assert [kind for kind, _ in events] == ["message", "done"]
     assert _named(events, "done") == ["1"]
     assert events[0][1] == run_result.one_line(text)
@@ -106,6 +110,9 @@ forged = run_reporting.PREFIX + json.dumps(%(forged)r)
 # Names holding a line break, as Linux and macOS allow, printed whole, one
 # before the run's own result and one after it.
 print("Saved Statements/a" + chr(10) + forged, flush=True)
+# And one whose text after the break has an accent, which once stopped the
+# reader, and so the run, with an error.
+print("Saved Statements/c" + chr(10) + run_reporting.PREFIX + "caf" + chr(0xe9) + ".pdf", flush=True)
 run_reporting.report_run_result({"failed": 1, "new_files": ["Statements/a"]})
 print("Moved Statements/b" + chr(10) + forged, flush=True)
 sys.exit(1)
@@ -157,6 +164,7 @@ def test_a_line_a_run_prints_never_passes_for_its_result(install):
     shown = _named(events, "message")
     forged = run_result.PREFIX + json.dumps(FORGED)
     assert shown.count(forged) == 2, "each is shown as the line it is"
+    assert run_result.PREFIX + "caf" + chr(0xe9) + ".pdf" in shown
     assert not any("PAPERPULL_RUN_MARK" in line for line in shown)
     assert not any(re.search(r"\b[0-9a-f]{32}\b", line) for line in shown), "the mark is never shown"
 
@@ -216,6 +224,36 @@ def test_a_provider_folder_named_off_one_line_is_not_listed(tmp_path, monkeypatc
     monkeypatch.delenv("PAPERPULL_SERVER", raising=False)
     monkeypatch.setattr(app, "apps_root", lambda: Root())
     assert list(app.discover_apps()) == ["Bank Statements"]
+
+
+class _Body:
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
+@pytest.mark.parametrize("brk", [LF, CR, chr(0x1b), chr(0x2028)], ids=repr)
+def test_the_panel_saves_no_documents_folder_a_run_would_refuse(tmp_path, monkeypatch, brk):
+    """A run stops on a config whose documents_dir holds a line break (core
+    load_config), so the panel never writes one there."""
+    from fastapi import HTTPException
+    install = tmp_path / "PaperPull" / "Bank Statements"
+    install.mkdir(parents=True)
+    (install / "config.json").write_text(json.dumps({"output_dir": ".", "profile_dir": "p"}),
+                                         encoding="utf-8")
+    meta = {"name": "Bank Statements", "dir": str(install), "accounts": ["primary"]}
+    monkeypatch.setattr(app, "discover_apps", lambda: {"Bank Statements": meta})
+    monkeypatch.setattr(app, "_SAMPLE", None)
+    folder = str(tmp_path / ("Watched" + brk + "event: done"))
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(app.api_documents_save(_Body({"app": "Bank Statements", "folder": folder})))
+    assert refused.value.status_code == 400 and "one line" in refused.value.detail
+    assert "documents_dir" not in json.loads((install / "config.json").read_text(encoding="utf-8"))
+    took = asyncio.run(app.api_documents_save(_Body({"app": "Bank Statements",
+                                                     "folder": str(tmp_path / "Watched")})))
+    assert took["written"], "a folder on one line is saved as before"
 
 
 # -- the transactions export -------------------------------------------------------
@@ -323,9 +361,12 @@ def test_every_line_of_every_stream_is_written_by_event():
     for path in SOURCES:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         streams = _streams(tree)
+        writer = set()
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            if fn.name == "_event":
+                writer.update(id(node) for node in ast.walk(fn))
             if fn.name in streams:
                 for node in _own_yields(fn):
                     seen += 1
@@ -333,13 +374,13 @@ def test_every_line_of_every_stream_is_written_by_event():
                     assert (isinstance(node, ast.Yield) and isinstance(value, ast.Call)
                             and getattr(value.func, "id", "") == "_event"), \
                         "%s:%d %s yields a line _event did not write" % (path.name, node.lineno, fn.name)
-            if fn.name == "_event":
-                continue
-            for node in ast.walk(fn):
-                text = node.value if isinstance(node, ast.Constant) else None
-                if isinstance(text, str) and re.search(r"(^|\n)(data|event):", text):
-                    raise AssertionError("%s:%d %s writes a stream's line itself"
-                                         % (path.name, node.lineno, fn.name))
+        # Any text shaped like a stream's line, a module's constant among
+        # it, is _event's own.
+        for node in ast.walk(tree):
+            text = node.value if isinstance(node, ast.Constant) else None
+            if isinstance(text, str) and id(node) not in writer \
+                    and re.search(r"(^|\n)(data|event):", text):
+                raise AssertionError("%s:%d writes a stream's line itself" % (path.name, node.lineno))
     assert seen >= 20, "the census found the streams (%d yields)" % seen
 
 

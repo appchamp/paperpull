@@ -140,10 +140,12 @@ def load_config(path: Optional[Path] = None) -> dict:
     return cfg
 
 
-# The settings that name a folder or a person, which a run prints and puts
-# in the paths it prints. account_labels, the name a person gave each
-# account, is looked through as well.
-_NAMED_SETTINGS = ("output_dir", "profile_dir", "documents_dir", "owner")
+# The settings that name a folder, which a run prints and puts in the paths
+# it prints. account_labels, the name a person gave each account, is looked
+# through as well, since it goes into what a run says of each document.
+# owner is not, since no run prints it (a name typed at the prompt is one
+# line), and the control panel writes it from what a person types.
+_NAMED_SETTINGS = ("output_dir", "profile_dir", "documents_dir")
 
 
 def _not_on_one_line(cfg, path) -> str:

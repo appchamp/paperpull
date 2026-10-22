@@ -28,9 +28,11 @@ OPTIONAL = ("wrong_document", "stopped", "name_review", "alike")
 SAID_ONLY = ("alike",)
 # What cannot be shown on one line, the same set as core run_reporting's
 # (core/tests/test_one_line.py holds the two to it). A line feed or a
-# carriage return would end a line of the stream the page reads, and the
-# rest end one for str.splitlines or move a terminal about.
-_NOT_ONE_LINE = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f" + chr(0x2028) + chr(0x2029) + "]")
+# carriage return would end a line of the stream the page reads, the
+# rest end one for str.splitlines or move a terminal about, and half of a
+# character cannot be sent as UTF-8 at all.
+_NOT_ONE_LINE = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f" + chr(0x2028) + chr(0x2029)
+                           + chr(0xd800) + "-" + chr(0xdfff) + "]")
 
 
 def one_line(text) -> str:
@@ -57,7 +59,10 @@ def _marked(line, prefix, mark):
     if not line.startswith(prefix):
         return None
     rest = line[len(prefix):]
-    if not hmac.compare_digest(rest[:len(mark) + 1], mark + " "):
+    # As bytes, since hmac takes text of ASCII alone and the line may hold
+    # any text at all, half of a character among it.
+    head = rest[:len(mark) + 1].encode("utf-8", "surrogatepass")
+    if not hmac.compare_digest(head, (mark + " ").encode("ascii")):
         return None
     try:
         data = json.loads(rest[len(mark) + 1:])
