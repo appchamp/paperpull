@@ -3371,6 +3371,12 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                                           "X-Accel-Buffering": "no"})
 
     blocked = setup_needed(meta)
+    if not blocked and account in meta.get("accounts", ()):
+        # The account's folder inside the one documents folder, written
+        # before it runs, so one added since the setting was saved has it.
+        root = _documents_root()
+        if root:
+            _sync_documents(apps, root, only=(app, account))
     cmd = (_review_cmd(meta, account) if review is not None
            else _build_cmd(meta, account, action, scope_flags, redownload))
 
@@ -3730,18 +3736,22 @@ def _naming_app(name: str) -> Path:
 
 
 def _write_config(cfg_path: Path, key: str, value: str, stamp: str,
-                  why: str = "naming") -> bool:
+                  why: str = "naming", keep_empty: bool = False) -> bool:
     """Set or clear one key, backed up first and written in one step, so a
     crash part way leaves the old file whole. The copy goes in
-    Backups/<why>-<stamp>."""
+    Backups/<why>-<stamp>. With keep_empty an empty value is written as
+    "", rather than the key taken out."""
     if not server_mode.own_file(cfg_path):
         return False
     current = _read_json(cfg_path)
     if not isinstance(current, dict):
         return False
-    if (current.get(key) or "") == value:
+    if keep_empty and not value:
+        if current.get(key) == "":
+            return False
+    elif (current.get(key) or "") == value:
         return False
-    if value:
+    if value or keep_empty:
         current[key] = value
     else:
         current.pop(key, None)
@@ -3870,12 +3880,22 @@ async def api_naming_save(request: Request):
 # Tax Documents, Receipts and the rest, to a folder of its own, one a program
 # such as Paperless may watch. Its records, Manual Review, Logs, Diagnostics
 # and Backups stay in its own folder, so nothing half checked reaches a
-# watched folder (core storage.Paths). The page writes documents_dir into
-# that account's config, a copy of the config kept first, and setting it
-# moves nothing. Documents saved before stay where they are, still found,
-# until the person moves them, which the app's own Rename does (ACTIONS).
+# watched folder (core storage.Paths). Setting it moves nothing. Documents
+# saved before stay where they are, still found, until the person moves
+# them, which the app's own Rename does (ACTIONS).
+#
+# The page sets one documents folder for every account, kept in the panel's
+# settings, and each account gets a folder of its own inside it, named as
+# its own folder is beside the install: "<install>" for the first person and
+# "<install> - <account>" for each other one. The panel writes that folder
+# into each account's config as documents_dir, a copy of the config kept
+# first, when the setting is saved and again before each run, so a provider
+# or person added later gets theirs too, and a run from a terminal finds the
+# same folder the panel would use.
 
 DOCUMENTS_KEY = "documents_dir"
+# The one documents folder, in the panel's settings.
+DOCUMENTS_ROOT_KEY = "documents_root"
 # The folders that stay in an account's own folder whatever its documents
 # folder says, as core storage keeps them (_KEPT_WITH_RECORDS).
 KEPT_FOLDERS = ("Manual Review", "Logs", "Diagnostics", "Backups")
@@ -3969,6 +3989,102 @@ def _documents_problem(apps: dict, app_name: str, account: str, folder: str):
                             "check or a run's own records are kept. Choose a folder of their "
                             "own." % first[0])
     return None
+
+
+def _documents_root() -> str:
+    """The one documents folder the page set, or "" for none."""
+    value = _read_settings().get(DOCUMENTS_ROOT_KEY)
+    return value if isinstance(value, str) else ""
+
+
+def _documents_for(meta: dict, account: str, root: str) -> str:
+    """The folder an account's documents go to inside the one documents
+    folder, named as its own folder is beside the install, or "" when no
+    documents folder is set."""
+    if not root:
+        return ""
+    name = meta["name"] if account == "primary" else "%s - %s" % (meta["name"], account)
+    return os.path.normpath(os.path.join(root, name))
+
+
+def _follows_root(meta: dict, account: str, root: str) -> bool:
+    """Whether an account's documents folder follows the one documents
+    folder, its config naming none or the folder the root gives it. Any
+    other value, "" for its own folder included, is one set for it alone."""
+    cfg = _read_json(_account_config(meta, account)) or {}
+    if DOCUMENTS_KEY not in cfg:
+        return True
+    value = cfg[DOCUMENTS_KEY]
+    return bool(root) and isinstance(value, str) and value != "" and \
+        os.path.normpath(value) == _documents_for(meta, account, root)
+
+
+def _documents_counts(apps: dict, root: str) -> tuple[int, int]:
+    """(following, unfollowed) count of configured accounts under root."""
+    following, unfollowed = 0, 0
+    if not root:
+        return 0, 0
+    for name, meta in apps.items():
+        for account in meta.get("accounts", ()):
+            cfg_path = _account_config(meta, account)
+            if not cfg_path.is_file():
+                continue
+            if _follows_root(meta, account, root):
+                following += 1
+            else:
+                unfollowed += 1
+    return following, unfollowed
+
+
+def _documents_root_problem(apps: dict, root: str, force: bool = False):
+    """Why a folder cannot be the one documents folder, or None. The folder
+    itself is judged as an account's would be, belonging to no account, so
+    it never holds or sits inside a provider's folder, an account's records
+    or a browser profile, and so is the folder of every account that
+    follows it."""
+    problem = _documents_problem(apps, "", "", root)
+    if problem:
+        return problem
+    old = _documents_root()
+    for name, meta in apps.items():
+        for account in meta.get("accounts", ()):
+            if not force and not _follows_root(meta, account, old):
+                continue
+            problem = _documents_problem(apps, name, account,
+                                         _documents_for(meta, account, root))
+            if problem:
+                who = name if account == "primary" else "%s, %s" % (name, account)
+                return "For %s: %s" % (who, problem)
+    return None
+
+
+def _sync_documents(apps: dict, old: str, only=None, force: bool = False) -> int:
+    """Give each account that follows the one documents folder, `old` being
+    the root it followed until now, its folder inside the root set now,
+    clearing it when none is set, and return how many configs changed. An
+    account with a folder of its own, or no config yet, is passed by,
+    unless `force` is True to apply the root to every account.
+    `only` is an (app, account) to write that one alone, as a run does
+    before it starts. One whose folder in the root is refused, a provider
+    installed inside the documents folder since it was saved for instance,
+    keeps what its config says."""
+    root = _documents_root()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    written = 0
+    for name, meta in apps.items():
+        for account in meta.get("accounts", ()):
+            if only is not None and (name, account) != only:
+                continue
+            cfg_path = _account_config(meta, account)
+            if not cfg_path.is_file():
+                continue
+            if not force and not _follows_root(meta, account, old):
+                continue
+            want = _documents_for(meta, account, root)
+            if want and _documents_problem(apps, name, account, want):
+                continue
+            written += _write_config(cfg_path, DOCUMENTS_KEY, want, stamp, why="documents")
+    return written
 
 
 def _documents_roots(root: Path) -> list:
@@ -4104,33 +4220,56 @@ def _documents_account(app_name: str, account: str):
     return apps, meta, root
 
 
-@app.get("/api/documents", dependencies=[Depends(_same_origin_only)])
-def api_documents(app: str, account: str = "primary"):
-    _apps, meta, root = _documents_account(app, account)
-    folder = _documents_of(meta, account)
-    return {"documents_dir": folder, "output_dir": str(root),
+def _documents_answer(meta: dict, account: str, root: Path, apps: dict = None) -> dict:
+    docs_root = _documents_root()
+    if apps is None:
+        apps = discover_apps()
+    following, unfollowed = _documents_counts(apps, docs_root)
+    return {"documents_dir": _documents_of(meta, account), "output_dir": str(root),
+            "documents_root": docs_root,
+            "follows": bool(docs_root) and _follows_root(meta, account, docs_root),
+            "in_root": _documents_for(meta, account, docs_root),
+            "following": following,
+            "unfollowed": unfollowed,
             "left": _documents_left(meta, account),
             "kept": list(KEPT_FOLDERS)}
 
 
-@app.post("/api/documents", dependencies=[Depends(_same_origin_only), Depends(_not_in_sample)])
-async def api_documents_save(request: Request):
-    """Set or clear one account's documents folder, in its own config, a
-    copy kept in Backups first. A folder that is the account's own folder
-    clears it, since documents go there already. Nothing is moved."""
+async def _folder_body(request: Request) -> dict:
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(400, "expected a JSON body")
     if not isinstance(body, dict):
         raise HTTPException(400, "expected a JSON object")
-    folder = body.get("folder")
+    folder = body.get("folder", "")
     if not isinstance(folder, str) or len(folder) > 1000:
         raise HTTPException(400, "folder is the folder's path as text")
-    folder = folder.strip()
+    body["folder"] = folder.strip()
+    return body
+
+
+@app.get("/api/documents", dependencies=[Depends(_same_origin_only)])
+def api_documents(app: str, account: str = "primary"):
+    apps, meta, root = _documents_account(app, account)
+    return _documents_answer(meta, account, root, apps=apps)
+
+
+@app.post("/api/documents", dependencies=[Depends(_same_origin_only), Depends(_not_in_sample)])
+async def api_documents_save(request: Request):
+    """Give one account a documents folder of its own, in its own config, a
+    copy kept in Backups first, or, with "follow", set it back to its folder
+    inside the one documents folder. An empty folder, or the account's own
+    folder, is its own folder, kept as that even when a documents folder is
+    set. Nothing is moved."""
+    body = await _folder_body(request)
+    folder = body["folder"]
     app_name, account = str(body.get("app") or ""), str(body.get("account") or "primary")
     apps, meta, root = _documents_account(app_name, account)
-    if folder and Path(folder).is_absolute() and _within(folder, root) and _within(root, folder):
+    docs_root = _documents_root()
+    if body.get("follow") is True:
+        folder = _documents_for(meta, account, docs_root)
+    elif folder and Path(folder).is_absolute() and _within(folder, root) and _within(root, folder):
         # The account's own folder, where its documents go already.
         folder = ""
     if folder:
@@ -4142,9 +4281,45 @@ async def api_documents_save(request: Request):
     if not cfg_path.is_file():
         raise HTTPException(404, "that account has no settings yet")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    written = _write_config(cfg_path, DOCUMENTS_KEY, folder, stamp, why="documents")
-    return {"written": written, "documents_dir": _documents_of(meta, account),
-            "left": _documents_left(meta, account)}
+    # Its own folder is written as "" while a documents folder is set, so
+    # the account stays out of it, and is no setting at all when none is.
+    written = _write_config(cfg_path, DOCUMENTS_KEY, folder, stamp, why="documents",
+                            keep_empty=bool(docs_root) and body.get("follow") is not True)
+    return dict(_documents_answer(meta, account, root, apps=apps), written=written)
+
+
+@app.post("/api/documents/root",
+          dependencies=[Depends(_same_origin_only), Depends(_not_in_sample)])
+async def api_documents_root_save(request: Request):
+    """Set or clear the one documents folder, in the panel's settings, and
+    give every account that follows it its folder inside it, in its own
+    config, a copy of each config kept in Backups first. An account with a
+    folder of its own keeps it, unless "all" is True to apply it to all
+    accounts. Every following account's folder has to pass, or nothing is
+    saved. Nothing is moved."""
+    body = await _folder_body(request)
+    folder = body["folder"]
+    apply_all = body.get("all") is True
+    apps = discover_apps()
+    if folder:
+        problem = _documents_root_problem(apps, folder, force=apply_all)
+        if problem:
+            raise HTTPException(400, problem)
+        folder = os.path.normpath(folder)
+    data = _read_settings()
+    old = data.get(DOCUMENTS_ROOT_KEY) if isinstance(data.get(DOCUMENTS_ROOT_KEY), str) else ""
+    if folder:
+        data[DOCUMENTS_ROOT_KEY] = folder
+    else:
+        data.pop(DOCUMENTS_ROOT_KEY, None)
+    try:
+        _write_settings(data)
+    except OSError as e:
+        raise HTTPException(500, "could not save the folder: %s" % e)
+    written = _sync_documents(apps, old, force=apply_all)
+    following, unfollowed = _documents_counts(apps, folder)
+    return {"documents_root": folder, "written": old != folder or bool(written),
+            "configs": written, "following": following, "unfollowed": unfollowed}
 
 
 # -- the terms of use ---------------------------------------------------------

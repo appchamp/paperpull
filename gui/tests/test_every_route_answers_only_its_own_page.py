@@ -312,6 +312,9 @@ ROUTES = {
     ("POST", "/api/documents"): dict(body=lambda box: {"app": SHOP, "account": "primary",
                                                        "folder": str(box.root / "Documents")},
                                      desktop="changes", server="changes"),
+    # The one documents folder, written to the settings file and the configs.
+    ("POST", "/api/documents/root"): dict(body=lambda box: {"folder": str(box.root / "Documents")},
+                                          desktop="changes", server="changes"),
     # Accepting the terms writes the answer to the settings file.
     ("POST", "/api/terms"): dict(body={"accepted": app_module.TERMS_VERSION},
                                  desktop="changes", server="changes"),

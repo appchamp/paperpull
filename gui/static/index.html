@@ -270,17 +270,27 @@ __CSS__
     </section>
     <section class="card pad stack" aria-labelledby="g-docs" id="g-docscard">
       <h2 id="g-docs">Documents folder</h2>
-      <p class="hint">Where one person's statements, tax documents and receipts go, in folders of their kind,
-        such as a folder Paperless watches. Each download is checked in the provider's own folder first,
-        and when a run ends, what it saved moves there. The provider's records, Manual Review and logs never
-        move, so that folder only ever gets documents that passed their checks. Saving moves nothing already
-        saved.</p>
+      <p class="hint">Where statements, tax documents and receipts go, in folders of their kind, such as a folder
+        Google Drive, Paperless or another program watches. Each download is checked in the provider's own folder
+        first, and when a run ends, what it saved moves there. The provider's records, Manual Review, logs and browser
+        profile never move, so that folder only ever gets documents that passed their checks. Saving moves nothing
+        already saved.</p>
+      <p class="mono small" id="drnow" style="word-break:break-all"></p>
+      <label class="field" for="drinput">One folder for every provider, as its full path</label>
+      <input id="drinput" type="text" spellcheck="false" autocomplete="off">
+      <p class="hint">Each provider and person gets a folder of their own inside it, named as their PaperPull folder is.
+        One given a folder of its own below keeps it.</p>
+      <div class="row-actions"><button class="btn btn-s" type="button" data-do="dr-save">Save</button>
+        <button class="btn btn-ghost" type="button" id="drclear" data-do="dr-clear">Use each provider's own folder</button>
+        <button class="btn btn-ghost" type="button" id="drapplyall" data-do="dr-apply-all" hidden>Use for all providers</button>
+        <span class="hint" id="drmsg" role="status"></span></div>
       <label class="field" for="dcpick">Provider and person<select id="dcpick"></select></label>
       <p class="mono small" id="dcnow" style="word-break:break-all"></p>
-      <label class="field" for="dcinput">A folder of their own, as its full path</label>
+      <label class="field" for="dcinput">A folder of their own instead, as its full path</label>
       <input id="dcinput" type="text" spellcheck="false" autocomplete="off">
       <div class="row-actions"><button class="btn btn-s" type="button" data-do="dc-save">Save</button>
         <button class="btn btn-ghost" type="button" data-do="dc-clear">Use the provider's own folder</button>
+        <button class="btn btn-ghost" type="button" id="dcfollow" data-do="dc-follow" hidden>Use the folder for every provider</button>
         <span class="hint" id="dcmsg" role="status"></span></div>
       <div id="dcleft" class="stack" hidden>
         <p id="dclefttext"></p>

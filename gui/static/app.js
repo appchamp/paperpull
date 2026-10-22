@@ -1862,8 +1862,9 @@ function renderSettings() {
   for (const el of document.querySelectorAll('input[name=theme]')) el.checked = el.value === theme;
   openDocuments();
 }
-// The documents folder of one provider's person (#102). Saving writes it into
-// that person's config and moves nothing. Documents saved before stay where
+// The documents folder (#102). One folder for every provider, each provider's
+// person given a folder of their own inside it, or one of their own set here,
+// which the panel writes into that person's config. Saving moves nothing. Documents saved before stay where
 // they are until Move, which is the app's own Rename, offered only once a
 // preview of the same person has finished cleanly.
 let DC_PREVIEWED = false;
@@ -1884,7 +1885,9 @@ function openDocuments() {
     }
   }
   sel.innerHTML = opts.join('');
-  $('dcinput').placeholder = SERVER ? '/data/Documents' : 'D:\\Documents\\Statements';
+  const isUnix = SERVER || Boolean(META.apps_root && META.apps_root.startsWith('/'));
+  $('drinput').placeholder = SERVER ? '/data/Documents' : (isUnix ? '/Users/you/Documents/PaperPull' : 'C:\\Users\\you\\Documents\\PaperPull');
+  $('dcinput').placeholder = SERVER ? '/data/Documents' : (isUnix ? '/Users/you/Documents/Statements' : 'C:\\Users\\you\\Documents\\Statements');
   dcLoad();
 }
 async function dcLoad() {
@@ -1897,9 +1900,18 @@ async function dcLoad() {
   try { d = await (await fetch('/api/documents?' + new URLSearchParams(p))).json(); }
   catch (e) { return; }
   if (!d || d.detail) { $('dcnow').textContent = (d && d.detail) || ''; return; }
-  $('dcnow').textContent = d.documents_dir ? 'Documents go to ' + d.documents_dir + '. Records stay in ' + d.output_dir + '.'
-    : 'Documents and records both go to ' + d.output_dir + '.';
-  $('dcinput').value = d.documents_dir || '';
+  $('drnow').textContent = d.documents_root ? 'Every provider’s documents go to ' + d.documents_root + ', unless one has a folder of their own.'
+    : 'No folder for every provider. Each provider keeps its documents in its own folder, or one of their own set below.';
+  if (document.activeElement !== $('drinput')) $('drinput').value = d.documents_root || '';
+  $('drclear').hidden = !d.documents_root;
+  $('dcnow').textContent = !d.documents_dir ? 'Documents and records both go to ' + d.output_dir + '.'
+    : (d.follows ? 'From the folder for every provider, documents' : 'Set for them alone, documents') +
+      ' go to ' + d.documents_dir + '. Records stay in ' + d.output_dir + '.';
+  if (document.activeElement !== $('dcinput')) $('dcinput').value = d.documents_dir || '';
+  const isUnix = SERVER || Boolean(META.apps_root && META.apps_root.startsWith('/'));
+  $('dcinput').placeholder = d.in_root || (SERVER ? '/data/Documents' : (isUnix ? '/Users/you/Documents/Statements' : 'C:\\Users\\you\\Documents\\Statements'));
+  $('dcfollow').hidden = !d.documents_root || d.follows;
+  if ($('drapplyall')) $('drapplyall').hidden = !d.documents_root || !d.unfollowed;
   $('dcleft').hidden = !d.left;
   $('dclefttext').textContent = !d.left ? ''
     : d.documents_dir ? many(d.left, 'document') + (d.left === 1 ? ' is' : ' are') + ' not in ' +
@@ -1908,13 +1920,41 @@ async function dcLoad() {
     : many(d.left, 'document') + (d.left === 1 ? ' is' : ' are') + ' in a documents folder used before. ' +
       'Move brings them back to ' + d.output_dir + ', with a preview first.';
 }
-async function dcSave(clear) {
+async function drSave(how) {
+  const clear = how === 'clear';
+  const applyAll = how === 'all';
+  const folder = clear ? '' : $('drinput').value.trim();
+  $('drmsg').textContent = '';
+  if (!clear && !folder) { $('drmsg').textContent = 'Paste the folder path first, or use each provider’s own folder.'; return; }
+  let d;
+  try { d = await postJSON('/api/documents/root', {folder, all: applyAll}); }
+  catch (e) { $('drmsg').textContent = e.message; return; }
+  $('drinput').value = d.documents_root || '';
+  await dcLoad();
+  if (!d.documents_root) {
+    $('drmsg').textContent = !d.written ? 'Nothing to change.' : 'Each provider keeps documents in its own folder.';
+    return;
+  }
+  if (!d.written) {
+    $('drmsg').textContent = 'Nothing to change.';
+    return;
+  }
+  let msg = 'Saved. ';
+  if (d.unfollowed > 0) {
+    msg += many(d.following, 'provider and person', 'providers and people') + (d.following === 1 ? ' follows' : ' follow') +
+      ' it now. ' + many(d.unfollowed, 'provider has', 'providers have') + ' a folder of their own.';
+  } else {
+    msg += 'All ' + many(d.following, 'provider and person', 'providers and people') + (d.following === 1 ? ' follows' : ' follow') + ' it now.';
+  }
+  $('drmsg').textContent = msg;
+}
+async function dcSave(how) {
   const p = dcPick();
   if (!p) return;
-  const folder = clear ? '' : $('dcinput').value.trim();
-  if (!clear && !folder) { $('dcmsg').textContent = 'Paste the folder path first, or use the provider\u2019s own folder.'; return; }
+  const folder = how === 'save' ? $('dcinput').value.trim() : '';
+  if (how === 'save' && !folder) { $('dcmsg').textContent = 'Paste the folder path first, or use the provider’s own folder.'; return; }
   let d;
-  try { d = await postJSON('/api/documents', Object.assign({folder}, p)); }
+  try { d = await postJSON('/api/documents', Object.assign({folder, follow: how === 'follow'}, p)); }
   catch (e) { $('dcmsg').textContent = e.message; return; }
   await dcLoad();
   $('dcmsg').textContent = d.written ? 'Saved. New downloads go there.' : 'Nothing to change.';
@@ -2052,8 +2092,12 @@ const DO = {
   // which is what makes pressing it a decision rather than a guess.
   'nm-apply': () => nmRename(true),
   'nm-notnow': () => nmOffer(null),
-  'dc-save': () => dcSave(false),
-  'dc-clear': () => dcSave(true),
+  'dc-save': () => dcSave('save'),
+  'dc-clear': () => dcSave('own'),
+  'dc-follow': () => dcSave('follow'),
+  'dr-save': () => drSave('save'),
+  'dr-clear': () => drSave('clear'),
+  'dr-apply-all': () => drSave('all'),
   'dc-preview': () => dcMove(false),
   // Enabled only once a preview of the same person finished cleanly.
   'dc-move': () => dcMove(true),

@@ -254,6 +254,22 @@ they were built with.
   in the browser volume. It has not yet been seen on a real NAS, see "On
   Synology" in SERVER.md.
 
+### Changed
+- **One documents folder for every provider (#102).** The Settings
+  Documents folder now starts with one folder for every provider and
+  person, so a single folder can be synced to Google Drive or another
+  cloud. Each provider and person gets a folder of their own inside it,
+  named as their PaperPull folder is, such as `Chase Statements` and
+  `Costco Receipts - viki24`, and a provider or person added later gets
+  theirs before their first run. A folder set for one provider and person
+  below it, as before, or their provider's own folder, is kept when the
+  folder for every provider changes. The panel writes each one's folder
+  into their config as `documents_dir`, a copy of the config kept first, so
+  a run from a terminal uses it too. Records, Manual Review, logs and
+  browser profiles stay in the PaperPull folder as before, and documents
+  saved before are still found where they are until Move. Thanks to
+  @appchamp.
+
 ### Fixed
 - **Diagnose always writes its file, and Wells Fargo looks behind the
   page's menu for Statements & Documents.** A Run All started from Wells
