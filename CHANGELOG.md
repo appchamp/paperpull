@@ -7,7 +7,13 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
-## [Unreleased]
+## [0.57.0] - 2026-10-22
+
+One documents folder for every provider. Set a base folder in Settings and
+each provider and person gets a folder of its own inside it, such as one
+Paperless-ngx, a NAS share or a synced folder watches. The packages and the
+server image take pypdf 6.21.1, and a file or folder name with a line break
+can no longer change what the panel reads of a run.
 
 ### Security
 - **The Windows and Mac packages and the server image take pypdf 6.21.1.**
