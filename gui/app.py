@@ -3371,14 +3371,18 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                                           "X-Accel-Buffering": "no"})
 
     blocked = setup_needed(meta)
-    if not blocked and account in meta.get("accounts", ()):
-        # The account's folder inside the one documents folder, written
-        # before it runs, so one added since the setting was saved has it.
-        root = _documents_root()
-        if root:
-            _sync_documents(apps, root, only=(app, account))
     cmd = (_review_cmd(meta, account) if review is not None
            else _build_cmd(meta, account, action, scope_flags, redownload))
+    # The account's folder inside the one documents folder, for a provider or
+    # person added since it was saved, written once the request is a run the
+    # panel knows (an unknown action or account is refused just above) and
+    # only while nothing below would refuse it, so a request that runs
+    # nothing changes nothing. Asked again in the stream with nothing awaited,
+    # so two tabs pressing at once may both get here, and both write the
+    # same folder.
+    documents_said = (_documents_before_run(apps, app, account)
+                      if not blocked and not _IMPORTING.locked() and (app, account) not in _RUNS
+                      else [])
 
     if blocked:
         # Said here rather than let the app start under an interpreter
@@ -3403,6 +3407,8 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
     # cleanup below would never run and a closed tab left the downloader going.
     async def stream():
         yield f"data: $ {' '.join(cmd)}\n\n"
+        for line in documents_said:
+            yield f"data: {line}\n\n"
         # On the server this sets PAPERPULL_DATA_DIR (the install's /data
         # folder) and PYTHONPATH (the trusted template folder), the two
         # things that keep code on the image side and data on the /data
@@ -3889,9 +3895,11 @@ async def api_naming_save(request: Request):
 # its own folder is beside the install: "<install>" for the first person and
 # "<install> - <account>" for each other one. The panel writes that folder
 # into each account's config as documents_dir, a copy of the config kept
-# first, when the setting is saved and again before each run, so a provider
-# or person added later gets theirs too, and a run from a terminal finds the
-# same folder the panel would use.
+# first, when the setting is saved, and before a run of one whose config
+# names no documents folder yet, so a provider or person added later gets
+# theirs too, and a run from a terminal finds the same folder the panel
+# would use. A config that names one, its own folder included, is changed
+# only when the person saves something on the page.
 
 DOCUMENTS_KEY = "documents_dir"
 # The one documents folder, in the panel's settings.
@@ -4085,6 +4093,36 @@ def _sync_documents(apps: dict, old: str, only=None, force: bool = False) -> int
                 continue
             written += _write_config(cfg_path, DOCUMENTS_KEY, want, stamp, why="documents")
     return written
+
+
+def _who(app_name: str, account: str) -> str:
+    """A provider and person as the page names them."""
+    return app_name if account == "primary" else "%s, %s" % (app_name, account)
+
+
+def _documents_before_run(apps: dict, app_name: str, account: str) -> list:
+    """Before a run, give an account whose config names no documents folder
+    at all, a provider or person added since the one documents folder was
+    saved, its folder inside it, and return what the run's output says of
+    that. A config naming any documents folder, "" for its own folder
+    included, is never changed here, so a folder somebody chose stays
+    theirs. Nothing when no documents folder is set."""
+    root = _documents_root()
+    meta = apps.get(app_name)
+    if not root or meta is None:
+        return []
+    cfg = _read_json(_account_config(meta, account))
+    if not isinstance(cfg, dict) or DOCUMENTS_KEY in cfg:
+        return []
+    want = _documents_for(meta, account, root)
+    problem = _documents_problem(apps, app_name, account, want)
+    if problem:
+        return ["Documents stay where they were. %s would get %s inside the folder for every "
+                "provider. %s" % (_who(app_name, account), want, problem)]
+    if _sync_documents(apps, root, only=(app_name, account)):
+        return ["Documents go to %s from this run on, inside the folder for every provider "
+                "set in Settings." % want]
+    return []
 
 
 def _documents_roots(root: Path) -> list:

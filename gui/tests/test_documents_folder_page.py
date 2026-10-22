@@ -478,7 +478,7 @@ def test_a_folder_set_for_one_account_stays_when_the_root_changes(apps, tmp_path
 
 
 def test_saving_with_all_gives_every_account_the_folder_even_with_own_folder(apps, tmp_path):
-    chase, target = apps["Chase Statements"], apps["Target Receipts"]
+    chase = apps["Chase Statements"]
     own = tmp_path / "Spouse Watched"
     save({"app": "Chase Statements", "account": "spouse", "folder": str(own)})
     docs = tmp_path / "Drive"
@@ -523,3 +523,61 @@ def test_a_root_that_cannot_hold_documents_is_refused(apps, where, says):
     assert e.value.status_code == 400 and says in e.value.detail, e.value.detail
     assert "documents_dir" not in config(chase)
     assert app_module.api_documents("Chase Statements")["documents_root"] == ""
+
+
+# -- the review of #120 -------------------------------------------------------
+#
+# A run fills in a person's folder in the one documents folder only when
+# their config names no documents folder at all, only for a run that
+# starts, and says so in its output.
+def _drive(tmp_path: Path) -> Path:
+    """A documents folder beside the started stand-in's install."""
+    return tmp_path.parent / (tmp_path.name + " Drive")
+
+
+def test_a_run_gives_a_person_added_since_their_folder_and_says_so(started, tmp_path):
+    drive = _drive(tmp_path)
+    (tmp_path / "config.json").write_text('{"output_dir": "."}', encoding="utf-8")
+    app_module._write_settings({"documents_root": str(drive)})
+    out = ran("pilot")
+    assert "event: done\ndata: 0" in out, out
+    assert config(tmp_path)["documents_dir"] == str(drive / "Shop Docs")
+    assert str(drive / "Shop Docs") in out, out
+    assert len(list((tmp_path / "Backups").glob("documents-*/config.json"))) == 1
+    out = ran("pilot")
+    assert str(drive / "Shop Docs") not in out, "said once, when it was written"
+
+
+@pytest.mark.parametrize("why", ["an unknown action", "already running", "an import"])
+def test_a_run_that_is_refused_writes_no_config(started, tmp_path, why):
+    (tmp_path / "config.json").write_text('{"output_dir": "."}', encoding="utf-8")
+    app_module._write_settings({"documents_root": str(_drive(tmp_path))})
+    if why == "an unknown action":
+        with pytest.raises(HTTPException):
+            ran("nothing such")
+    elif why == "already running":
+        app_module._RUNS[("Shop Docs", "primary")] = {"action": "pilot", "started": ""}
+        try:
+            assert "already running" in ran("pilot")
+        finally:
+            app_module._RUNS.pop(("Shop Docs", "primary"), None)
+    else:
+        app_module._IMPORTING.acquire()
+        try:
+            assert "being imported" in ran("pilot")
+        finally:
+            app_module._IMPORTING.release()
+    assert "documents_dir" not in config(tmp_path)
+    assert not (tmp_path / "Backups").exists()
+    assert started == []
+
+
+@pytest.mark.parametrize("own", ["a folder set for it", "its own folder"])
+def test_a_run_never_changes_a_folder_set_for_one_account(started, tmp_path, own):
+    value = str(tmp_path.parent / (tmp_path.name + " Watched")) if own != "its own folder" else ""
+    (tmp_path / "config.json").write_text(json.dumps({"output_dir": ".", "documents_dir": value}),
+                                          encoding="utf-8")
+    app_module._write_settings({"documents_root": str(_drive(tmp_path))})
+    assert "event: done\ndata: 0" in ran("pilot")
+    assert config(tmp_path)["documents_dir"] == value
+    assert not (tmp_path / "Backups").exists()
