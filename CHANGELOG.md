@@ -7,6 +7,27 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Added
+- **One documents folder for every provider (#102).** The Settings
+  Documents folder now starts with one folder for every provider and
+  person, so a single folder can be synced to Google Drive or another
+  cloud. Each provider and person gets a folder of their own inside it,
+  named as their PaperPull folder is, such as `Chase Statements` and
+  `Costco Receipts - spouse`. A provider or person added later gets theirs
+  as their first run starts, and the run says so. A folder set for one
+  provider and person below it, as before, or their provider's own folder,
+  is kept when the folder for every provider changes. The page lists each
+  of those, and **Use it for every provider** gives them their folder
+  inside it too. The panel writes each one's folder into their config as
+  `documents_dir`, a copy of the config kept first, so a run from a
+  terminal uses it too. No two providers or people share one folder in it,
+  and on PaperPull Server it stays inside the data folder. Records, Manual
+  Review, logs and browser profiles stay in the PaperPull folder as before,
+  nothing is moved by saving, and documents saved before are still found
+  where they are until Move. Thanks to @appchamp.
+
 ## [0.56.3] - 2026-10-21
 
 E*TRADE reads each statement's account, so a sign-in with several accounts
@@ -253,22 +274,6 @@ they were built with.
   otherwise unchanged, with no capability added and no setuid helper kept
   in the browser volume. It has not yet been seen on a real NAS, see "On
   Synology" in SERVER.md.
-
-### Changed
-- **One documents folder for every provider (#102).** The Settings
-  Documents folder now starts with one folder for every provider and
-  person, so a single folder can be synced to Google Drive or another
-  cloud. Each provider and person gets a folder of their own inside it,
-  named as their PaperPull folder is, such as `Chase Statements` and
-  `Costco Receipts - viki24`, and a provider or person added later gets
-  theirs before their first run. A folder set for one provider and person
-  below it, as before, or their provider's own folder, is kept when the
-  folder for every provider changes. The panel writes each one's folder
-  into their config as `documents_dir`, a copy of the config kept first, so
-  a run from a terminal uses it too. Records, Manual Review, logs and
-  browser profiles stay in the PaperPull folder as before, and documents
-  saved before are still found where they are until Move. Thanks to
-  @appchamp.
 
 ### Fixed
 - **Diagnose always writes its file, and Wells Fargo looks behind the
