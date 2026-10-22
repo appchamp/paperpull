@@ -18,6 +18,7 @@ Every folder is a throwaway one under tmp_path, and every name is invented.
 """
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -529,7 +530,10 @@ def test_a_root_that_cannot_hold_documents_is_refused(apps, where, says):
 #
 # A run fills in a person's folder in the one documents folder only when
 # their config names no documents folder at all, only for a run that
-# starts, and says so in its output.
+# starts, and says so in its output. A config that cannot be written keeps
+# no copy and is named. Each folder in it is one folder's name, never
+# shared by two providers or people, and on PaperPull Server it stays in
+# the data folder, a link left in its place included.
 def _drive(tmp_path: Path) -> Path:
     """A documents folder beside the started stand-in's install."""
     return tmp_path.parent / (tmp_path.name + " Drive")
@@ -581,3 +585,81 @@ def test_a_run_never_changes_a_folder_set_for_one_account(started, tmp_path, own
     assert "event: done\ndata: 0" in ran("pilot")
     assert config(tmp_path)["documents_dir"] == value
     assert not (tmp_path / "Backups").exists()
+
+
+def test_a_config_that_cannot_be_written_keeps_no_copy_and_is_named(apps, tmp_path, monkeypatch):
+    def refuse(path, text):
+        raise PermissionError("read-only")
+    monkeypatch.setattr(app_module, "_replace_text", refuse)
+    d = save_root(str(tmp_path / "Drive"))
+    assert d["configs"] == 0
+    assert d["missed"] == ["Chase Statements", "Chase Statements, spouse", "Target Receipts"]
+    for _ in range(3):
+        assert app_module._sync_documents(app_module.discover_apps(), d["documents_root"]) == 0
+    for folder in apps.values():
+        assert not (folder / "Backups").exists(), list((folder / "Backups").rglob("*"))
+
+
+def test_two_that_would_share_a_folder_in_it_are_refused(apps, tmp_path):
+    """A second install named as the first one's second person is, its
+    folder kept elsewhere."""
+    other = install(tmp_path / "Elsewhere", "Chase Statements - spouse")
+    metas = app_module.discover_apps()
+    metas["Chase Statements - spouse"] = {"name": "Chase Statements - spouse",
+                                          "dir": str(other), "accounts": ["primary"]}
+    with pytest.raises(HTTPException) as e:
+        save_root(str(tmp_path / "Drive"))
+    assert "Chase Statements, spouse" in e.value.detail and \
+        "Chase Statements - spouse" in e.value.detail, e.value.detail
+    assert app_module._documents_root() == ""
+    assert all("documents_dir" not in config(d) for d in (apps["Chase Statements"], other))
+
+
+def test_a_name_that_is_not_one_folder_in_it_is_refused(apps, tmp_path):
+    """No config file's name holds a separator, so this is a guard. The
+    folder is always one folder inside the documents folder."""
+    metas = app_module.discover_apps()
+    metas["Target Receipts"]["accounts"] = ["primary", os.path.join("..", "..", "out")]
+    with pytest.raises(HTTPException) as e:
+        save_root(str(tmp_path / "Drive"))
+    assert "one folder" in e.value.detail, e.value.detail
+
+
+def _link(link: Path, to: Path) -> None:
+    to.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(to, link, target_is_directory=True)
+        return
+    except (OSError, NotImplementedError):
+        pass
+    try:
+        import _winapi
+        _winapi.CreateJunction(str(to), str(link))
+    except (ImportError, OSError):
+        pytest.skip("no link can be made here")
+
+
+def test_on_the_server_the_folder_and_each_folder_in_it_stay_in_the_data_folder(
+        apps, tmp_path, monkeypatch):
+    data = apps["Chase Statements"].parent
+    monkeypatch.setattr(app_module.server_mode, "enabled", lambda: True)
+    monkeypatch.setattr(app_module.server_mode, "data_root", lambda: data)
+    monkeypatch.setenv("PAPERPULL_PROFILES", str(tmp_path / "profiles"))
+    with pytest.raises(HTTPException) as e:
+        save_root(str(tmp_path / "Drive"))
+    assert "data folder" in e.value.detail
+    # A link left in the data folder where one provider's folder would be.
+    left = data / "Documents" / "Target Receipts"
+    left.parent.mkdir()
+    _link(left, tmp_path / "Outside")
+    with pytest.raises(HTTPException) as e:
+        save_root(str(data / "Documents"))
+    assert "Target Receipts" in e.value.detail and "data folder" in e.value.detail, e.value.detail
+    assert app_module._documents_root() == ""
+    if left.is_symlink():
+        left.unlink()
+    else:
+        os.rmdir(left)
+    d = save_root(str(data / "Documents"))
+    assert d["configs"] == 3, d
+    assert config(apps["Target Receipts"])["documents_dir"] == str(left)

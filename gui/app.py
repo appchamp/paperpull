@@ -3761,12 +3761,26 @@ def _write_config(cfg_path: Path, key: str, value: str, stamp: str,
         current[key] = value
     else:
         current.pop(key, None)
+    bak = cfg_path.parent / "Backups" / ("%s-%s" % (why, stamp)) / cfg_path.name
+    was = [os.path.lexists(p) for p in (bak, bak.parent, bak.parent.parent)]
     try:
-        bak = cfg_path.parent / "Backups" / ("%s-%s" % (why, stamp)) / cfg_path.name
         _make_folder(bak.parent)
         _copy_file(cfg_path, bak)
         _replace_text(cfg_path, json.dumps(current, indent=2) + "\n")
     except OSError:
+        # The config is as it was, so what was made for its copy goes again,
+        # or a config that cannot be written would gain a copy each time it
+        # is tried, as the documents folder is before a run.
+        for path, there in zip((bak, bak.parent, bak.parent.parent), was):
+            if there:
+                break
+            try:
+                if path == bak:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.rmdir()
+            except OSError:
+                break
         return False
     return True
 
@@ -4058,15 +4072,45 @@ def _documents_root_problem(apps: dict, root: str, force: bool = False):
         for account in meta.get("accounts", ()):
             if not force and not _follows_root(meta, account, old):
                 continue
-            problem = _documents_problem(apps, name, account,
-                                         _documents_for(meta, account, root))
+            problem = _in_root_problem(apps, name, account, root)
             if problem:
-                who = name if account == "primary" else "%s, %s" % (name, account)
-                return "For %s: %s" % (who, problem)
+                return "%s would get %s inside it. %s" % (
+                    _who(name, account), _documents_for(meta, account, root), problem)
     return None
 
 
-def _sync_documents(apps: dict, old: str, only=None, force: bool = False) -> int:
+def _in_root_name(name: str) -> str:
+    """A folder's name as Windows and macOS tell names apart, which is
+    without case and without the dots and spaces Windows takes off its end."""
+    return name.rstrip(" .").casefold()
+
+
+def _in_root_problem(apps: dict, app_name: str, account: str, root: str):
+    """Why an account cannot have its folder inside the one documents
+    folder, or None. It has to be one folder in it, named for the account
+    alone, which no other provider or person would get as well, and to pass
+    as any documents folder does (_documents_problem). An install or a
+    config named for another's folder, "Chase Statements - spouse" beside
+    Chase Statements' second person, would put two people's documents in
+    one folder."""
+    meta = apps[app_name]
+    want = _documents_for(meta, account, root)
+    name = meta["name"] if account == "primary" else "%s - %s" % (meta["name"], account)
+    if Path(want).name != name or Path(want).parent != Path(os.path.normpath(root)):
+        return "That is not one folder inside it, as each provider's and person's has to be."
+    for other_name, other in apps.items():
+        for other_account in other.get("accounts", ()):
+            if (other_name, other_account) == (app_name, account):
+                continue
+            theirs = Path(_documents_for(other, other_account, root)).name
+            if _in_root_name(theirs) == _in_root_name(name):
+                return ("%s would get that folder too, so give one of them a folder of their "
+                        "own first." % _who(other_name, other_account))
+    return _documents_problem(apps, app_name, account, want)
+
+
+def _sync_documents(apps: dict, old: str, only=None, force: bool = False,
+                    missed: Optional[list] = None) -> int:
     """Give each account that follows the one documents folder, `old` being
     the root it followed until now, its folder inside the root set now,
     clearing it when none is set, and return how many configs changed. An
@@ -4075,7 +4119,8 @@ def _sync_documents(apps: dict, old: str, only=None, force: bool = False) -> int
     `only` is an (app, account) to write that one alone, as a run does
     before it starts. One whose folder in the root is refused, a provider
     installed inside the documents folder since it was saved for instance,
-    keeps what its config says."""
+    keeps what its config says. Each whose config should have changed and
+    could not be written is put in `missed`, by the name the page gives it."""
     root = _documents_root()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     written = 0
@@ -4089,9 +4134,16 @@ def _sync_documents(apps: dict, old: str, only=None, force: bool = False) -> int
             if not force and not _follows_root(meta, account, old):
                 continue
             want = _documents_for(meta, account, root)
-            if want and _documents_problem(apps, name, account, want):
+            if want and _in_root_problem(apps, name, account, root):
                 continue
-            written += _write_config(cfg_path, DOCUMENTS_KEY, want, stamp, why="documents")
+            if _write_config(cfg_path, DOCUMENTS_KEY, want, stamp, why="documents"):
+                written += 1
+                continue
+            # Nothing to change, or a config that could not be read or written.
+            now = _read_json(cfg_path)
+            if missed is not None and not (isinstance(now, dict)
+                                           and (now.get(DOCUMENTS_KEY) or "") == want):
+                missed.append(_who(name, account))
     return written
 
 
@@ -4115,13 +4167,17 @@ def _documents_before_run(apps: dict, app_name: str, account: str) -> list:
     if not isinstance(cfg, dict) or DOCUMENTS_KEY in cfg:
         return []
     want = _documents_for(meta, account, root)
-    problem = _documents_problem(apps, app_name, account, want)
+    problem = _in_root_problem(apps, app_name, account, root)
     if problem:
         return ["Documents stay where they were. %s would get %s inside the folder for every "
                 "provider. %s" % (_who(app_name, account), want, problem)]
-    if _sync_documents(apps, root, only=(app_name, account)):
+    missed = []
+    if _sync_documents(apps, root, only=(app_name, account), missed=missed):
         return ["Documents go to %s from this run on, inside the folder for every provider "
                 "set in Settings." % want]
+    if missed:
+        return ["Documents stay where they were. %s would get %s inside the folder for every "
+                "provider, and its config could not be written." % (missed[0], want)]
     return []
 
 
@@ -4354,10 +4410,12 @@ async def api_documents_root_save(request: Request):
         _write_settings(data)
     except OSError as e:
         raise HTTPException(500, "could not save the folder: %s" % e)
-    written = _sync_documents(apps, old, force=apply_all)
+    missed = []
+    written = _sync_documents(apps, old, force=apply_all, missed=missed)
     following, unfollowed = _documents_counts(apps, folder)
     return {"documents_root": folder, "written": old != folder or bool(written),
-            "configs": written, "following": following, "unfollowed": unfollowed}
+            "configs": written, "following": following, "unfollowed": unfollowed,
+            "missed": missed}
 
 
 # -- the terms of use ---------------------------------------------------------
