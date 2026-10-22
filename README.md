@@ -528,19 +528,34 @@ rename, and nothing is downloaded again. Renaming moves files into the
 folders a pattern names, and back out again if you change your mind. The
 pattern language is in [docs/file-naming.md](docs/file-naming.md).
 
-## A documents folder for each person
+## A documents folder, for every provider or each person
 
-Each person on each provider can send their documents to a folder of their
-own, such as one Paperless-ngx watches, one a sync program keeps or a
-share on a NAS. In Settings, under **Documents folder**, pick the provider
-and the person and give the folder's full path. Each download is still
-saved and checked in the provider's own folder, and one that fails its
-check is put aside in its Manual Review there. When a run from the panel
-ends, the documents it saved and checked move into the documents folder,
-into Statements, Tax Documents, Receipts and the other folders of each
-kind, with any folders your naming pattern adds. The provider's records,
-Manual Review, Logs, Diagnostics and Backups never move, so the documents
-folder only ever gets documents that passed their checks.
+Documents can go to a folder apart from the browser profiles, records and
+logs in your PaperPull folder, such as one Google Drive or another sync
+program keeps, one Paperless-ngx watches or a share on a NAS. In Settings,
+under **Documents folder**, give one folder for every provider, and each
+provider and person gets a folder of their own inside it, named as their
+PaperPull folder is, such as `Chase Statements` and
+`Costco Receipts - spouse`. Below it, pick a provider and person to give
+them a folder of their own instead, or keep their documents in the
+provider's own folder. One set that way keeps it when the folder for every
+provider changes, and **Use the folder for every provider** sets it back.
+The first save gives a folder in it to everyone whose config names no
+documents folder, one set back to the provider's own folder in an earlier
+version included, since that left no setting, so set those again below
+after it.
+The page lists each one that keeps a folder of their own, and **Use it for
+every provider** gives all of them their folder inside it at once, a copy
+of each config kept in the provider's Backups folder first.
+
+Each download is still saved and checked in the provider's own folder, and
+one that fails its check is put aside in its Manual Review there. When a
+run from the panel ends, the documents it saved and checked move into the
+documents folder, into Statements, Tax Documents, Receipts and the other
+folders of each kind, with any folders your naming pattern adds. The
+provider's records, Manual Review, Logs, Diagnostics and Backups never
+move, so the documents folder only ever gets documents that passed their
+checks.
 
 Saving the setting moves nothing that is already there. Documents saved
 before stay where they are, and PaperPull still finds them, so nothing is
@@ -550,9 +565,13 @@ under the name it has, with its records following it, and puts everything
 back if a record cannot be written. Change the folder or set it back, and
 the same Move brings the documents to where it now points. A browser
 profile, a folder inside or around one, a folder holding a provider's own
-folder and a folder inside or around a person's own folder are refused. By
-hand, `"documents_dir"` in an account's config.json sets the same thing, as
-a full path, and from a terminal the move is a Rename run with
+folder and a folder inside or around a person's own folder are refused. A
+provider or person added later gets their folder inside the folder for
+every provider as their first run from the panel starts, and the run says
+so. One whose config already names a documents folder, their own folder
+included, is never changed by a run. The panel writes each one's folder
+into their config.json as `"documents_dir"`, a full path, so a run from a
+terminal uses it too, and from a terminal the move is a Rename run with
 `PAPERPULL_MOVE_DOCUMENTS=1` in its environment. On PaperPull Server the
 folder has to be inside the data folder, see
 [SERVER.md](SERVER.md#paperless).
