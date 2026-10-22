@@ -9,10 +9,12 @@ All notable changes to PaperPull are recorded here. Versioning follows
 
 ## [0.56.3] - 2026-10-21
 
-PaperPull Server's image takes Pillow 13.0.0, past a heap overflow in its
-JPEG decoding, and brings 0.56.2's Wells Fargo, U.S. Bank and E*TRADE fixes
-to the server. Nothing in the Windows and Mac packages changed since 0.56.2
-besides the version.
+E*TRADE reads each statement's account, so a sign-in with several accounts
+gets each statement under its own account, and it takes a statement listed
+on a later page of its list. PaperPull Server's image takes Pillow 13.0.0,
+past a heap overflow in its JPEG decoding, and brings 0.56.2's fixes to the
+server. The native Windows on ARM build, which no release ever shipped, is
+gone.
 
 ### Security
 - **The server image takes Pillow 13.0.0.** Pillow 12.3.0, which the
