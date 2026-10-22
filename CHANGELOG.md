@@ -22,6 +22,52 @@ besides the version.
   tagged and stopped that image from being published, so the server stayed
   on 0.56.1. The Windows and Mac packages already carried 13.0.0.
 
+### Fixed
+- **E*TRADE reads each statement's account (#96).** The app read the
+  account from a field E*TRADE leaves empty, so no statement ever had one.
+  Two accounts' statements of one title and day could not be told apart
+  and were refused, and neither a file name nor a naming pattern with
+  `{account}` ever said whose a statement was. @appchamp found where the
+  account lives on the live page and wrote the fix (#119). Each statement
+  carries a key for its account, and the page loads its account list
+  beside the documents, which gives each key the label the Account column
+  shows. Discovery now reads that list from the page's own answer, the way
+  it reads the documents, and gives each statement its account's label. A
+  closed account's label, which ends in "(Closed)", still says which
+  account it is. A key the list gives no label, or two labels, gives the
+  statement no account, never a guessed one. A Discover that reads no
+  account list, or lists with no account a statement a saved record holds
+  under its account, writes a failure file and stops before it records, moves or downloads
+  anything, since every statement would read as one of no account and be
+  taken again. One account's two documents of one title and day, two trade
+  confirmations, stay two records and go to Manual Review, since no link
+  tells them apart. A record is kept under the label's last digits, which
+  renaming the account on E*TRADE does not change, and the key itself is
+  never kept or written anywhere. On a sign-in of one account, every record
+  kept before moves to its account and nothing is downloaded again. On a
+  sign-in of several, a record kept before moves to the account its saved
+  PDF prints, the way 0.54.0 moves one, and a statement whose saved PDF
+  does not show its account is downloaded once more under a name that says
+  the account. No file is renamed or moved until you run Rename. The
+  records 0.56.1 kept by their place for two statements of one title and
+  day, which were refused, go once the list gives that day's statements
+  their accounts.
+- **E*TRADE tries every element of a period's name in its period list.**
+  Only the first element of that name was tried for each kind of control,
+  so a period whose first one was hidden could go unchosen, older years in
+  a list that scrolls among them. Each one is tried in turn, scrolled into
+  view first, and a list that had closed is opened once more (#119). A
+  press that raised is the last one made, so nothing else of the same
+  words is pressed after it.
+- **E*TRADE takes a statement listed on a later page of its list.**
+  Discovery reads every page, but the download looked for a statement's
+  row only on the page shown, so one listed past the first page went to
+  Manual Review. It now presses the list's own Next page button, the one
+  labeled exactly "Next page" in the list's pagination, only while that
+  button is on and only until the page shows a row of the statement's date
+  naming its title, and the next download starts again from the first
+  page.
+
 ## [0.56.2] - 2026-10-20
 
 Wells Fargo opens Statements & Documents from the top bar's Accounts menu,

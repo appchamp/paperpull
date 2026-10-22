@@ -363,3 +363,338 @@ def test_a_list_that_draws_late_is_read_once_it_draws(picker_site, monkeypatch):
     periods, _others = site._periods_offered(pg, picker)
     assert "2025" in periods and "Year To Date" in periods, periods
     pg.close()
+
+
+def test_click_text_checks_subsequent_elements_when_first_is_not_visible():
+    """If opt.first or loc.first is hidden, _click_text checks subsequent elements."""
+    class DummyElement:
+        def __init__(self, visible=False):
+            self._visible = visible
+            self.clicked = False
+
+        def is_visible(self):
+            return self._visible
+
+        def scroll_into_view_if_needed(self, timeout=None):
+            pass
+
+        def click(self, timeout=None):
+            if not self._visible:
+                raise Exception("Element not visible")
+            self.clicked = True
+
+    class DummyLocator:
+        def __init__(self, elements):
+            self.elements = elements
+
+        def count(self):
+            return len(self.elements)
+
+        @property
+        def first(self):
+            return self.elements[0] if self.elements else None
+
+        def nth(self, i):
+            return self.elements[i]
+
+    el_hidden = DummyElement(visible=False)
+    el_visible = DummyElement(visible=True)
+
+    class DummyPage:
+        def get_by_role(self, role, name=None):
+            if role == "option":
+                return DummyLocator([el_hidden, el_visible])
+            return DummyLocator([])
+
+        def get_by_text(self, pat):
+            return DummyLocator([])
+
+    pg = DummyPage()
+    assert site._click_text(pg, "2022") is True
+    assert el_visible.clicked is True
+
+
+def test_choose_period_retries_when_unopened_list_with_already_open():
+    """When already_open=True is passed but option cannot be clicked,
+    _choose_period reopens the picker and retries."""
+    calls = []
+
+    class DummyElement:
+        def is_visible(self):
+            return True
+
+        def get_attribute(self, name, timeout=None):
+            # The picker says its list is shut, the one case it is opened again.
+            return "false" if name == "aria-expanded" else None
+
+        def click(self, timeout=None):
+            calls.append("picker_click")
+
+    class DummyPage:
+        def __init__(self):
+            self.attempts = 0
+
+        def evaluate(self, *a, **k):
+            return 10
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def on(self, *a):
+            pass
+
+        def remove_listener(self, *a):
+            pass
+
+        class keyboard:
+            @staticmethod
+            def press(k):
+                pass
+
+        def get_by_role(self, role, name=None):
+            class DummyApplyLocator:
+                def count(self):
+                    return 0
+
+                @property
+                def first(self):
+                    return None
+            return DummyApplyLocator()
+
+    pg = DummyPage()
+
+    def mock_click_text(page, choice, unsure=None):
+        pg.attempts += 1
+        return pg.attempts > 1
+
+    dummy_picker = DummyElement()
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(site, "_click_text", mock_click_text)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (dummy_picker, "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+
+    entry = []
+    ok = site._choose_period(pg, "2022", [], entry, already_open=True)
+    monkeypatch.undo()
+    assert ok is True
+    assert "picker_click" in calls
+    assert entry[0]["option_clicked"] is True
+
+
+
+# --- a press that raised is the last one (review of #119) ---------------------
+
+class _Candidate:
+    """A period option a click may land on, which raises when told to."""
+
+    def __init__(self, raises=False):
+        self.raises, self.clicks = raises, 0
+
+    def is_visible(self):
+        return True
+
+    def scroll_into_view_if_needed(self, timeout=None):
+        pass
+
+    def click(self, timeout=None):
+        self.clicks += 1
+        if self.raises:
+            raise RuntimeError("invented, after the press reached the page")
+
+
+class _Candidates:
+    def __init__(self, elements):
+        self.elements = elements
+
+    def count(self):
+        return len(self.elements)
+
+    def nth(self, i):
+        return self.elements[i]
+
+
+def test_click_text_presses_nothing_more_after_a_click_that_raised():
+    """A click that raised may have reached the page, so neither the next
+    option of those words nor an element of the same words found by its
+    text is pressed for it."""
+    first, second, by_text = _Candidate(raises=True), _Candidate(), _Candidate()
+
+    class Page:
+        def get_by_role(self, role, name=None):
+            return _Candidates([first, second] if role == "option" else [])
+
+        def get_by_text(self, pat):
+            return _Candidates([by_text])
+
+    unsure: list = []
+    assert site._click_text(Page(), "2022", unsure) is False
+    assert (first.clicks, second.clicks, by_text.clicks, unsure) == (1, 0, 0, ["2022"])
+
+
+def test_choose_period_opens_the_picker_again_only_when_nothing_was_pressed(monkeypatch):
+    pressed: list = []
+
+    class Picker:
+        def click(self, timeout=None):
+            pressed.append("picker")
+
+    class Page:
+        def evaluate(self, *a, **k):
+            return 0
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def on(self, *a):
+            pass
+
+        def remove_listener(self, *a):
+            pass
+
+        class keyboard:
+            @staticmethod
+            def press(k):
+                pressed.append(k)
+
+    def raised(page, choice, unsure=None):
+        unsure.append(choice)
+        return False
+    monkeypatch.setattr(site, "_click_text", raised)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (Picker(), "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    trace: list = []
+    assert site._choose_period(Page(), "2022", [], trace, already_open=True) is False
+    assert pressed == ["Escape"] and trace[0]["outcome"] == "a press that raised"
+
+
+class _Picker:
+    """The period picker, saying whether its list is open."""
+
+    def __init__(self, expanded):
+        self.expanded, self.clicks = expanded, 0
+
+    def get_attribute(self, name, timeout=None):
+        return self.expanded if name == "aria-expanded" else None
+
+    def click(self, timeout=None):
+        self.clicks += 1
+
+
+class _QuietPage:
+    url = "https://us.etrade.com/etx/pxy/accountdocs#/documents"
+
+    def __init__(self):
+        self.keys = []
+
+    def evaluate(self, *a, **k):
+        return 0
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def on(self, *a):
+        pass
+
+    def remove_listener(self, *a):
+        pass
+
+    @property
+    def keyboard(self):
+        page = self
+
+        class Keys:
+            @staticmethod
+            def press(k):
+                page.keys.append(k)
+        return Keys()
+
+
+@pytest.mark.parametrize("expanded", ["true", None])
+def test_choose_period_never_presses_a_picker_whose_list_may_be_open(monkeypatch, expanded):
+    """Pressed while its list was open, it shut the list, and the page was
+    searched again for the period's words outside it, where a tab named
+    for the year was pressed (review of #119)."""
+    picker = _Picker(expanded)
+    searched: list = []
+
+    def not_there(page, choice, unsure=None):
+        searched.append(choice)
+        return False
+    monkeypatch.setattr(site, "_click_text", not_there)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (picker, "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    trace: list = []
+    assert site._choose_period(_QuietPage(), "2022", [], trace, already_open=True) is False
+    assert (picker.clicks, searched, trace[0]["outcome"]) == (0, ["2022"], "option not found")
+
+
+def test_choose_period_says_so_when_the_press_raised(monkeypatch):
+    def raised(page, choice, unsure=None):
+        unsure.append(choice)
+        return False
+    monkeypatch.setattr(site, "_click_text", raised)
+    monkeypatch.setattr(site, "_find_picker", lambda page: (_Picker("false"), "2023"))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    trace: list = []
+    site._choose_period(_QuietPage(), "2022", [], trace, already_open=True)
+    assert trace[0]["outcome"] == "a press that raised"
+
+
+class _Apply:
+    def __init__(self):
+        self.clicks = 0
+
+    def count(self):
+        return 1
+
+    @property
+    def first(self):
+        return self
+
+    def is_visible(self):
+        return True
+
+    def get_attribute(self, name, timeout=None):
+        return "Apply" if name == "aria-label" else None
+
+    def inner_text(self, timeout=None):
+        return "Apply"
+
+    def click(self, timeout=None):
+        self.clicks += 1
+
+
+@pytest.mark.parametrize("lands", ["https://us.etrade.com/etx/pxy/tax-center#/2022", None],
+                         ids=["another page", "the same page"])
+def test_apply_is_pressed_only_on_the_page_the_period_was_chosen_on(monkeypatch, lands):
+    """A period word pressed outside the list, a link of the year, took the
+    tab to another page, whose own Apply was pressed (review of #119)."""
+    page = _QuietPage()
+    apply = _Apply()
+    page.get_by_role = lambda role, name=None: apply
+
+    def chose(pg, choice, unsure=None):
+        if lands:
+            pg.url = lands
+        return True
+    monkeypatch.setattr(site, "_click_text", chose)
+    monkeypatch.setattr(site, "_find_picker", lambda pg: (None, ""))
+    monkeypatch.setattr(site, "_read_every_page", lambda *a, **k: [])
+    monkeypatch.setattr(site, "_row_count", lambda pg: 0)
+    trace: list = []
+    site._choose_period(page, "2022", [], trace, already_open=True)
+    assert apply.clicks == (0 if lands else 1), trace
+    assert trace[0].get("outcome") == ("the tab left the page" if lands else None)
+
+
+def test_a_picker_whose_list_is_open_is_not_pressed_to_read_its_periods(monkeypatch):
+    """#119's check. Pressed, an open list shut, and no period was read."""
+    picker = _Picker("true")
+    monkeypatch.setattr(site, "_control_texts", lambda page: set())
+    monkeypatch.setattr(site, "_short_visible_texts", lambda page: set())
+    monkeypatch.setattr(site, "_option_texts", lambda page: {"2025", "Year To Date"})
+    periods, _others = site._periods_offered(_QuietPage(), picker)
+    assert picker.clicks == 0 and "2025" in periods
+    picker = _Picker("false")
+    site._periods_offered(_QuietPage(), picker)
+    assert picker.clicks == 1

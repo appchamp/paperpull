@@ -84,9 +84,29 @@ paperpull etrade pilot            REM once the site layer is confirmed
   its place among those of its date and title, never by E*TRADE's ids for
   it, which change every time the list loads, and a record told apart that
   way is taken only while the lists still show its date and title shared
-  (#96). The download finds a statement's row on the page it shows, so one
-  listed only on a later page may be marked for manual review until the
-  app can turn the page.
+  with no account (#96). The download finds a statement's row on the page
+  it shows, so for one listed on a later page it presses the list's own
+  Next page button, the button labeled exactly "Next page" in the list's
+  pagination, only while that button is on and only until the page shows
+  a row of the statement's date naming its title.
+- **Accounts.** Each statement in E*TRADE's list carries a key for its
+  account, and the page loads its account list beside the documents,
+  which gives each key the label the Account column shows, "words -
+  1234". Discovery reads that list from the page's own answer, as it reads
+  the documents, and gives each statement its account's label (#119). A
+  closed account's label, ending in "(Closed)", is still that account. A key the
+  list gives no label, or two labels, gives the statement no account,
+  never a guessed one. When the account list was not read at all, or the
+  lists give no account to a statement a saved record holds under its
+  account, Discover writes a
+  failure file and stops before it records, moves or downloads anything,
+  since every statement would read as one of no account and be taken
+  again. One account's two documents of one title and day, two trade
+  confirmations, are kept as two and marked for manual review, since no
+  link on the page tells them apart. The record is kept under the label's last digits,
+  which renaming the account on E*TRADE does not change. The key itself is
+  never kept, and neither it nor a label is written to a log, a trace or
+  a failure file.
 - **Downloads.** The documents page lists one period at a time, so the
   period that lists the document, its year or Year To Date, is chosen
   first. Two documents can share a date, so the row taken is the one

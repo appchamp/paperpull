@@ -144,14 +144,16 @@ class Document:
         for a sign-in of one account, and relabel_by_statement, by what
         each one's saved PDF shows, for a sign-in of several.
 
-        A document the list gave no account, whose date and title another
-        such document shares, adds a digest of its entry, "Unnamed#<12 hex>",
-        since otherwise they had one key and all but one were dropped (#96).
+        A document whose date, title and account another document shares,
+        the list giving both no account or the same one, adds a digest of
+        its entry, "Unnamed#<12 hex>" or "1234#<12 hex>", since otherwise
+        they had one key and all but one were dropped (#96, and one
+        account's two documents of a day once accounts were read, review).
         Every other document has no entry and keeps its key."""
         if self.document_id:
             return f"id:{self.document_id}"
         acct = account_key(self.account, whole=self.whole_label)
-        if self.entry and not (self.account or "").strip():
+        if self.entry:
             acct = "%s#%s" % (acct, hashlib.sha256(self.entry.encode("utf-8")).hexdigest()[:12])
         return f"{self.category}:{self.date}:{sanitize_component(self.title)[:60]}:{acct}"
 
@@ -362,9 +364,11 @@ def fold_keys_by_ids(records: dict, listed) -> int:
 
     A record kept by its place, "#1" or "#2", of a date and title the lists
     gave more than one document with no account, goes too when the lists
-    now give that date and title one document and it is not done and names
-    no file that is there. The one document is under the key of no account
-    now, and the place records were refused, never taken (review).
+    now give that date and title documents and none under its key, and it
+    is not done and names no file that is there. The lists give that day
+    one document under the key of no account now, or its documents their
+    accounts (#96), and the place records were refused, never taken
+    (review).
 
     Run only on lists read whole. Returns how many records moved or went."""
     by_old = _by_old_key(listed)
@@ -376,7 +380,7 @@ def fold_keys_by_ids(records: dict, listed) -> int:
             groups.setdefault(legacy, []).append(key)
             continue
         place = placed(key, rec)
-        if place in by_old and len({d.key for d in by_old[place]}) == 1 \
+        if place in by_old and key not in {d.key for d in by_old[place]} \
                 and not _held_under(records, key):
             del records[key]
             changed += 1
@@ -853,7 +857,7 @@ class App:
                         date=date, confidence=confidence, source_url=source_url,
                         account=account, guid=getattr(r, "guid", "") or "",
                         whole_label=bool(account) and site.account_form(account) in twins,
-                        entry="" if account else getattr(r, "entry", "") or "")
+                        entry=getattr(r, "entry", "") or "")
 
     def _record_rawdoc(self, r, source_url: str, several: bool = False, twins=frozenset()) -> int:
         """Record one scraped document (a RawDoc) from a E*TRADE page.
@@ -973,11 +977,21 @@ class App:
         except Exception as e:
             log.info("could not write the discovery trace: %s", e)
         # How many accounts the lists name, which decides whether a file
-        # name says the account. Only the count is ever logged (#96).
-        accounts = len(site.accounts_in(docs))
+        # name says the account. An account whose key the page's account
+        # list gave no label is one too, never named, so a sign-in of two
+        # with one of them unnamed is never taken for a sign-in of one and
+        # its history moved by the list alone (review). Only the count is
+        # ever logged (#96).
+        accounts = len(site.accounts_in(docs)) + int(getattr(docs, "unnamed_accounts", 0) or 0)
         twins = site.twins_on_one_day(docs)
-        listed = [d for d in (self._document_of(r, site.BILLING_URL, accounts > 1, twins) for r in docs)
-                  if d is not None]
+        pairs = [(r, self._document_of(r, site.BILLING_URL, accounts > 1, twins)) for r in docs]
+        listed = [d for _r, d in pairs if d is not None]
+        if site.ACCOUNTS_UNREAD not in unread and self._accounts_lost(pairs, listed):
+            unread = sorted(set(unread) | {site.ACCOUNT_LOST})
+        # Lists that missed the accounts give every document a key of no
+        # account, which is no key a record of an account will match, so
+        # nothing of them is recorded either (review).
+        accounts_missed = bool({site.ACCOUNTS_UNREAD, site.ACCOUNT_LOST} & set(unread))
         if not unread:
             # Only lists read whole may move a record kept before. Lists
             # missing a page could give a date and title one document when
@@ -985,15 +999,27 @@ class App:
             # with another's statement (review of #96).
             self._fold_keys_by_ids(listed)
             self._adopt_account_keys(listed, accounts)
-        for doc in listed:
+        for doc in [] if accounts_missed else listed:
             n_new += self._record_listed(doc)
         self.discovery.save()
         log.info("documents page: %d documents, %d new, %d account(s)", len(docs), n_new, accounts)
+        # A document whose account the page's account list gave no label is
+        # kept with no account, never another's (#96). Counted, never named.
+        result = next((t for t in reversed(site.DISCOVERY_TRACE)
+                       if isinstance(t, dict) and t.get("note") == "discovery result"), {})
+        if result.get("documents_of_an_account_not_named"):
+            log.info("%d document(s) of an account the page's account list gave no label, "
+                     "kept with no account (%d account(s) labeled)",
+                     int(result["documents_of_an_account_not_named"]), int(result.get("accounts_named") or 0))
 
         if unread:
             log.info("not every list was read to its end: %s", "; ".join(unread))
-            print("\n!! Not every page of E*TRADE's documents list could be read (%s)," % unread[0])
-            print("   so some documents may be missing. What the pages read gave is kept.")
+            print("\n!! E*TRADE's documents list could not be read whole (%s)," % unread[0])
+            if accounts_missed:
+                print("   so which account each document is for is not known, and nothing")
+                print("   it read is recorded or moved.")
+            else:
+                print("   so some documents may be missing. What the pages read gave is kept.")
             self.write_failure("read the documents list", unread[0],
                                extra={"not_read_to_the_end": list(unread)})
         # The whole list is in, and only now may a Resume that carries on
@@ -1023,10 +1049,31 @@ class App:
         if unread:
             # SystemExit, which the panel reports as a run that stopped
             # (run_reporting.stopped_early).
-            print("\nNot every page of E*TRADE's documents list could be read, so this run")
+            print("\nE*TRADE's documents list could not be read whole, so this run")
             print("stops here and downloads nothing. Run it again later to read the rest.")
             raise SystemExit(0)
         return n_new
+
+    def _accounts_lost(self, pairs, listed: List[Document]) -> int:
+        """How many documents the lists give no account, on a date and title
+        a saved record holds under an account's key that the lists do not
+        give now. That record's account is this document's, likely, missing
+        this time, its key with no label in the page's account list (review)
+        or no key at all, as when the list stops carrying keyAccountNo
+        (review of #119). Read as one of no account, the statement would be
+        taken again under a key of none. Read off the keys alone, so a
+        history moved with --minimal is read the same."""
+        now = {d.key for d in listed}
+        lost = 0
+        for _raw, doc in pairs:
+            if doc is None or (doc.account or "").strip():
+                continue
+            prefix = legacy_key(doc)[:-len("Unnamed")]
+            if any(key.startswith(prefix) and key not in now and isinstance(rec, dict)
+                   and not key[len(prefix):].startswith("Unnamed")
+                   for key, rec in self.progress.data.items()):
+                lost += 1
+        return lost
 
     def _select(self, limit: Optional[int] = None) -> List[Document]:
         docs = [Document.from_dict(v) for v in self.discovery.data.values()]
@@ -1088,8 +1135,8 @@ class App:
                 self.stats["skipped_completed"] += 1
                 continue
             if self._no_longer_shared(doc):
-                print("  Listed before beside another document of its date and title with no")
-                print("  account, which the lists do not show now, so it is left as it is.")
+                print("  Listed before beside another document of its date, title and account,")
+                print("  which the lists do not show now, so it is left as it is.")
                 continue
             filename = build_pdf_filename(doc.date, doc.summary, "", record=doc)
             if dry_run:
@@ -1120,16 +1167,17 @@ class App:
 
     @staticmethod
     def _no_longer_shared(doc: Document) -> bool:
-        """Whether a document the list gave no account, told apart from
-        others of its date and title by its entry, is one the lists the run
-        read no longer give that date and title more than once. Only such a
-        day gives a document an entry, and there the download refuses it,
-        so with the day no longer shared it is a record of another listing,
-        and the one document the lists give now is under its own key. Taken,
-        the one row the page shows was saved once for every such record, and
-        twice for a pair the lists showed as one (review). Never taken."""
-        return bool(doc.entry) and not (doc.account or "").strip() \
-            and not site._shared_with_no_account(doc.date, doc.title)
+        """Whether a document told apart from others of its date, title and
+        account by its entry is one the lists the run read no longer give
+        that date and title more than once for that account, or for no
+        account when it has none. Only such a day gives a document an entry,
+        and there the download refuses it, so with the day no longer shared
+        it is a record of another listing, and the documents the lists give
+        now are under keys of their own, their accounts' once the lists name
+        them. Taken, the one row the page shows was saved once for every such
+        record, and twice for a pair the lists showed as one (review). Never
+        taken."""
+        return bool(doc.entry) and not site._places_still_listed(doc.date, doc.title, doc.account)
 
     def download_one(self, page, doc: Document, filename: str):
         """Save one document. The site layer fetches the row's PDF link from
@@ -1182,6 +1230,17 @@ class App:
                 print("  E*TRADE's list gave this document no account, and more than one document")
                 print("  of its date and title, so which one it is cannot be told. Nothing was")
                 print("  pressed, and it is marked for manual review.")
+                return
+            if any(isinstance(t, dict) and t.get("why") == site.TWICE_FOR_ONE_ACCOUNT for t in trace):
+                # One account's two documents of a title and day, which no
+                # row or link tells apart, so nothing was pressed (review).
+                self._record(doc, State.NEEDS_MANUAL_REVIEW, notes=self.TWICE)
+                self._write_row(doc, "Two of one day", "Needs Manual Review")
+                self.write_failure('choose the document', 'the list gave one account two documents of a day')
+                self.stats["manual_review"] += 1
+                print("  E*TRADE's list gave this account more than one document of this date and")
+                print("  title, so which one it is cannot be told. Nothing was pressed, and it is")
+                print("  marked for manual review.")
                 return
             self._record(doc, State.NEEDS_MANUAL_REVIEW,
                          notes="Could not capture the document PDF")
@@ -1273,6 +1332,8 @@ class App:
     NO_ACCOUNT = ("The list gave this document no account and more than one document of its "
                   "date and title, so nothing was pressed")
     SAME_PDF = "The same PDF as another document of this date"
+    TWICE = ("The list gave this account more than one document of this date and title, so "
+             "nothing was pressed")
 
     def _same_bytes_elsewhere(self, doc: Document, digest: str, out_path: Path) -> bool:
         """Whether another record of this document's date holds a saved file
