@@ -24,8 +24,10 @@ BASE = "https://login.simmonsbank.com"
 USER = "0a1b2c3d-1111-4222-8333-944455556666"
 ACCOUNT = "7e7e7e7e-2222-4333-8444-955566667777"
 OTHER_ACCOUNT = "7e7e7e7e-2222-4333-8444-955566668888"
-NUMBER = "88123456"
-LAST4 = "3456"
+# Digits no date or time of day holds, since a run writes its clock into
+# names and lines and 00:34:56 would have spelled the old "3456".
+NUMBER = "88129786"
+LAST4 = "9786"
 ACCT_LABEL = "RE ARM %s (x%s)" % (NUMBER, LAST4)
 OWNER = "Quentin Wombatson"
 BLOB = "blob:https://login.simmonsbank.com/5a5a5a5a-3333-4444-8555-a66677778888"
@@ -1071,6 +1073,14 @@ def everything_written(tmp_path):
                    if p.is_file() and p.suffix in (".csv", ".txt", ".log", ".json"))
 
 
+def without_the_folder(text, tmp_path):
+    """text with the test's own folder taken out however it is written,
+    since pytest numbers it and pytest-49786 would hold the tail."""
+    for written in (str(tmp_path), json.dumps(str(tmp_path))[1:-1], tmp_path.as_posix()):
+        text = text.replace(written, "<folder>")
+    return text
+
+
 def test_a_run_saves_every_document_under_its_own_name(tmp_path, monkeypatch, caplog):
     page = Page()
     app = make_app(tmp_path, monkeypatch, page)
@@ -1091,7 +1101,7 @@ def test_a_run_saves_every_document_under_its_own_name(tmp_path, monkeypatch, ca
     assert sorted(page.presses) == sorted(row_text(d) for d in DOCS)
     printed = buf.getvalue()
     assert "documents available until 2032-06-30" in printed
-    seen = printed + caplog.text + everything_written(tmp_path)
+    seen = without_the_folder(printed + caplog.text + everything_written(tmp_path), tmp_path)
     for word in PRIVATE:
         assert word not in seen, word
     for key in list(app.discovery.data) + list(app.progress.data):
