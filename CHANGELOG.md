@@ -68,6 +68,17 @@ besides the version.
   naming its title, and the next download starts again from the first
   page.
 
+### Changed
+- **The native Windows on ARM build is gone.** It was a switch in
+  `packaging/build_windows.py` that no release ever used, since the x64
+  package runs on Windows on ARM under emulation. cryptography, which
+  PaperPull opens encrypted PDFs with, published its last Windows on ARM
+  build in 46.0.3, so that switch could only ever build a package carrying
+  a cryptography and an OpenSSL with known security problems, and its lock
+  kept seven of GitHub's security alerts open for a package nobody
+  downloads. The switch and its lock are removed, and the Windows package,
+  its installer and the Store package are unchanged.
+
 ## [0.56.2] - 2026-10-20
 
 Wells Fargo opens Statements & Documents from the top bar's Accounts menu,

@@ -2,7 +2,6 @@
 
     python packaging\\build_windows.py                 portable folder + zip
     python packaging\\build_windows.py --installer     also compile the Inno installer
-    python packaging\\build_windows.py --arch arm64    a native Windows on ARM build
 
 WHAT IT PRODUCES
 
@@ -75,16 +74,15 @@ from icons import ico_largest_png  # noqa: E402
 PBS_TAG = "20260901"
 PY_VERSION = "3.12.14"
 
-# The architecture being built. x64 is the default and the one every release
-# ships. arm64 is a native Windows on ARM build from the same source, which
-# python-build-standalone ships too, and packaging/lock.py checks that every
-# package the apps need has a built wheel for it. It is not shipped by
-# default because the x64 build already runs on ARM64 Windows under
-# emulation, and nobody would measure the difference in a program that waits
-# on a browser. The switch exists so that changes when a user asks for it,
-# not when someone rebuilds this script. Only run on a machine of the same
-# architecture, since the packages are installed by running the staged Python.
-ARCHES = {"x64": "x86_64", "arm64": "aarch64"}     # ours -> python-build-standalone's name
+# The architecture being built, x64, the only one. It runs on ARM64 Windows
+# too, under emulation, and nobody would measure the difference in a program
+# that waits on a browser. A native arm64 build behind a switch, never
+# shipped, was taken out after 0.56.2. cryptography published its last
+# win_arm64 wheel in 46.0.3, so that build could only ever carry a
+# cryptography and an OpenSSL with known holes, and its lock kept GitHub's
+# security alerts open for a package nobody downloads. Only run on an x64
+# machine, since the packages are installed by running the staged Python.
+ARCHES = {"x64": "x86_64"}     # ours -> python-build-standalone's name
 ARCH = "x64"
 
 # Each architecture's archive as python-build-standalone's SHA256SUMS for
@@ -97,7 +95,6 @@ ARCH = "x64"
 # PBS_TAG.
 PBS_SHA256 = {
     "x64": "7c45c9622400d578709a9b2cddbe8124cc21d382409d9f13406d706d28e31b14",
-    "arm64": "72f4713d056a17961bdba7b43be82a878035040fa1eee30cfd5e43b91a2852d9",
 }
 
 
@@ -123,12 +120,6 @@ def lock_file(arch: str | None = None) -> Path:
     architecture, since a package can have a built wheel for one and not
     the other."""
     return REPO / "packaging" / ("requirements-windows-%s.txt" % (arch or ARCH))
-
-
-def suffix() -> str:
-    """What the arch adds to every output name. Nothing for x64, so the
-    names every release has carried stay the same."""
-    return "" if ARCH == "x64" else "-" + ARCH
 
 # What python-build-standalone carries that the package has no use for, none
 # of which the embeddable build from python.org had either. Tk and IDLE, the
@@ -468,7 +459,7 @@ DefaultGroupName=PaperPull
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=.
-OutputBaseFilename=PaperPull-{#AppVersion}%(suffix)s-setup
+OutputBaseFilename=PaperPull-{#AppVersion}-setup
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesAllowed=%(arch_allowed)s
@@ -499,17 +490,17 @@ Filename: "{app}\PaperPull.exe"; Description: "Open PaperPull now"; Flags: posti
 ; The program only. The user's downloaders, history and browser profiles are
 ; wherever they chose to keep them and are never touched by an uninstall.
 Type: filesandordirs; Name: "{app}\python"
-""" % {"ver": version(), "suffix": suffix(),
+""" % {"ver": version(),
        # x64compatible lets the x64 installer run on ARM64 Windows too, under
-       # emulation. The native arm64 build is for ARM64 machines only.
-       "arch_allowed": "x64compatible" if ARCH == "x64" else "arm64"},
+       # emulation.
+       "arch_allowed": "x64compatible"},
         encoding="utf-8")
     say("  wrote %s" % iss)
     return iss
 
 
 def zip_it() -> Path:
-    out = DIST / ("PaperPull-%s%s.zip" % (version(), suffix()))
+    out = DIST / ("PaperPull-%s.zip" % version())
     say("Zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for p in sorted(STAGE.rglob("*")):
@@ -573,8 +564,6 @@ def main(argv=None) -> int:
                     help="also compile the Inno Setup installer")
     ap.add_argument("--msix", action="store_true",
                     help="also build the unsigned MSIX for the Microsoft Store")
-    ap.add_argument("--arch", choices=sorted(ARCHES), default="x64",
-                    help="x64 (default) or arm64, built on a machine of that architecture")
     # Signing sits between the two halves. PaperPull.exe has to be signed
     # before it is zipped, packed into the MSIX and wrapped by the
     # installer, so a signed build stages first, signs the stage, then
@@ -591,8 +580,6 @@ def main(argv=None) -> int:
     if sys.platform != "win32":
         say("This builds the Windows package and runs on Windows.")
         return 1
-    global ARCH
-    ARCH = args.arch
     host = host_arch()
     if host != ARCH:
         say("This is a %s machine and cannot build the %s package, because the"
