@@ -37,7 +37,7 @@ import server_mode  # noqa: E402
 # the list of files it saved, saying its counts the way every app does, and
 # ending with the code it was given.
 STANDIN = r'''
-import json, sys, time
+import json, os, sys, time
 from pathlib import Path
 here = Path(__file__).resolve().parent
 with open(here / "argv.jsonl", "a", encoding="utf-8") as f:
@@ -56,7 +56,8 @@ if saved:
         encoding="utf-8")
 counts = {"manual_review": 0, "failed": 0, "validation_failures": 0,
           "new_files": len(saved), "stopped": plan.get("stopped", 0)}
-print("PAPERPULL_RUN_RESULT " + json.dumps(counts), flush=True)
+mark = os.environ.get("PAPERPULL_RUN_MARK", "")
+print("PAPERPULL_RUN_RESULT " + (mark + " " if mark else "") + json.dumps(counts), flush=True)
 sys.exit(plan.get("code", 0))
 '''
 
@@ -222,9 +223,11 @@ def panel():
 def _alike_run():
     """A run as the panel logs it, from a result line that counted two
     documents of one type on one date and nothing else."""
-    said = run_result.PREFIX + json.dumps({"manual_review": 0, "failed": 0, "validation_failures": 0,
-                                           "new_files": 1, "alike": 2})
-    return {"action": "all", "exit_code": 0, "result": run_result.parse(said)}
+    mark = run_result.new_mark()
+    said = run_result.PREFIX + mark + " " + json.dumps({"manual_review": 0, "failed": 0,
+                                                        "validation_failures": 0,
+                                                        "new_files": 1, "alike": 2})
+    return {"action": "all", "exit_code": 0, "result": run_result.parse(said, mark)}
 
 
 @pytest.mark.parametrize("newest_days_ago, state, chip", [

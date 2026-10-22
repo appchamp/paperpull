@@ -1,8 +1,50 @@
 """Counts-only completion results for the local control panel."""
 import json
+import os
+import re
 import sys
 
 PREFIX = "PAPERPULL_RUN_RESULT "
+
+# The mark the control panel gives a run it starts, and takes a result line
+# from that run only when the line carries it (gui/run_result.py). A run
+# prints names it read from the disk and text a provider's page gave it,
+# and on Linux and macOS a file name may hold a line break, so a name could
+# start a line of its own that reads like a result. The mark is new for
+# each run and nothing but the line below writes it, so such a line cannot
+# carry it. A run started from a terminal has none and prints the line
+# unmarked, as before, for nobody to read.
+MARK_ENV = "PAPERPULL_RUN_MARK"
+_MARK = re.compile(r"[0-9a-f]{32}")
+
+# What cannot be shown on one line of a run's output. A line feed or a
+# carriage return ends the line, the other control characters and the two
+# Unicode separators end it for str.splitlines or move a terminal about.
+# Half of a character, which a name that is not UTF-8 on Linux reads as,
+# cannot be written as UTF-8 at all. A tab is left as it is. gui/run_result.py keeps the same set, and
+# core/tests/test_one_line.py holds the two to it.
+_NOT_ONE_LINE = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f" + chr(0x2028) + chr(0x2029)
+                           + chr(0xd800) + "-" + chr(0xdfff) + "]")
+
+
+def one_line(text) -> str:
+    """Text as one line of a run's output, each character that would end
+    the line or move a terminal written as its escape, \\n for a line feed."""
+    return _NOT_ONE_LINE.sub(lambda m: repr(m.group())[1:-1], str(text))
+
+
+def on_one_line(text) -> bool:
+    """Whether text shows as one line as it is, with nothing to escape."""
+    return _NOT_ONE_LINE.search(str(text)) is None
+
+
+def marked(prefix: str, payload: dict) -> str:
+    """A line the control panel reads, carrying the mark it gave this run,
+    or unmarked for a run it did not start."""
+    mark = os.environ.get(MARK_ENV, "")
+    if not _MARK.fullmatch(mark):
+        mark = ""
+    return prefix + (mark + " " if mark else "") + json.dumps(payload)
 
 
 def stopped_early() -> bool:
@@ -69,4 +111,4 @@ def report_run_result(stats):
         print("\nThis run stopped before it finished. Whatever it saved is kept, "
               "and Resume carries on from where it stopped.", flush=True)
     # Never include account labels, paths, or provider response text.
-    print(PREFIX + json.dumps(result), flush=True)
+    print(marked(PREFIX, result), flush=True)

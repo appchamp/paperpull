@@ -58,6 +58,7 @@ if (_CORE / "paperpull_core").is_dir() and str(_CORE) not in sys.path:
 try:
     from paperpull_core import pdf_reader  # noqa: E402
     from paperpull_core.characters import whole_json  # noqa: E402
+    from paperpull_core.run_reporting import MARK_ENV, marked, one_line  # noqa: E402
     from paperpull_core.sheets import csv_value, keep_text, read_stored_row, xlsx_value  # noqa: E402
 except ImportError as e:
     raise ImportError("export_transactions.py needs PaperPull's core folder beside its tools folder") from e
@@ -1107,26 +1108,34 @@ def main(argv=None) -> int:
     ap.add_argument("--csv", action="store_true", help="write a .csv instead of .xlsx")
     args = ap.parse_args(argv)
     root = Path(args.root).expanduser()
+    # A provider's name is its index file's name, and that and the folders
+    # above it are names from the disk, which on Linux and macOS may hold a
+    # line break. Each is printed as one line (run_reporting.one_line), so
+    # none starts a line of its own in what the control panel reads.
     if not root.is_dir():
-        print(f"Not a folder: {root}", file=sys.stderr)
+        print(f"Not a folder: {one_line(root)}", file=sys.stderr)
         return 2
     try:
         r = export(root, Path(args.out) if args.out else None, args.provider, args.csv)
     except (PermissionError, RuntimeError) as e:
-        print(e, file=sys.stderr)
+        print(one_line(e), file=sys.stderr)
         return 2
     if not r["statements"]:
-        print("No statement PDFs found under", root)
+        print("No statement PDFs found under", one_line(root))
         print("A statement archive's PDFs have to be on disk to read. Receipt archives are not part of this.")
         return 1
     for prov, n in sorted(r["providers"].items()):
-        print(f"  {prov:28} {n:6} transactions")
+        print(f"  {one_line(prov):28} {n:6} transactions")
     print(f"\n{r['transactions']} transactions from {r['statements']} statements, "
           f"{r['reconciled']} of which reconcile to the cent. "
           f"{r['read']} read now, {r['cached']} from the cache, {r['missing']} PDF(s) not on disk.")
     if r["openpyxl_missing"]:
         print("openpyxl is not installed, so this is a .csv. `pip install openpyxl` for .xlsx.")
-    print("Wrote", r["path"])
+    print("Wrote", one_line(r["path"]))
+    # For the control panel, which takes the file it offers from this line
+    # alone, the one carrying the mark it gave this run.
+    if os.environ.get(MARK_ENV):
+        print(marked("PAPERPULL_EXPORT_RESULT ", {"path": r["path"]}), flush=True)
     return 0
 
 

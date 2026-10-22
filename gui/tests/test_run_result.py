@@ -9,25 +9,30 @@ import app
 import run_result
 
 
+# The mark a run is given, which its result line carries.
+MARK = "0123456789abcdef" * 2
+
+
 def line(**overrides):
-    return run_result.PREFIX + json.dumps(dict(manual_review=0, failed=0,
+    return run_result.PREFIX + MARK + " " + json.dumps(dict(manual_review=0, failed=0,
             validation_failures=0, new_files=0, **{}) | overrides)
 
 
 @pytest.mark.parametrize("field", ["manual_review", "failed", "validation_failures"])
 def test_any_unresolved_count_requires_attention(field):
-    assert run_result.parse(line(**{field: 1}))["attention"]
-    assert not run_result.parse(line(new_files=4))["attention"]
+    assert run_result.parse(line(**{field: 1}), MARK)["attention"]
+    assert not run_result.parse(line(new_files=4), MARK)["attention"]
 
 
-@pytest.mark.parametrize("value", ["ordinary output", run_result.PREFIX + "{}",
-    run_result.PREFIX + "null", run_result.PREFIX + "broken", line(failed=-1), line(failed=True)])
+@pytest.mark.parametrize("value", ["ordinary output", run_result.PREFIX + MARK + " {}",
+    run_result.PREFIX + MARK + " null", run_result.PREFIX + MARK + " broken", line(failed=-1),
+    line(failed=True)])
 def test_invalid_or_incomplete_results_are_not_success(value):
-    assert run_result.parse(value) is None
+    assert run_result.parse(value, MARK) is None
 
 
 def test_result_drops_unexpected_private_fields():
-    result = run_result.parse(line(account="synthetic", path="private/example"))
+    result = run_result.parse(line(account="synthetic", path="private/example"), MARK)
     assert "account" not in result and "path" not in result
 
 
@@ -48,7 +53,10 @@ def test_stream_carries_current_counts_and_keeps_exit_code(tmp_path, monkeypatch
     class Process:
         def __init__(self, *args, **kwargs):
             self.stdin = io.StringIO()
-            self.stdout = io.StringIO("ordinary output\n" + line(manual_review=4) + "\n")
+            # The real core marks its line with the mark the panel gave it.
+            mark = kwargs["env"][run_result.MARK_ENV]
+            self.stdout = io.StringIO("ordinary output\n" + line(manual_review=4).replace(MARK, mark)
+                                      + "\n")
         def wait(self, **kwargs): return 0
         def poll(self): return 0
     monkeypatch.setattr(app, "discover_apps", lambda: {"example": {"dir": str(tmp_path)}})
@@ -161,16 +169,16 @@ def test_the_answer_is_asked_again_only_once_the_packages_change(monkeypatch):
 def test_a_wrong_document_needs_attention_on_its_own():
     """Counted inside manual_review too, but the panel names it, because a
     wrong statement arriving is not the same finding as nothing arriving."""
-    assert run_result.parse(line(wrong_document=1))["attention"]
-    assert run_result.parse(line())["wrong_document"] == 0
+    assert run_result.parse(line(wrong_document=1), MARK)["attention"]
+    assert run_result.parse(line(), MARK)["wrong_document"] == 0
 
 
 def test_an_app_from_before_the_count_existed_still_reports():
     """Absent is zero, so an install the panel has not refreshed yet still
     shows its run rather than "no run summary"."""
-    assert run_result.parse(line()) is not None
-    assert run_result.parse(line(wrong_document=-1)) is None
-    assert run_result.parse(line(wrong_document="1")) is None
+    assert run_result.parse(line(), MARK) is not None
+    assert run_result.parse(line(wrong_document=-1), MARK) is None
+    assert run_result.parse(line(wrong_document="1"), MARK) is None
 
 
 def test_the_panel_names_a_wrong_document():
@@ -182,21 +190,21 @@ def test_documents_left_unsaved_as_alike_are_counted_but_need_no_attention():
     of the run goes on. They are listed again on every run and never
     saved, so a run that counted them would need a look for good. The
     count is carried, and only another count makes the run one to look at."""
-    alike = run_result.parse(line(alike=2))
+    alike = run_result.parse(line(alike=2), MARK)
     assert alike["alike"] == 2 and alike["attention"] is False
-    assert run_result.parse(line(alike=2, failed=1))["attention"]
-    assert run_result.parse(line())["alike"] == 0
-    assert run_result.parse(line(alike=-1)) is None
-    assert run_result.parse(line(alike="2")) is None
+    assert run_result.parse(line(alike=2, failed=1), MARK)["attention"]
+    assert run_result.parse(line(), MARK)["alike"] == 0
+    assert run_result.parse(line(alike=-1), MARK) is None
+    assert run_result.parse(line(alike="2"), MARK) is None
     assert "left unsaved, sharing a type and date" in app.HTML
 
 
 def test_a_run_that_stopped_needs_attention_and_is_named():
     """A mid-run sign-out under the panel ends with exit code 0 and all
     zero counts, which used to read as a clean finish."""
-    assert run_result.parse(line(stopped=1))["attention"]
-    assert run_result.parse(line())["stopped"] == 0
-    assert run_result.parse(line(stopped=-1)) is None
+    assert run_result.parse(line(stopped=1), MARK)["attention"]
+    assert run_result.parse(line(), MARK)["stopped"] == 0
+    assert run_result.parse(line(stopped=-1), MARK) is None
     assert "Stopped before finishing" in app.HTML
 
 

@@ -9,6 +9,43 @@ All notable changes to PaperPull are recorded here. Versioning follows
 
 ## [Unreleased]
 
+### Security
+- **The Windows and Mac packages and the server image take pypdf 6.21.1.**
+  pypdf 6.19.0, which opens every PDF PaperPull saves, has five advisories
+  fixed in 6.20.0 to 6.21.1. A PDF that ends inside its cross-reference
+  table kept pypdf reading forever (GHSA-39mj-jf6j-2qj3), and a stream
+  with many filters could take a great deal of memory
+  (GHSA-7mh2-4gg2-979f). PaperPull reads each PDF in a process of its own
+  that is stopped after two minutes or 1 GB of memory, so such a PDF was
+  set aside unread and the run went on, and 6.21.1 refuses the first one
+  at once. The other three are in parts of pypdf PaperPull never calls,
+  editing outlines and trees (GHSA-qfv9-64jg-mh7p, GHSA-9mx8-4j7g-633p)
+  and opening a PDF's JPEG images (GHSA-5hx5-vpf9-5wcv). A checkout's
+  requirements ask for 6.21.1 as well, so running setup again brings it in.
+- **A name with a line break can no longer add an event to what the page
+  reads of a run, or pass for its result.** Linux and macOS allow a line
+  break in a file or folder name. The control panel shows the command a
+  run starts with, which names a second person's config,
+  config.<label>.json, and the page reads a run line by line, a blank line
+  ending each event. So a config named with line breaks, made by hand or
+  by anyone who can write to PaperPull Server's /data folder, could end
+  the line showing the command and add events of its own, telling the page
+  the run had finished clean or giving it counts the run never had. A
+  run's own output was open the same way, since the panel took the run's
+  counts from any line shaped like its result, and a run prints file
+  names, folder names and text from a provider's page. Now every line the
+  panel streams is written as one line, a line break in it shown as \n,
+  and each run is given a mark that only its own result line carries. What
+  a run prints is still shown as it printed it, so such a name can still
+  show as two lines of a run's details, and the page may take the second
+  for a line of its progress. The transactions export offers a file only
+  from its own marked line, and only one in the folder it was given. The
+  panel no longer lists a config or a provider folder whose name holds a
+  line break or another control character, and saves no documents folder
+  holding one. A run stops before printing anything when its config's
+  path, output_dir, profile_dir, documents_dir or account_labels holds
+  one. Rename the file or folder, or change the setting, to run it again.
+
 ### Added
 - **One documents folder for every provider (#102).** The Settings
   Documents folder now starts with one folder for every provider and
@@ -30,20 +67,6 @@ All notable changes to PaperPull are recorded here. Versioning follows
   profiles stay in the PaperPull folder as before, nothing is moved by
   saving, and documents saved before are still found where they are until
   Move. Thanks to @appchamp.
-
-### Security
-- **The Windows and Mac packages and the server image take pypdf 6.21.1.**
-  pypdf 6.19.0, which opens every PDF PaperPull saves, has five advisories
-  fixed in 6.20.0 to 6.21.1. A PDF that ends inside its cross-reference
-  table kept pypdf reading forever (GHSA-39mj-jf6j-2qj3), and a stream
-  with many filters could take a great deal of memory
-  (GHSA-7mh2-4gg2-979f). PaperPull reads each PDF in a process of its own
-  that is stopped after two minutes or 1 GB of memory, so such a PDF was
-  set aside unread and the run went on, and 6.21.1 refuses the first one
-  at once. The other three are in parts of pypdf PaperPull never calls,
-  editing outlines and trees (GHSA-qfv9-64jg-mh7p, GHSA-9mx8-4j7g-633p)
-  and opening a PDF's JPEG images (GHSA-5hx5-vpf9-5wcv). A checkout's
-  requirements ask for 6.21.1 as well, so running setup again brings it in.
 
 ### Fixed
 - **NetBenefits still knows a combined statement saved before the pypdf
