@@ -7,6 +7,30 @@ All notable changes to PaperPull are recorded here. Versioning follows
 - **MINOR**, a new app, or a cross-app feature
 - **MAJOR**, breaking changes (repo layout, config format, removing an app)
 
+## [Unreleased]
+
+### Security
+- **A name with a line break can no longer add a line to what the page
+  reads of a run.** Linux and macOS allow a line break in a file or folder
+  name. The control panel shows the command a run starts with, which names
+  a second person's config, config.<label>.json, and the page reads a run
+  line by line, a blank line ending each event. So a config named with line
+  breaks, made by hand or by anyone who can write to PaperPull Server's
+  /data folder, could end the line showing the command and add lines of its
+  own, telling the page the run had finished clean or giving it counts the
+  run never had. A run's own output was open the same way, since the panel
+  took the run's counts from any line shaped like its result, and a run
+  prints file names, folder names and text from a provider's page. Now
+  every line the panel streams is written as one line, a line break in it
+  shown as \n, and each run is given a mark that only its own result line
+  carries. The transactions export offers a file only from its own marked
+  line, and only one in the folder it was given. The panel no longer lists
+  a config or a provider folder whose name holds a line break or another
+  control character, and a run stops before printing anything when its
+  config's path, output_dir, profile_dir, documents_dir, owner or
+  account_labels holds one. Rename the file or folder, or change the
+  setting, to run it again.
+
 ## [0.56.3] - 2026-10-21
 
 E*TRADE reads each statement's account, so a sign-in with several accounts

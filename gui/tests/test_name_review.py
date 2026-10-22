@@ -24,7 +24,9 @@ from paperpull_core import renaming  # noqa: E402
 
 GUI = Path(__file__).resolve().parents[1]
 JS = (GUI / "static" / "app.js").read_text(encoding="utf-8")
-LINE = run_result.PREFIX + "%s"
+# The mark a run is given, which its result line carries.
+MARK = "0123456789abcdef" * 2
+LINE = run_result.PREFIX + MARK + " %s"
 
 
 def line(**counts):
@@ -33,13 +35,13 @@ def line(**counts):
 
 
 def test_the_result_carries_receipts_to_name_and_refuses_more_than_were_counted():
-    got = run_result.parse(line(manual_review=2, name_review=1))
+    got = run_result.parse(line(manual_review=2, name_review=1), MARK)
     assert got["name_review"] == 1 and got["manual_review"] == 2 and got["attention"]
     # An install not refreshed yet sends none, which is none to name.
-    assert run_result.parse(line(manual_review=1))["name_review"] == 0
-    assert run_result.parse(line(manual_review=1, name_review=2)) is None
-    assert run_result.parse(line(name_review=-1)) is None
-    assert run_result.parse(line(name_review="1")) is None
+    assert run_result.parse(line(manual_review=1), MARK)["name_review"] == 0
+    assert run_result.parse(line(manual_review=1, name_review=2), MARK) is None
+    assert run_result.parse(line(name_review=-1), MARK) is None
+    assert run_result.parse(line(name_review="1"), MARK) is None
 
 
 def test_the_dialog_keeps_a_name_for_the_very_words_the_core_does():

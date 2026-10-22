@@ -22,6 +22,7 @@ from typing import Dict, Iterable, List, Optional
 
 from . import shared_folder
 from .characters import json_escaped, whole_characters, whole_json
+from .run_reporting import on_one_line, one_line
 from .sheets import read_stored_row, store_value
 from .spec import INFRASTRUCTURE_FOLDERS, RECEIPT
 
@@ -86,7 +87,7 @@ def load_config(path: Optional[Path] = None) -> dict:
         copy_cmd = ("copy config.example.json config.json"
                     if sys.platform == "win32"
                     else "cp config.example.json config.json")
-        lines = ["No config file at " + str(path) + "."]
+        lines = ["No config file at " + one_line(path) + "."]
         if (sp.project_dir / "config.example.json").exists():
             lines += ["Create one from the template, then edit the paths in it:",
                       "    " + copy_cmd]
@@ -99,8 +100,15 @@ def load_config(path: Optional[Path] = None) -> dict:
             cfg = json.load(f)
     except json.JSONDecodeError as e:
         raise SystemExit(
-            str(path) + " is not valid JSON: " + str(e) + "\n"
+            one_line(path) + " is not valid JSON: " + str(e) + "\n"
             "Open it and fix the syntax - a trailing comma is the usual cause.")
+    held = _not_on_one_line(cfg, path)
+    if held:
+        raise SystemExit(
+            "%s, so this run stopped before doing anything. A run prints its folders "
+            "and names, and the control panel reads what it prints line by line, so a "
+            "name has to be one line of plain text. Rename it, or change the setting, "
+            "and run again." % held)
     if os.environ.get("PAPERPULL_SERVER") == "1":
         hold_to_the_server(cfg, path)
         refuse_links_out(cfg["output_dir"], path)
@@ -130,6 +138,45 @@ def load_config(path: Optional[Path] = None) -> dict:
     # Where documents go (#102), read here for the same reason.
     set_documents_dir(cfg, path)
     return cfg
+
+
+# The settings that name a folder or a person, which a run prints and puts
+# in the paths it prints. account_labels, the name a person gave each
+# account, is looked through as well.
+_NAMED_SETTINGS = ("output_dir", "profile_dir", "documents_dir", "owner")
+
+
+def _not_on_one_line(cfg, path) -> str:
+    """What in a config, or in the path it was read from, cannot be shown on
+    one line of a run's output, said with each such character escaped, or ""
+    when every name in it can.
+
+    Linux and macOS take a line break in a file or folder name, and a JSON
+    setting can hold one, so a config named config.<line break>... or a
+    folder holding one would print a line of the run's output that the run
+    never wrote. Every app reads its config here before it prints a path,
+    and every path it prints is built from these and from names it made
+    itself (sanitize_component takes control characters out of those), so
+    they are refused here once, rather than escaped at every print."""
+    where = Path(path).absolute()
+    if not on_one_line(where):
+        return "The config file's path, %s, holds a line break or another control character" \
+            % one_line(where)
+    if not isinstance(cfg, dict):
+        return ""
+    name = one_line(where.name)
+    for key in _NAMED_SETTINGS:
+        value = cfg.get(key)
+        if isinstance(value, str) and not on_one_line(value):
+            return "%s in %s, %s, holds a line break or another control character" \
+                % (key, name, one_line(value))
+    labels = cfg.get("account_labels")
+    if isinstance(labels, dict):
+        for key, value in labels.items():
+            if not (on_one_line(key) and (not isinstance(value, str) or on_one_line(value))):
+                return "account_labels in %s holds a line break or another control " \
+                       "character, in %s" % (name, one_line("%s: %s" % (key, value)))
+    return ""
 
 
 def _in_a_kept_folder(docs: str, out: str) -> bool:

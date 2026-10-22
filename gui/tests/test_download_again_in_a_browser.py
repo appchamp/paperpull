@@ -28,14 +28,14 @@ FLAG = "--redownload"
 ACCOUNT = "/#/a/Shop%20Docs/primary"
 
 APP = '''
-import json, sys
+import json, os, sys
 from pathlib import Path
 here = Path(__file__).resolve().parent
 with open(here / "argv.jsonl", "a", encoding="utf-8") as f:
     print(json.dumps(sys.argv[1:]), file=f)
 counts = {"manual_review": 0, "failed": 0, "validation_failures": 0, "new_files": 0,
           "stopped": 1 if (here / "stop").exists() else 0}
-print("PAPERPULL_RUN_RESULT " + json.dumps(counts))
+print("PAPERPULL_RUN_RESULT " + os.environ.get("PAPERPULL_RUN_MARK", "") + " " + json.dumps(counts))
 '''
 
 

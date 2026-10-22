@@ -37,10 +37,11 @@ import server_mode  # noqa: E402
 
 PASSWORD = "an invented passphrase"
 APP = '''
+import os
 from pathlib import Path
 here = Path(__file__).resolve().parent
 (here / "ran.txt").write_text("ran", encoding="utf-8")
-print('PAPERPULL_RUN_RESULT {"manual_review": 0, "failed": 0, "validation_failures": 0, "new_files": 0}')
+print('PAPERPULL_RUN_RESULT ' + os.environ.get('PAPERPULL_RUN_MARK', '') + ' {"manual_review": 0, "failed": 0, "validation_failures": 0, "new_files": 0}')
 '''
 
 

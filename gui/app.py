@@ -784,6 +784,13 @@ def _accounts(app_dir: Path):
         if cfg.name == "config.example.json":
             continue
         name = cfg.name[len("config."):-len(".json")]
+        # Linux and macOS take a line break in a file name, and the panel
+        # never makes such a config (_LABEL_RE), so one is not an account it
+        # lists or runs. Its name would be on the command line each of its
+        # runs shows, and in what the run prints. On the server /data may be
+        # a shared folder others can write to.
+        if not run_result.on_one_line(name):
+            continue
         accts.append(name)
     return accts
 
@@ -794,7 +801,10 @@ def discover_apps():
         return apps
     server = server_mode.enabled()
     for d in sorted(apps_root().iterdir()):
-        if not d.is_dir():
+        # A provider folder whose name holds a line break, which Linux and
+        # macOS allow, is not one the panel lists or runs, for the reason
+        # _accounts gives.
+        if not d.is_dir() or not run_result.on_one_line(d.name):
             continue
         script = _entry_script(d)
         if not script:
@@ -1023,6 +1033,20 @@ def api_export_transactions_providers():
         return {"available": False, "providers": [], "reason": str(e).splitlines()[0][:120]}
 
 
+def _event(data="", name: Optional[str] = None) -> str:
+    """One event of a stream the page reads, the only way one is written
+    (gui/tests/test_stream_lines.py holds every stream to it).
+
+    The stream is lines, and an empty line ends an event, so its data is
+    written as one line whatever it holds. A line break in it, which a name
+    from the disk can carry on Linux and macOS (a person's config, a folder
+    the panel lives in, a provider folder in /data on the server), is
+    written as \\n and so can never end the event early or start a line
+    naming another (a result, a done)."""
+    return (("event: %s\n" % run_result.one_line(name) if name else "")
+            + "data: %s\n\n" % run_result.one_line(data))
+
+
 @app.get("/api/export/transactions", dependencies=[Depends(_same_origin_only)])
 def api_export_transactions(provider: str = "", csv: str = ""):
     """Build the transactions workbook, streaming the tool's progress the
@@ -1045,19 +1069,23 @@ def api_export_transactions(provider: str = "", csv: str = ""):
 
     async def stream():
         global _LAST_EXPORT
-        yield f"data: $ export_transactions.py {' '.join(cmd[3:])}\n\n"
+        yield _event("$ export_transactions.py " + " ".join(cmd[3:]))
         # The version goes to the app so that a file it writes says which
         # build wrote it. Every failure file so far has carried an empty
         # version, which is the one field that says what a tester ran.
+        # The mark is the one its line naming the spreadsheet carries, so
+        # that only that line, never a provider's folder name it printed,
+        # says which file Show and the server's download hand over.
+        mark = run_result.new_mark()
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
-                   PAPERPULL_VERSION=VERSION)
+                   PAPERPULL_VERSION=VERSION, **{run_result.MARK_ENV: mark})
         try:
             proc = subprocess.Popen(cmd, cwd=str(tool.parent), stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                     encoding="utf-8", errors="replace", bufsize=1, env=env)
         except Exception as e:
-            yield f"data: [failed to start] {e}\n\n"
-            yield "event: done\ndata: 1\n\n"
+            yield _event("[failed to start] %s" % e)
+            yield _event(1, "done")
             return
         wrote = None
         try:
@@ -1065,14 +1093,18 @@ def api_export_transactions(provider: str = "", csv: str = ""):
                 line = await to_thread.run_sync(proc.stdout.readline)
                 if not line:
                     break
-                if line.startswith("Wrote "):
-                    wrote = line[6:].strip()
-                yield f"data: {line.rstrip()}\n\n"
+                said = run_result.exported(line.rstrip("\r\n"), mark)
+                if said is not None:
+                    wrote = said
+                    continue
+                yield _event(line.rstrip())
             code = await to_thread.run_sync(proc.wait)
-            if code == 0 and wrote:
+            # It writes only into the folder it was given, so a path
+            # anywhere else is not its spreadsheet.
+            if code == 0 and wrote and Path(wrote).resolve().parent == apps_root().resolve():
                 _LAST_EXPORT = Path(wrote)
-                yield f"event: result\ndata: {json.dumps({'path': wrote})}\n\n"
-            yield f"event: done\ndata: {code}\n\n"
+                yield _event(json.dumps({"path": wrote}), "result")
+            yield _event(code, "done")
         finally:
             if proc.poll() is None:
                 proc.terminate()
@@ -3261,7 +3293,9 @@ def _review_list(app: str, account: str) -> dict:
             folder = Path(tempfile.mkdtemp(prefix="paperpull-review-"))
         except OSError as e:
             raise HTTPException(500, "Review Names had nowhere to list into, %s" % e)
-        env = dict(_run_env(meta), **{REVIEW_LIST_ENV: str(folder / HANDED)})
+        mark = run_result.new_mark()
+        env = dict(_run_env(meta), **{REVIEW_LIST_ENV: str(folder / HANDED),
+                                      run_result.MARK_ENV: mark})
         try:
             # A closed pipe, as a run has, so the app asks nothing. What it
             # says on stderr stays with the rest, so a crash says why.
@@ -3274,7 +3308,7 @@ def _review_list(app: str, account: str) -> dict:
         except OSError as e:
             raise HTTPException(500, "Review Names could not start, %s" % e)
         said = [line.rstrip() for line in (done.stdout or "").splitlines()
-                if line.strip() and run_result.parse(line) is None]
+                if line.strip() and run_result.parse(line, mark) is None]
         try:
             listed = json.loads((folder / HANDED).read_text(encoding="utf-8"))
             receipts = listed["receipts"]
@@ -3364,8 +3398,8 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
 
         async def refuse_unmapped():
             for line in detail.splitlines():
-                yield "data: %s\n\n" % line
-            yield "event: done\ndata: 1\n\n"
+                yield _event(line)
+            yield _event(1, "done")
         return StreamingResponse(refuse_unmapped(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache",
                                           "X-Accel-Buffering": "no"})
@@ -3386,8 +3420,8 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
 
         async def refuse():
             for line in blocked.splitlines():
-                yield "data: %s\n\n" % line
-            yield "event: done\ndata: %d\n\n" % code
+                yield _event(line)
+            yield _event(code, "done")
         return StreamingResponse(refuse(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache",
                                           "X-Accel-Buffering": "no"})
@@ -3396,12 +3430,17 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
     # it in iterate_in_threadpool, which never calls .close() on it - so the
     # cleanup below would never run and a closed tab left the downloader going.
     async def stream():
-        yield f"data: $ {' '.join(cmd)}\n\n"
+        yield _event("$ " + " ".join(cmd))
         # On the server this sets PAPERPULL_DATA_DIR (the install's /data
         # folder) and PYTHONPATH (the trusted template folder), the two
         # things that keep code on the image side and data on the /data
         # side. On the desktop it only carries the version through.
         env = _run_env(meta)
+        # This run's mark, which only its own result line carries, so a
+        # line it printed from a name or a provider's text can never be
+        # taken for its counts (run_result.parse).
+        mark = run_result.new_mark()
+        env[run_result.MARK_ENV] = mark
         # What an action tells the app beyond its flags, the Move's mark
         # (ACTIONS). Review Names carries its own below.
         if review is None:
@@ -3412,17 +3451,17 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
         # Asked with nothing awaited before the run counts itself, so an
         # import cannot start in between (api_history_import).
         if _IMPORTING.locked():
-            yield "data: A history file is being imported. Run this once it has finished.\n\n"
-            yield "event: done\ndata: 1\n\n"
+            yield _event("A history file is being imported. Run this once it has finished.")
+            yield _event(1, "done")
             return
         # One run per account. A second, from another tab, would put two
         # downloaders on one progress.json, one browser and one folder.
         # Checked and claimed with nothing awaited between, so two requests
         # cannot both get through.
         if (app, account) in _RUNS:
-            yield ("data: %s is already running for this account, in another tab "
-                   "or window. Wait for it to finish there.\n\n" % app)
-            yield "event: done\ndata: 1\n\n"
+            yield _event("%s is already running for this account, in another tab "
+                         "or window. Wait for it to finish there." % app)
+            yield _event(1, "done")
             return
         # Where the run's log goes, worked out before the run is claimed, so
         # nothing that can fail sits between the claim and the code that
@@ -3491,8 +3530,8 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
             _RUNS.pop((app, account), None)
             if not any(a == app for a, _ in _RUNS):
                 _RUNNING.discard(app)
-            yield f"data: [failed to start] {e}\n\n"
-            yield "event: done\ndata: 1\n\n"
+            yield _event("[failed to start] %s" % e)
+            yield _event(1, "done")
             return
         # Closing the browser tab closes this generator. Without the finally
         # below, the downloader kept running unseen - still driving your
@@ -3511,11 +3550,11 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                 if not line:
                     read_all = True
                     break
-                parsed = run_result.parse(line)
+                parsed = run_result.parse(line.rstrip("\r\n"), mark)
                 if parsed is not None:
                     result = parsed
                 else:
-                    yield f"data: {line.rstrip()}\n\n"
+                    yield _event(line.rstrip())
             code = await to_thread.run_sync(proc.wait)
             # On PaperPull Server the plug-ins hear the run ended, the
             # Paperless copy among them, and what they say joins the output.
@@ -3523,7 +3562,7 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                 said = await to_thread.run_sync(server_mode.after_run, meta, account,
                                                 action, started, code, result)
                 for told in said:
-                    yield f"data: {told}\n\n"
+                    yield _event(told)
             # Then what a download run saved and checked moves to the
             # account's documents folder, if it has one (#102), after the
             # plug-ins have read each file where the run saved it.
@@ -3531,18 +3570,18 @@ def _start_run(app: str, account: str, action: str, scope_flags, redownload=Fals
                 said = await to_thread.run_sync(_move_new_documents, meta, account, root,
                                                 started, env)
                 for told in said:
-                    yield f"data: {told}\n\n"
+                    yield _event(told)
             if result is not None:
-                yield f"event: result\ndata: {json.dumps(result)}\n\n"
+                yield _event(json.dumps(result), "result")
             # The files this run saved, by name, for the page to list under
             # its one-line outcome. The log below keeps them for the home page.
-            yield f"event: saved\ndata: {json.dumps(_saved_this_run(root, started) if root else [])}\n\n"
+            yield _event(json.dumps(_saved_this_run(root, started) if root else []), "saved")
             # Marked first. The note's thread finishes even when the page
             # goes meanwhile, so marking it after would note the run twice.
             noted = True
             await to_thread.run_sync(note, code, result)
-            yield "data: \n\n"
-            yield f"event: done\ndata: {code}\n\n"
+            yield _event()
+            yield _event(code, "done")
         finally:
             if not noted and action in FINISHED_WHEN_LEFT and proc.poll() is None:
                 # A Rename or a Move applying its changes moves every file and
@@ -4073,11 +4112,13 @@ def _move_new_documents(meta: dict, account: str, root: Path, started: float,
     if not _saved_this_run(root, started):
         return []
     cmd = _command(meta, account, ["--rename", "--apply"])
+    mark = run_result.new_mark()
     try:
         proc = subprocess.Popen(cmd, cwd=meta["dir"], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace",
-                                env=dict(env, **{MOVE_DOCUMENTS_ENV: "new"}))
+                                env=dict(env, **{MOVE_DOCUMENTS_ENV: "new",
+                                                 run_result.MARK_ENV: mark}))
     except Exception as e:
         return ["", "The new documents could not be moved to the documents folder (%s). "
                     "Settings, Documents folder, can move them." % type(e).__name__]
@@ -4085,7 +4126,8 @@ def _move_new_documents(meta: dict, account: str, root: Path, started: float,
         proc.stdin.close()
     except OSError:
         pass
-    said = [line.rstrip() for line in proc.stdout if run_result.parse(line) is None]
+    said = [line.rstrip() for line in proc.stdout
+            if run_result.parse(line.rstrip("\r\n"), mark) is None]
     if proc.wait():
         said.append("Not every new document was moved to the documents folder. Settings, "
                     "Documents folder, can move them.")
