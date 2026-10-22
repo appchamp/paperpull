@@ -983,6 +983,15 @@ class OwnBrowser(unittest.TestCase):
         self.assertEqual(opened["port"], example.rsplit(":", 1)[1])
 
 
+def without_the_folder(text, tmp):
+    """text with the run's own temporary folder taken out however it is
+    written. Its name is random and the console and the index print paths
+    inside it, so it can hold any short run of digits a check looks for."""
+    for written in (str(tmp), json.dumps(str(tmp))[1:-1], Path(tmp).as_posix()):
+        text = text.replace(written, "<folder>")
+    return text
+
+
 class Privacy(Pressing):
     """Nothing that names the account reaches a log line, the console, the
     run's records or a diagnostic, and all of it is registered as private."""
@@ -1017,6 +1026,7 @@ class Privacy(Pressing):
         out = seen.getvalue() + app.paths.discovery_json.read_text() + app.paths.progress_json.read_text()
         out += "".join(p.read_text(errors="ignore") for p in app.paths.diagnostics.rglob("*.json"))
         out += "".join(p.read_text(errors="ignore") for p in app.paths.root.rglob("*.csv"))
+        out = without_the_folder(out, tmp)
         for word in (FAKE_NAME, FAKE_ACCOUNT, FAKE_PROCESS, FAKE_CONFIRM, FAKE_TIN, "987-654", "6789"):
             self.assertNotIn(word, out, word)
         for word in (FAKE_NAME, FAKE_ACCOUNT, FAKE_PROCESS, FAKE_CONFIRM):

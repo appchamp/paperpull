@@ -1008,13 +1008,15 @@ def test_a_failed_download_is_logged_by_its_date_and_title(app, caplog):
         assert leaked not in caplog.text, (leaked, caplog.text)
 
 
-def test_the_pilot_report_names_a_document_by_its_date_kind_and_title(app, capsys):
+def test_the_pilot_report_names_a_document_by_its_date_kind_and_title(app, capsys, tmp_path):
     app.listing(_raw(BROKERAGE, FIRST, "g1"))
     doc = app._select()[0]
     app._record(doc, State.FAILED, notes="invented")
     capsys.readouterr()
     app._pilot_report([doc])
-    out = capsys.readouterr().out
+    # The report says where the files are, in a folder pytest numbers,
+    # and pytest-51111 would hold the account's digits.
+    out = capsys.readouterr().out.replace(str(tmp_path), "<folder>")
     assert "%s Statement %s: Failed" % (DAY, BROKERAGE) in out, out
     assert doc.key not in out and "1111" not in out, out
 

@@ -743,6 +743,15 @@ class NoticesInScope(unittest.TestCase):
         self.assertEqual(code, 0, said)
 
 
+def without_the_folder(text, tmp):
+    """text with the run's own temporary folder taken out however it is
+    written. Its name is random and the console prints paths inside it,
+    so it can hold any short run of digits a check looks for."""
+    for written in (str(tmp), json.dumps(str(tmp))[1:-1], Path(tmp).as_posix()):
+        text = text.replace(written, "<folder>")
+    return text
+
+
 class Privacy(unittest.TestCase):
     """Nothing that names the taxpayer reaches a log line, the console, a
     record or a file name, and all of it is registered as private words."""
@@ -770,7 +779,8 @@ class Privacy(unittest.TestCase):
         finally:
             root.removeHandler(handler)
             root.setLevel(old)
-        out = seen.getvalue() + app.paths.discovery_json.read_text() + app.paths.progress_json.read_text()
+        out = without_the_folder(
+            seen.getvalue() + app.paths.discovery_json.read_text() + app.paths.progress_json.read_text(), tmp)
         for word in (FAKE_SSN, "9876", FAKE_NAME):
             self.assertNotIn(word, out, word)
             self.assertIn(word, site.private_words(), word)
@@ -821,7 +831,9 @@ class Privacy(unittest.TestCase):
 
     def test_an_exception_or_a_failed_validation_leaves_no_text_anywhere(self):
         from types import SimpleNamespace
-        address, notice = "742 Evergreen Terrace", "NOTICE-REF-55501234"
+        # A house number of four digits no date or time of day holds. A
+        # part of three is one a log line's milliseconds or 07:42 spells.
+        address, notice = "6987 Evergreen Terrace", "NOTICE-REF-55501234"
         for how in ("exception", "validation"):
             tmp = tempfile.mkdtemp()
             app = make_app(tmp, "--all")
@@ -855,9 +867,9 @@ class Privacy(unittest.TestCase):
                 root.removeHandler(handler)
                 root.setLevel(old_level)
             csv = app.paths.document_index_csv
-            everything = seen.getvalue() + app.paths.progress_json.read_text() + (
-                csv.read_text() if csv.exists() else "")
-            for word in ("Evergreen", "742", "55501234", "NOTICE-REF"):
+            everything = without_the_folder(seen.getvalue() + app.paths.progress_json.read_text() + (
+                csv.read_text() if csv.exists() else ""), tmp)
+            for word in ("Evergreen", "6987", "55501234", "NOTICE-REF"):
                 self.assertNotIn(word, everything, (how, word))
             rec = next(iter(app.progress.data.values()))
             self.assertIn(rec["notes"], ("RuntimeError", "PDF validation failed"), how)

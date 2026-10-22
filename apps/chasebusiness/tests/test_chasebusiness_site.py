@@ -6,6 +6,7 @@ import ast
 import io
 import json
 import logging
+import re
 import sys
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
@@ -1159,6 +1160,20 @@ def assert_private(text):
         assert secret.lower() not in text.lower(), secret
 
 
+def without_what_a_run_makes(text, folder):
+    """text without the numbers a run makes that are not the account's.
+    A failure file's or a log's name carries the clock, and the console
+    prints it, so 12:43:21 spelled "4321" and 05:55:55 "5555"; those two
+    tails run through this file's tests of shapes, so the stamp is taken
+    out rather than the tails changed. A stamp written this way is the
+    only clock that holds four digits in a row. The test's folder, which
+    pytest numbers, and a journal entry's milliseconds go the same way."""
+    for written in (str(folder), json.dumps(str(folder))[1:-1], folder.as_posix()):
+        text = text.replace(written, "<folder>")
+    text = re.sub(r"\d{4}-?\d{2}-?\d{2}-\d{6}", "<when>", text)
+    return re.sub(r'"(at_ms|elapsed_ms)": \d+', r'"\1": 0', text)
+
+
 def test_nothing_private_leaves_on_a_run_that_works(tmp_path):
     app = make_app(tmp_path, "--all")
     with everything_said() as seen:
@@ -1169,7 +1184,7 @@ def test_nothing_private_leaves_on_a_run_that_works(tmp_path):
     assert app.stats["statements"] == 4, seen.getvalue()
     names = [p.name for p in app.paths.root.rglob("*.pdf")]
     assert len(names) == 4 and any("Business Checking" in n for n in names)
-    assert_private(seen.getvalue() + written(app))
+    assert_private(without_what_a_run_makes(seen.getvalue() + written(app), tmp_path))
 
 
 def test_nothing_private_leaves_on_runs_that_stop(tmp_path):
@@ -1209,7 +1224,7 @@ def test_nothing_private_leaves_on_runs_that_stop(tmp_path):
         take(center(), tmp_path, doc_id="DOCQXNOPE", trace=trace)
         traces.append(json.dumps(trace))
     assert app.stats["manual_review"] >= 1
-    assert_private(seen.getvalue() + written(app) + " ".join(traces))
+    assert_private(without_what_a_run_makes(seen.getvalue() + written(app) + " ".join(traces), tmp_path))
 
 
 # ---------------------------------------------------------------------------

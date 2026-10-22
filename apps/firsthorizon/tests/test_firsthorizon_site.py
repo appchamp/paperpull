@@ -22,13 +22,19 @@ API = f"https://{HOST}/d3rest"
 PDF = sample_pdf()
 # Invented account details, which must never leave through a log, the
 # console, the index, a diagnostic, a trace or a file name.
+#
+# A run writes its clock into names and lines ("failure-run-20261021-234810.json",
+# a log line's ",549"), so every number here is one no clock can write. A
+# masked tail is four digits no date or time of day holds, and the balance
+# is looked for as "86,975" and "86975", never as a part of three digits,
+# which a log line's milliseconds or 23:4x spells (it failed CI at 23:48).
 ACCT1, ACCT2, ACCT3 = "Qa7Zx91004", "Qa7Zx92008", "Qa7Zx93012"
 NICK1, NICK2, NICK3 = "WOMBATFUND", "QUOKKAJAR", "NUMBATPOT"
-TITLE1 = f"{NICK1} (Express Checking) (*8642) $1,234.56"
+TITLE1 = f"{NICK1} (Express Checking) (*8642) $86,975.31"
 TITLE2 = f"{NICK2} (Statement Savings) (*9753) $77.10"
 TITLE3 = f"{NICK3} (Express Checking) (*3197) $5.00"
 DOC1, DOC2, DOC3, DOC4, DOC5 = "Dk4401ab", "Dk4402ab", "Dk4403ab", "Dk4404ab", "Dk4405ab"
-PRIVATE = [ACCT1, ACCT2, ACCT3, NICK1, NICK2, NICK3, "8642", "9753", "3197", "1,234.56", "234",
+PRIVATE = [ACCT1, ACCT2, ACCT3, NICK1, NICK2, NICK3, "8642", "9753", "3197", "86,975", "86975",
            DOC1, DOC2, DOC3, DOC4, DOC5]
 
 
@@ -641,7 +647,7 @@ def test_closed_panels_are_pressed_open_once_each_and_read_from_their_answers():
         ("Statement Savings", ACCT2, "2026-09-16", DOC3, ""), ("Statement Savings", ACCT2, "2026-07-17", DOC4, "")]
     assert bank.presses == [("panel", 0), ("panel", 1)]
     assert bank.context.request.asked == [(site.SESSION_URL, 0)], "only the probe is asked"
-    for w in (NICK1, "8642", "234", ACCT1, DOC1):
+    for w in (NICK1, "8642", "975", ACCT1, DOC1):
         assert w in site.private_words(), w
 
 
@@ -1271,7 +1277,7 @@ def test_a_product_the_bank_renames_leaves_no_statement_behind(tmp_path):
     with redirect_stdout(io.StringIO()):
         app.cmd_discover()
     keys = set(app.discovery.data)
-    bank.accounts[0]["title"] = f"{NICK1} (Everyday Checking) (*8642) $1,234.56"
+    bank.accounts[0]["title"] = f"{NICK1} (Everyday Checking) (*8642) $86,975.31"
     with redirect_stdout(io.StringIO()):
         app.cmd_discover()
     assert set(app.discovery.data) == keys, "the key scheme is unchanged"
@@ -1527,16 +1533,25 @@ def test_a_browser_of_its_own_opens_through_the_core_and_signs_in_on_the_example
 # Privacy
 # ---------------------------------------------------------------------------
 
-def _everything(app, said):
+def _ours(text, folder):
+    """text without the two numbers a run makes that are not the
+    account's. The test's folder is one pytest numbers ("pytest-48642"
+    holds a masked tail), so it is taken out however it is written, and a
+    journal entry's milliseconds since it began can be any number. The
+    clock's stamps stay, since no number in PRIVATE is one a clock writes."""
+    for written in (str(folder), json.dumps(str(folder))[1:-1], folder.as_posix()):
+        text = text.replace(written, "<folder>")
+    return re.sub(r'"(at_ms|elapsed_ms)": \d+', r'"\1": 0', text)
+
+
+def _everything(app, said, folder):
     outside = [said]
     for p in app.paths.root.rglob("*"):
-        # A failure file's name carries the clock, which can spell any short
-        # digit run; the name is checked without its timestamp.
-        outside.append(re.sub(r"\d{8}-\d{6}", "<when>", p.name))
+        outside.append(p.name)
         if p.is_file() and p.name not in ("discovery.json", "progress.json") and p.suffix != ".pdf" \
                 and "backup" not in str(p).lower():
             outside.append(p.read_text(encoding="utf-8", errors="replace"))
-    return "\n".join(outside)
+    return _ours("\n".join(outside), folder)
 
 
 def _capture_logs():
@@ -1576,10 +1591,10 @@ def test_nothing_private_leaves_on_a_run_that_works_or_reviews(tmp_path):
     said = seen.getvalue()
     assert "Saved:" in said
     assert any("download-attempt" in p.name for p in app.paths.root.rglob("*")), "a trace was written"
-    everything = _everything(app, said)
+    everything = _everything(app, said, tmp_path)
     for word in PRIVATE + [TITLE1, TITLE2]:
         assert word not in everything, word
-    records = app.paths.discovery_json.read_text() + app.paths.progress_json.read_text()
+    records = _ours(app.paths.discovery_json.read_text() + app.paths.progress_json.read_text(), tmp_path)
     for word in (NICK1, NICK2, "8642", "9753", TITLE1):
         assert word not in records, word
     assert "Express" not in site.private_words() and "Checking" not in site.private_words(), \
@@ -1606,7 +1621,7 @@ def test_nothing_private_leaves_on_runs_that_stop(tmp_path):
         finally:
             logging.getLogger().removeHandler(handler)
             logging.getLogger().setLevel(old)
-        everything = _everything(app, seen.getvalue())
+        everything = _everything(app, seen.getvalue(), tmp_path)
         for word in PRIVATE + [TITLE1, TITLE2]:
             assert word not in everything, (how, word)
 

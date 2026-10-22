@@ -24,7 +24,9 @@ API = "https://api.biltrewards.com"
 # index, a diagnostic, a trace, an exception or a file name.
 CARD = "0a1b2c3d-1111-4222-8333-944455556666"
 OTHER_CARD = "0a1b2c3d-1111-4222-8333-944455557777"
-LAST4 = "4821"
+# Four digits no date or time of day holds, since a run writes its clock
+# into names and lines and 00:48:21 would have spelled the old "4821".
+LAST4 = "8697"
 NAME = "Quentin Wombatson"
 MERCHANT = "Zorblax Hardware"
 SID1, SID2, SID3 = "stm-90011a", "stm-90012b", "stm-90013c"
@@ -1135,6 +1137,9 @@ def test_a_run_saves_every_statement_under_its_own_name(tmp_path, monkeypatch, c
     seen = buf.getvalue() + caplog.text + "".join(
         p.read_text(encoding="utf-8", errors="ignore") for p in (tmp_path / "out").rglob("*")
         if p.is_file() and p.suffix in (".csv", ".txt", ".log"))
+    # The index names each file by its whole path, inside a folder pytest
+    # numbers, and pytest-48697 would hold the tail.
+    seen = seen.replace(str(tmp_path), "<folder>")
     for word in PRIVATE:
         assert word not in seen, word
     for key in app.discovery.data:
