@@ -8,6 +8,7 @@ One plan's address goes to the Fidelity retail sign-in. Every address the
 app loads, every look ahead and every statement it makes is written down,
 with the plan the site had chosen at the time, so a test can say what was
 never done as well as what was."""
+import hashlib
 import json
 import re
 import sys
@@ -749,6 +750,86 @@ def test_a_later_process_finds_the_combined_statement_and_keeps_no_second_copy(m
     assert len([c for c in calls if c[2]]) == 2
     assert sorted(p.name for p in (tmp_path / "out" / "Statements").iterdir()) == saved
     assert sum("covered by" in (r.get("notes") or "") for r in again.progress.data.values()) == 2
+
+
+# -- a statement's digest, whatever pypdf read its text ----------------------------------
+
+def test_a_statements_digest_holds_however_its_lines_were_broken():
+    """pypdf 6.20 reads some statements with a line break fewer than 6.19
+    did, sometimes with nothing left between two words."""
+    one = site.statement_digest("Balance as of\n09/30/2031 Total\n12.34")
+    assert one == site.statement_digest("Balance as of09/30/2031  Total 12.34")
+    assert one == site.statement_digest(" Balance as of 09/30/2031\n\nTotal 12.34 ")
+    assert one != site.statement_digest("Balance as of 09/30/2032 Total 12.34")
+    # The older form, as 0.52.0 to 0.56.3 kept it, each run of whitespace one space.
+    new, older = site.statement_digests("Balance as of\n09/30/2031 Total\n12.34")
+    assert new == one
+    assert older == hashlib.sha256(b"Balance as of 09/30/2031 Total 12.34").hexdigest()
+
+
+def a_combined_statement_whose_covered_plans_are_listed_later(monkeypatch, tmp_path):
+    """A combined statement saved, the plans it covers written down after
+    it, as for plans listed later, and the saved record and file handed
+    back to be aged."""
+    app, page, calls = three_plans_one_statement(monkeypatch, tmp_path)
+    app.process(app._select())
+    for key in [k for k, r in app.progress.data.items() if "covered by" in (r.get("notes") or "")]:
+        del app.progress.data[key]
+    combined = next(r for r in app.progress.data.values() if r.get("covers"))
+    return app, page, calls, combined, Path(combined["pdf_path"])
+
+
+def process_again(app, page, calls, tmp_path):
+    app.progress.save()
+    site._plan_in_use["plan"] = None
+    again = app_on(tmp_path, page)
+    calls.clear()
+    again.process(again._select())
+    return again
+
+
+def test_a_combined_statement_kept_by_an_older_version_still_covers_its_plans(monkeypatch, tmp_path):
+    """A record of 0.52.0 to 0.56.3 holds the older digest, and its file
+    may be gone, deleted after it was imported elsewhere."""
+    app, page, calls, combined, saved = a_combined_statement_whose_covered_plans_are_listed_later(
+        monkeypatch, tmp_path)
+    combined["text_sha256"] = site.statement_digests(receipt_pdf.pdf_text(saved))[1]
+    saved.unlink()
+    names = saved_names(tmp_path)
+    again = process_again(app, page, calls, tmp_path)
+    assert len([c for c in calls if c[2]]) == 2
+    assert saved_names(tmp_path) == names                    # no second copy kept
+    assert sum("covered by" in (r.get("notes") or "") for r in again.progress.data.values()) == 2
+
+
+def test_a_combined_statement_read_by_another_pypdf_still_covers_its_plans(monkeypatch, tmp_path):
+    """The record kept the digest of the text an older pypdf read, a line
+    break where this one reads none, and the file is still there."""
+    app, page, calls, combined, saved = a_combined_statement_whose_covered_plans_are_listed_later(
+        monkeypatch, tmp_path)
+    text = receipt_pdf.pdf_text(saved)
+    k = next(i for i in range(1, len(text)) if text[i - 1].isalpha() and text[i].isalpha())
+    combined["text_sha256"] = site.statement_digests(text[:k] + "\n" + text[k:])[1]
+    assert combined["text_sha256"] not in site.statement_digests(text)
+    names = saved_names(tmp_path)
+    again = process_again(app, page, calls, tmp_path)
+    assert len([c for c in calls if c[2]]) == 2
+    assert saved_names(tmp_path) == names                    # no second copy kept
+    assert sum("covered by" in (r.get("notes") or "") for r in again.progress.data.values()) == 2
+
+
+def test_a_statement_another_plan_saved_is_not_taken_for_a_different_one(monkeypatch, tmp_path):
+    """Reading the saved file again covers a plan only with the very same
+    text, here the file holds another statement."""
+    app, page, calls, combined, saved = a_combined_statement_whose_covered_plans_are_listed_later(
+        monkeypatch, tmp_path)
+    combined["text_sha256"] = "0" * 64
+    saved.write_bytes(text_pdf(["ABC 403(B) PLAN", "ABC DCP", "ABC 457(B) PLAN", "another quarter"]))
+    names = saved_names(tmp_path)
+    again = process_again(app, page, calls, tmp_path)
+    by_it = "covered by the combined statement " + combined["pdf_filename"]
+    assert not any((r.get("notes") or "").endswith(by_it) for r in again.progress.data.values())
+    assert len(saved_names(tmp_path)) == len(names) + 1     # the next plan's own copy is kept
 
 
 def test_download_again_makes_the_combined_statement_again(monkeypatch, tmp_path):

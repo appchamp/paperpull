@@ -873,7 +873,7 @@ class App:
         statement. The file is always named from the record written down
         for it, so a rename that fails leaves the summary it was saved by."""
         text = receipt_pdf.pdf_text(out_path)
-        digest = site.statement_digest(text)
+        digest, spaced_digest = site.statement_digests(text)
         named = site.plans_named(text, list(self._plans_by_digest.values()), chosen=doc.plan)
         if doc.plan not in {p["digest"] for p in named}:
             self.stats["wrong_document"] = self.stats.get("wrong_document", 0) + 1
@@ -892,7 +892,7 @@ class App:
                                'the statement did not name the plan it was made for')
             print("  !! The statement does not name its plan. Moved to Manual Review.")
             return None
-        covering = self._covered_already(doc, digest)
+        covering = self._covered_already(doc, digest, spaced_digest)
         # Download again asks for each statement once, so a file saved
         # earlier in this run covers this plan, and one saved before does
         # not, since it may be the very file the person deleted.
@@ -946,20 +946,37 @@ class App:
                      notes="covered by the combined statement " + (source.get("pdf_filename") or ""))
         self._write_row(doc, "Covered by a combined statement", "Completed")
 
-    def _covered_already(self, doc: "Document", digest: str) -> Optional[str]:
+    def _covered_already(self, doc: "Document", digest: str,
+                         spaced_digest: str = "") -> Optional[str]:
         """The key of another plan's statement saved for this period that
         names this plan and is, by the digest of its text, the very
         statement this plan's own request just gave, or None. A name alone
         never makes a plan covered, since a plan's name can be a few common
-        words another employer's statement also has."""
+        words another employer's statement also has.
+
+        A record's kept digest is compared with both forms of this
+        statement's, `digest` and `spaced_digest`, since one saved by 0.52.0
+        to 0.56.3 is of the older form (statement_digests). Its file, while
+        it is there, is read again as well, since its kept digest came from
+        the pypdf of the run that saved it, and another pypdf can break the
+        same text's lines elsewhere. That is one read of each candidate's
+        file, and there are only as many as a statement covers plans."""
         if not digest:
             return None
+        ours = {d for d in (digest, spaced_digest) if d}
         for key, rec in list(self.progress.data.items()):
-            if (isinstance(rec, dict) and rec.get("downloaded_ok") is True
+            if not (isinstance(rec, dict) and rec.get("downloaded_ok") is True
                     and rec.get("plan") and rec.get("plan") != doc.plan
                     and doc.plan in (rec.get("covers") or [])
-                    and rec.get("text_sha256") == digest and self._same_period(rec, doc)):
+                    and self._same_period(rec, doc)):
+                continue
+            if (rec.get("text_sha256") or "") in ours:
                 return key
+            own = (rec.get("pdf_path") or "").strip()
+            if own and Path(own).is_file():
+                text = receipt_pdf.pdf_text(Path(own))
+                if text.strip() and site.statement_digest(text) == digest:
+                    return key
         return None
 
     # -- records -----------------------------------------------------------

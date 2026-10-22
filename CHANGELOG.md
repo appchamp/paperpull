@@ -23,6 +23,18 @@ All notable changes to PaperPull are recorded here. Versioning follows
   and opening a PDF's JPEG images (GHSA-5hx5-vpf9-5wcv). A checkout's
   requirements ask for 6.21.1 as well, so running setup again brings it in.
 
+### Fixed
+- **NetBenefits still knows a combined statement saved before the pypdf
+  upgrade.** On a login with several plans, a plan whose statement is the
+  employer's combined one counts as covered only when its own request
+  gives that very statement, told by a digest of its text. The digest
+  kept the text's spacing, and pypdf 6.20 reads some statements with
+  fewer line breaks, so a statement saved before would no longer match
+  the same statement asked for again, and a second copy would be kept.
+  The digest now leaves out every whitespace character, a digest an
+  earlier version kept still counts, and a saved statement still in its
+  folder is read again to compare.
+
 ## [0.56.3] - 2026-10-21
 
 E*TRADE reads each statement's account, so a sign-in with several accounts
