@@ -912,9 +912,21 @@ def _name_key(plan: dict) -> str:
 
 
 def statement_digest(text: str) -> str:
-    """The SHA-256 of a statement's text, its spacing squeezed, so two
-    plans' requests that gave the very same statement are told by it."""
-    return hashlib.sha256(re.sub(r"\s+", " ", text or "").strip().encode("utf-8")).hexdigest()
+    """The SHA-256 of a statement's text with every whitespace character
+    taken out, so two plans' requests that gave the very same statement are
+    told by it. Neither a pypdf that spaces the words differently nor one
+    that drops a line break between two of them changes it, and pypdf 6.20
+    reads some statements' text with line breaks fewer than 6.19 did,
+    sometimes with nothing left between two words (measured 2026-10-21)."""
+    return hashlib.sha256(re.sub(r"\s+", "", text or "").encode("utf-8")).hexdigest()
+
+
+def statement_digests(text: str) -> tuple:
+    """statement_digest, and the digest 0.52.0 to 0.56.3 kept, of the text
+    with each run of whitespace made one space, both from one text. A
+    record of those versions holds the older one."""
+    spaced = re.sub(r"\s+", " ", text or "").strip()
+    return statement_digest(text), hashlib.sha256(spaced.encode("utf-8")).hexdigest()
 
 
 def plans_named(text: str, plans, chosen: str = "") -> List[dict]:

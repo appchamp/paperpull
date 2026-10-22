@@ -43,7 +43,7 @@ import build_macos  # noqa: E402
 import build_windows  # noqa: E402
 
 UV = "uv==0.12.24"
-AS_OF = "2026-10-17T00:00:00Z"
+AS_OF = "2026-10-18T00:00:00Z"
 INDEX = "https://pypi.org/simple"
 # As the builders' repo-relative name, which uv writes into each "# via" line,
 # so a lock reads the same from any checkout.

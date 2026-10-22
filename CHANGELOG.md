@@ -31,6 +31,32 @@ All notable changes to PaperPull are recorded here. Versioning follows
   saving, and documents saved before are still found where they are until
   Move. Thanks to @appchamp.
 
+### Security
+- **The Windows and Mac packages and the server image take pypdf 6.21.1.**
+  pypdf 6.19.0, which opens every PDF PaperPull saves, has five advisories
+  fixed in 6.20.0 to 6.21.1. A PDF that ends inside its cross-reference
+  table kept pypdf reading forever (GHSA-39mj-jf6j-2qj3), and a stream
+  with many filters could take a great deal of memory
+  (GHSA-7mh2-4gg2-979f). PaperPull reads each PDF in a process of its own
+  that is stopped after two minutes or 1 GB of memory, so such a PDF was
+  set aside unread and the run went on, and 6.21.1 refuses the first one
+  at once. The other three are in parts of pypdf PaperPull never calls,
+  editing outlines and trees (GHSA-qfv9-64jg-mh7p, GHSA-9mx8-4j7g-633p)
+  and opening a PDF's JPEG images (GHSA-5hx5-vpf9-5wcv). A checkout's
+  requirements ask for 6.21.1 as well, so running setup again brings it in.
+
+### Fixed
+- **NetBenefits still knows a combined statement saved before the pypdf
+  upgrade.** On a login with several plans, a plan whose statement is the
+  employer's combined one counts as covered only when its own request
+  gives that very statement, told by a digest of its text. The digest
+  kept the text's spacing, and pypdf 6.20 reads some statements with
+  fewer line breaks, so a statement saved before would no longer match
+  the same statement asked for again, and a second copy would be kept.
+  The digest now leaves out every whitespace character, a digest an
+  earlier version kept still counts, and a saved statement still in its
+  folder is read again to compare.
+
 ## [0.56.3] - 2026-10-21
 
 E*TRADE reads each statement's account, so a sign-in with several accounts
