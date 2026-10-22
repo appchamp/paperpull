@@ -17,7 +17,7 @@ dependencies = [
     "pdfplumber>=0.11",
     # apps/*/requirements.txt
     "playwright>=1.51",
-    "pypdf>=4.2",
+    "pypdf>=6.21.1",
     "paperpull-core",
 ]
 

@@ -9,7 +9,7 @@ uvicorn==0.52.3
 websockets==17.2
 openpyxl==3.1.5
 pdfplumber==0.11.10
-pypdf[crypto]==6.19.0
+pypdf[crypto]==6.21.1
 playwright==1.63.0
 # What builds paperpull-core inside the image, taken from this lock rather
 # than fetched unchecked at build time (--no-build-isolation in the Dockerfile).
