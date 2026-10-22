@@ -540,6 +540,10 @@ PaperPull folder is, such as `Chase Statements` and
 them a folder of their own instead, or keep their documents in the
 provider's own folder. One set that way keeps it when the folder for every
 provider changes, and **Use the folder for every provider** sets it back.
+The first save gives a folder in it to everyone whose config names no
+documents folder, one set back to the provider's own folder in an earlier
+version included, since that left no setting, so set those again below
+after it.
 The page lists each one that keeps a folder of their own, and **Use it for
 every provider** gives all of them their folder inside it at once, a copy
 of each config kept in the provider's Backups folder first.
